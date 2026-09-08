@@ -552,3 +552,107 @@ void Gas_optics::compute_planck_source(
             sfc_source_jac(igpt, icol) = frac * (planck_up - planck);
         });
 }
+
+
+namespace
+{
+    // Physical constants, from mo_gas_optics_constants. m_dry and grav are runtime
+    // settable in the reference; here they are the documented defaults.
+    constexpr TF m_h2o = TF(0.018016);
+    constexpr TF m_dry = TF(0.028964);
+    constexpr TF avogad = TF(6.02214076e23);
+    constexpr TF grav = TF(9.80665);
+
+    // Helmert's formula for the latitude dependence of gravity.
+    constexpr TF helmert1 = TF(9.80665);
+    constexpr TF helmert2 = TF(0.02586);
+    constexpr TF pi_tf = TF(3.14159265358979323846);
+}
+
+
+void Gas_optics::compute_col_dry(
+        const Array_2d<const TF>& vmr_h2o,
+        const Array_2d<const TF>& plev,
+        const Array_1d<const TF>& latitude,
+        const Array_2d<TF>& col_dry)
+{
+    const int nlay = static_cast<int>(col_dry.extent(0));
+    const int ncol = static_cast<int>(col_dry.extent(1));
+
+    const bool has_latitude = latitude.size() > 0;
+
+    parallel_for_2d("compute_col_dry", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
+        {
+            const TF g0 = has_latitude
+                    ? helmert1 - helmert2 * Kokkos::cos(TF(2.) * pi_tf * latitude(icol) / TF(180.))
+                    : grav;
+
+            const TF delta_plev = Kokkos::abs(plev(ilay, icol) - plev(ilay + 1, icol));
+
+            const TF vmr = vmr_h2o(ilay, icol);
+            const TF fact = TF(1.) / (TF(1.) + vmr);
+            const TF m_air = (m_dry + m_h2o * vmr) * fact;
+
+            col_dry(ilay, icol) = TF(10.) * delta_plev * avogad * fact
+                                / (TF(1000.) * m_air * TF(100.) * g0);
+        });
+}
+
+
+void Gas_optics::compute_col_gas(
+        const Gas_concs& gas_concs,
+        const std::vector<std::string>& gas_names,
+        const Array_2d<const TF>& plev,
+        const Array_2d<const TF>& col_dry,
+        const Array_1d<const TF>& latitude,
+        const Array_3d<TF>& col_gas)
+{
+    const int ngas = static_cast<int>(gas_names.size());
+    const int nlay = static_cast<int>(col_gas.extent(1));
+    const int ncol = static_cast<int>(col_gas.extent(2));
+
+    if (static_cast<int>(col_gas.extent(0)) != ngas + 1)
+        throw std::invalid_argument("col_gas must have ngas+1 entries in its gas dimension.");
+
+    // Gather the mixing ratios in the k-distribution's own gas order.
+    Array_3d<TF> vmr("vmr", ngas + 1, nlay, ncol);
+
+    for (int igas=0; igas<ngas; ++igas)
+    {
+        auto slice = Kokkos::subview(vmr, igas + 1, Kokkos::ALL, Kokkos::ALL);
+        Array_2d<TF> gas(Kokkos::view_alloc("vmr_gas", Kokkos::WithoutInitializing), nlay, ncol);
+
+        gas_concs.get_vmr(gas_names[igas], gas);
+        Kokkos::deep_copy(slice, gas);
+    }
+
+    // Dry air column, supplied or derived from the water vapour profile.
+    Array_2d<TF> col_dry_work;
+    if (col_dry.size() > 0)
+    {
+        col_dry_work = Array_2d<TF>(Kokkos::view_alloc("col_dry", Kokkos::WithoutInitializing), nlay, ncol);
+        Kokkos::deep_copy(col_dry_work, col_dry);
+    }
+    else
+    {
+        col_dry_work = Array_2d<TF>(Kokkos::view_alloc("col_dry", Kokkos::WithoutInitializing), nlay, ncol);
+
+        Array_2d<TF> vmr_h2o(Kokkos::view_alloc("vmr_h2o", Kokkos::WithoutInitializing), nlay, ncol);
+        gas_concs.get_vmr("h2o", vmr_h2o);
+
+        compute_col_dry(vmr_h2o, plev, latitude, col_dry_work);
+    }
+
+    const Array_3d<const TF> vmr_c = vmr;
+    const Array_2d<const TF> col_dry_c = col_dry_work;
+
+    parallel_for_3d("compute_col_gas", {0, 0, 0}, {ngas + 1, nlay, ncol},
+        KOKKOS_LAMBDA(const int igas, const int ilay, const int icol)
+        {
+            // Index 0 is dry air itself.
+            col_gas(igas, ilay, icol) = igas == 0
+                    ? col_dry_c(ilay, icol)
+                    : vmr_c(igas, ilay, icol) * col_dry_c(ilay, icol);
+        });
+}

@@ -46,8 +46,19 @@ Step 2a complete: all four RRTMGP gas-optics kernels -- `interpolation`,
 (`include/gas_optics.h`). The Planck kernel fills the same `Source_func_lw` the
 longwave solvers already take, so the two halves compose directly.
 
-Next, step 2b: `Gas_concs`, the frontend that orchestrates these kernels, and reading
-the coefficient files in Python.
+Step 2b in progress. `Gas_concs`, `compute_col_dry` and `compute_col_gas` are done
+(`include/gas_concs.h`, `include/gas_optics.h`). Next: the k-distribution reduction,
+then the frontend that orchestrates the kernels, then reading coefficient files with
+xarray.
+
+### Where gas names live
+
+In C++, and only in `Gas_concs` and the k-distribution loader -- never in a kernel.
+The reference resolves names at two moments: once at load, where the k-distribution is
+*reduced* to the gases the host actually supplies and every integer index array is
+rebuilt against that shorter list, and once per call, to look up each gas's mixing
+ratio. rte3d keeps both in C++ so that a host model with no Python can still load a
+coefficient file; Python's only job is reading the file into arrays.
 
 The reference loops minor absorbers serially, walking a per-column layer range for
 each. rte3d parallelises over (g-point, layer, column) instead, which needs the inverse

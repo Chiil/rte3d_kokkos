@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gas_concs.h"
 #include "source_functions.h"
 #include "types.h"
 
@@ -118,6 +119,31 @@ namespace Gas_optics
             const Array_2d<const TF>& tlay,     // (nlay, ncol)
             const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
             const Array_3d<TF>& tau);           // (ngpt, nlay, ncol), accumulated into
+
+    // Dry air column amount [molecules/cm2] from the water vapour mixing ratio and
+    // the level pressures. Reference: get_col_dry.
+    //
+    // latitude may be empty, in which case a constant gravity is used, as the
+    // reference does when the argument is absent.
+    void compute_col_dry(
+            const Array_2d<const TF>& vmr_h2o,   // (nlay, ncol)
+            const Array_2d<const TF>& plev,      // (nlev, ncol)
+            const Array_1d<const TF>& latitude,  // (ncol), may be empty
+            const Array_2d<TF>& col_dry);        // (nlay, ncol)
+
+    // Column gas amounts for every gas the k-distribution knows about, in the order
+    // given by gas_names. Index 0 of the gas dimension is dry air, as in the
+    // reference's 0:ngas bounds.
+    //
+    // col_dry may be empty, in which case it is computed from plev and the water
+    // vapour concentration.
+    void compute_col_gas(
+            const Gas_concs& gas_concs,
+            const std::vector<std::string>& gas_names,
+            const Array_2d<const TF>& plev,      // (nlev, ncol)
+            const Array_2d<const TF>& col_dry,   // (nlay, ncol), may be empty
+            const Array_1d<const TF>& latitude,  // (ncol), may be empty
+            const Array_3d<TF>& col_gas);        // (ngas+1, nlay, ncol)
 
     // Rayleigh scattering optical depth. Assigned, not accumulated, as in the
     // reference. Reference: compute_tau_rayleigh.

@@ -10,7 +10,9 @@ file(GLOB sourcefiles
     "fluxes.cpp"
     "fluxes_python.cpp"
     "gas_optics.cpp"
-    "gas_optics_python.cpp")
+    "gas_optics_python.cpp"
+    "gas_concs.cpp"
+    "gas_concs_python.cpp")
 
 add_library(rte3d_core STATIC ${sourcefiles})
 
