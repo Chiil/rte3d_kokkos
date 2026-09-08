@@ -97,6 +97,9 @@ struct Kdist_file
 
     // Shortwave only.
     Array_4d_h<TF> rayl;              // (2, ngpt, neta, ntemp), empty if absent
+    Array_1d_h<TF> solar_source_quiet, solar_source_facular, solar_source_sunspot;  // (ngpt)
+    TF mg_default = TF(0.);
+    TF sb_default = TF(0.);
 };
 
 
@@ -136,8 +139,10 @@ struct Kdist_gas
 
     int idx_h2o = -1;              // index of water vapour in the gas dimension of col_gas
 
-    // Shortwave only: Rayleigh scattering coefficients, lower and upper atmosphere.
+    // Shortwave only: Rayleigh scattering coefficients, lower and upper atmosphere,
+    // and the spectral solar source at the top of the atmosphere.
     Array_4d<TF> krayl;            // (2, ngpt, neta, ntemp)
+    Array_1d<TF> solar_source;     // (ngpt)
 
     // Longwave only: the Planck tables.
     Array_4d<TF> pfracin;          // (ngpt, npres+1, neta, ntemp)

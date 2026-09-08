@@ -44,6 +44,16 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
             "dimension is dry air, so gas_names[i] sits at col_gas index i+1.")
         .def_property_readonly("neta", [](const Kdist_gas& k) { return k.neta; })
         .def_property_readonly("idx_h2o", [](const Kdist_gas& k) { return k.idx_h2o; })
+        .def_property_readonly("solar_source",
+            [](const Kdist_gas& k) -> py::object
+            {
+                if (k.solar_source.size() == 0)
+                    return py::none();
+                return Numpy::from_device(k.solar_source);
+            },
+            "Spectral solar source at the top of the atmosphere, (ngpt). None for a "
+            "longwave k-distribution. Scale is arbitrary; renormalise to your own "
+            "total solar irradiance.")
         .def("arrays", [](const Kdist_gas& k) { return kdist_arrays(k); },
             "Every reduced array, 0-based. For testing against the reference.");
 
@@ -96,7 +106,17 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
                 file.planck_frac = Numpy::to_host_4d<TF>(get<TF>(f, "planck_frac"), "planck_frac");
             }
             if (f.contains("rayl"))
+            {
                 file.rayl = Numpy::to_host_4d<TF>(get<TF>(f, "rayl"), "rayl");
+                file.solar_source_quiet = Numpy::to_host_1d<TF>(
+                        get<TF>(f, "solar_source_quiet"), "solar_source_quiet");
+                file.solar_source_facular = Numpy::to_host_1d<TF>(
+                        get<TF>(f, "solar_source_facular"), "solar_source_facular");
+                file.solar_source_sunspot = Numpy::to_host_1d<TF>(
+                        get<TF>(f, "solar_source_sunspot"), "solar_source_sunspot");
+                file.mg_default = f["mg_default"].cast<TF>();
+                file.sb_default = f["sb_default"].cast<TF>();
+            }
 
             return Gas_optics::load(file, gas_concs);
         },

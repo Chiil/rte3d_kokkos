@@ -59,6 +59,24 @@ absorbers to 45, and the lower `kminor` table from 960 contributors to 720. Gas 
 driven straight into `lw_solver_noscat` gives an outgoing longwave flux of ~171 W/m2
 for a standard-atmosphere column.
 
+### RFMIP
+
+`tests/test_rfmip.py` runs the RFMIP clear-sky case end to end -- coefficient file,
+reduction, all four gas-optics kernels, and the RTE solvers -- against the reference
+fluxes shipped in `extern/rrtmgp-data`, which RRTMGP itself produced. Agreement over
+100 sites and 61 levels:
+
+| | longwave | shortwave |
+|---|---|---|
+| upward | 4.8e-3 W/m2 | 6.0e-4 W/m2 |
+| downward | 1.0e-2 W/m2 | 9.3e-3 W/m2 |
+
+RFMIP's own acceptance threshold is 5.8e-2 W/m2. The residual is the difference
+between this k-distribution and the one the 2018 reference fluxes were generated with.
+
+`rte3d.rfmip` holds the case itself -- gas name and unit translation, and `solve_lw` /
+`solve_sw` -- so it is reusable outside the test.
+
 Next: cloud and aerosol optics, then the Monte Carlo ray tracer.
 
 ### Where gas names live

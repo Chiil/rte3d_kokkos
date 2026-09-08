@@ -350,7 +350,26 @@ Kdist_gas Gas_optics::load(const Kdist_file& file, const Gas_concs& available_ga
     }
 
     if (file.rayl.size() > 0)
+    {
         k.krayl = to_device(file.rayl);
+
+        // Solar source for the default facular and sunspot indices. Reference:
+        // set_solar_variability. The absolute scale is arbitrary here: callers
+        // renormalise to their own total solar irradiance, which is what the RFMIP
+        // driver does, so the reference's subsequent scaling to tsi_default cancels.
+        constexpr TF a_offset = TF(0.1495954);
+        constexpr TF b_offset = TF(0.00066696);
+
+        const int ngpt_sw = static_cast<int>(file.solar_source_quiet.extent(0));
+        Array_1d_h<TF> solar("solar_source", ngpt_sw);
+
+        for (int igpt=0; igpt<ngpt_sw; ++igpt)
+            solar(igpt) = file.solar_source_quiet(igpt)
+                        + (file.mg_default - a_offset) * file.solar_source_facular(igpt)
+                        + (file.sb_default - b_offset) * file.solar_source_sunspot(igpt);
+
+        k.solar_source = to_device(solar);
+    }
 
     return k;
 }
