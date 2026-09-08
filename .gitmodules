@@ -4,3 +4,6 @@
 [submodule "extern/kokkos"]
 	path = extern/kokkos
 	url = https://github.com/kokkos/kokkos.git
+[submodule "extern/rrtmgp-data"]
+	path = extern/rrtmgp-data
+	url = https://github.com/earth-system-radiation/rrtmgp-data
