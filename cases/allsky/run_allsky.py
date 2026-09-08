@@ -27,8 +27,10 @@ TOLERANCE = 1e-9
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--plot', action='store_true', help='also write a figure')
-    p.add_argument('-o', '--output', default='allsky_fluxes.nc')
+    p.add_argument('--plot', action='store_true',
+                   help='also write a figure alongside the NetCDF, named <output>.png')
+    p.add_argument('-o', '--output', default='allsky_fluxes.nc',
+                   help='where to write the fluxes (default: %(default)s)')
     args = p.parse_args()
 
     results = {}
@@ -91,16 +93,16 @@ def plot(results, references, plev, atm, path):
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 5), sharey=True)
 
-    # rte3d solid, reference dashed on top, colour distinguishing up from down. Only
-    # the cloudy columns are drawn: the clear ones are in the same figure's third
-    # panel by implication, and plotting both halves doubles the curves for nothing.
+    # rte3d in colour, reference dotted in black on top: black-on-colour is what makes
+    # the overlap readable. Only the cloudy columns are drawn, since plotting the clear
+    # ones too doubles the curves for nothing.
     for ax, (band, names) in zip(axes, (('longwave', ('lw_flux_up', 'lw_flux_dn')),
                                         ('shortwave', ('sw_flux_up', 'sw_flux_dn')))):
         for name, colour in zip(names, ('C0', 'C1')):
             ax.plot(results[name][:, cloudy].mean(axis=1), p, '-', color=colour, lw=1.6,
                     label=f'{name} rte3d')
-            ax.plot(references[name][:, cloudy].mean(axis=1), p, '--', color=colour, lw=1.6,
-                    dashes=(4, 3), label=f'{name} reference')
+            ax.plot(references[name][:, cloudy].mean(axis=1), p, ':', color='k', lw=1.2,
+                    zorder=5, label=f'{name} reference')
         ax.set_title(f'{band}, cloudy columns')
         ax.set_xlabel('flux [W m$^{-2}$]')
         ax.legend(fontsize=8)
@@ -119,7 +121,7 @@ def plot(results, references, plev, atm, path):
     axes[0].invert_yaxis()
     axes[0].set_yscale('log')
 
-    fig.suptitle('All-sky: rte3d (solid) vs reference (dashed)')
+    fig.suptitle('All-sky: rte3d (colour) vs reference (black dots)')
     fig.tight_layout()
     fig.savefig(path, dpi=140)
     print(f'wrote {path}')

@@ -199,13 +199,22 @@ def _stages(band, kdist, gas_concs, atm, ngpt, ncol):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--ncol', type=int, default=4096)
-    p.add_argument('--band', choices=('lw', 'sw', 'both'), default='both')
-    p.add_argument('--input', default=DEFAULT_INPUT)
-    p.add_argument('--repeats', type=int, default=3)
-    p.add_argument('--compare-fortran', action='store_true')
+    p.add_argument('--ncol', type=int, default=4096,
+                   help='columns to solve; the single profile is tiled to this many '
+                        '(default: %(default)s, the full 64x64 domain). Memory grows '
+                        'linearly: the longwave needs roughly 3.7 GB at 1024 columns')
+    p.add_argument('--band', choices=('lw', 'sw', 'both'), default='both',
+                   help='which band to run (default: %(default)s)')
+    p.add_argument('--input', default=DEFAULT_INPUT,
+                   help='path to rcemip_input.nc (default: the copy in rte-rrtmgp-cpp)')
+    p.add_argument('--repeats', type=int, default=3,
+                   help='timed repetitions after one warm-up; the best is reported '
+                        '(default: %(default)s)')
+    p.add_argument('--compare-fortran', action='store_true',
+                   help='also time the reference Fortran kernels through ctypes and '
+                        'report the ratio. Needs RTE3D_FORTRAN_REF')
     p.add_argument('--breakdown', action='store_true',
-                   help='time gas optics and transport separately')
+                   help='additionally time gas optics and transport separately')
     args = p.parse_args()
 
     if not os.path.exists(args.input):

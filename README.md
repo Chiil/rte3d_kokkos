@@ -3,6 +3,24 @@
 RTE-RRTMGP in Kokkos: one frontend for CPU and GPU, row-major arrays throughout, and
 the g-point as the outermost dimension.
 
+## Quick start
+
+```bash
+git submodule update --init --recursive          # kokkos, pybind11, rrtmgp-data
+
+mkdir build && cd build
+cmake .. -DSYST=macbook                          # see config/ for other systems
+cmake --build .
+cd ..
+
+export RTE3D_PYTHON_PATH=$PWD/build/main_python
+pytest tests                                     # 153 tests
+python cases/rfmip/run_rfmip.py --plot           # a case, end to end
+```
+
+The reference-comparison tests skip unless the Fortran oracle is built; see
+[Testing](#testing).
+
 ## Why the dimension order matters
 
 Arrays are ordered `(ngpt, nlay, ncol)` and stored row-major, so the column is the
@@ -18,102 +36,85 @@ that `rte-rrtmgp-cpp` carries.
 
 ## Status
 
-Step 1 complete: the RTE core.
+**Step 1, the RTE core — complete.**
 
-- `include/types.h` -- precision, array aliases, parallel-for wrappers, numpy interop
-- `include/rte_sw.h` -- `sw_solver_noscat`, `sw_solver_2stream`
-- `include/rte_lw.h` -- `lw_solver_noscat` with multi-angle quadrature and the
-  surface-temperature Jacobian, `lw_solver_2stream`
-- `include/optical_props.h` -- delta-scaling, the increment operations, column subsetting
-- `include/fluxes.h` -- broadband and by-band flux reduction
+| header | contents |
+|---|---|
+| `include/types.h` | precision, array aliases, parallel-for wrappers, numpy interop |
+| `include/rte_sw.h` | `sw_solver_noscat`, `sw_solver_2stream` |
+| `include/rte_lw.h` | `lw_solver_noscat` with multi-angle quadrature and the surface-temperature Jacobian, `lw_solver_2stream` |
+| `include/optical_props.h` | delta-scaling, the increment operations, column subsetting |
+| `include/fluxes.h` | broadband and by-band flux reduction |
 
-Everything is validated against the Fortran reference at ~1e-15 relative in double
-precision.
+Two things in `rte-kernels/` are deliberately not ported: `lw_transport_1rescl`, the
+approximate-scattering rescaling of Tang et al. 2018 (see the note at the top of
+`src/rte_lw.cpp`), and `zero_array_*`, which `Kokkos::deep_copy` already covers. The
+`rte-frontend/` layer is replaced rather than ported: its class hierarchy becomes the
+plain structs above.
 
-Two things in `rte-kernels/` are deliberately not ported:
+**Step 2, gas optics — complete.**
 
-- `lw_transport_1rescl`, the approximate-scattering rescaling of Tang et al. 2018.
-  See the note at the top of `src/rte_lw.cpp`.
-- `zero_array_*`, which `Kokkos::deep_copy` already covers.
+| header | contents |
+|---|---|
+| `include/gas_concs.h` | volume mixing ratios by name |
+| `include/gas_optics.h` | the four RRTMGP kernels, the k-distribution reduction (`Gas_optics::load`), and the `gas_optics_lw` / `gas_optics_sw` frontends |
+| `main_python/rte3d/kdist.py` | the only place rte3d touches NetCDF |
 
-The `rte-frontend/` layer is replaced rather than ported: its class hierarchy
-(`ty_optical_props`, `ty_source_func_lw`, `ty_fluxes`) becomes the plain structs above.
-The top-level `rte_lw()` / `rte_sw()` drivers, which validate inputs and expand
-boundary conditions before calling the kernels, are not yet written.
+Loading `rrtmgp-gas-lw-g256.nc` with eight gases reduces 19 absorbers to 8, 60 lower
+minor absorbers to 45, and the lower `kminor` table from 960 contributors to 720.
 
-Step 2a complete: all four RRTMGP gas-optics kernels -- `interpolation`,
-`compute_tau_absorption`, `compute_tau_rayleigh` and `compute_planck_source`
-(`include/gas_optics.h`). The Planck kernel fills the same `Source_func_lw` the
-longwave solvers already take, so the two halves compose directly.
+**Step 3, cloud and aerosol optics — in progress.** Cloud optics
+(`include/cloud_optics.h`) is done, from the lookup tables in `extern/rrtmgp-data`.
+Both spectral resolutions work: `-bnd` files are resolved by band and combine with gas
+optics through the by-band increments, `-g###` files by g-point. Only the lookup-table
+path is implemented — the reference also offers Pade approximants, but no shipped
+coefficient file contains them. Aerosol optics is not started.
 
-Step 2 complete: gas optics.
+**Next:** aerosol optics, then the Monte Carlo ray tracer, then MicroHH integration.
 
-- `include/gas_concs.h` -- volume mixing ratios by name
-- `include/gas_optics.h` -- the four RRTMGP kernels, the k-distribution reduction
-  (`Gas_optics::load`) and the `gas_optics_lw` / `gas_optics_sw` frontends
-- `main_python/rte3d/kdist.py` -- the only place rte3d touches NetCDF
+## Cases
 
-The real coefficient files are in `extern/rrtmgp-data`. Loading
-`rrtmgp-gas-lw-g256.nc` with eight gases reduces 19 absorbers to 8, 60 lower minor
-absorbers to 45, and the lower `kminor` table from 960 contributors to 720. Gas optics
-driven straight into `lw_solver_noscat` gives an outgoing longwave flux of ~171 W/m2
-for a standard-atmosphere column.
+Three runnable end-to-end scripts live in [`cases/`](cases/README.md), which documents
+every flag:
 
-### RFMIP
+```bash
+python cases/rfmip/run_rfmip.py   --plot     # clear-sky, 100 sites, vs reference
+python cases/allsky/run_allsky.py --plot     # cloudy, 24 columns, vs reference
+python cases/rcemip/run_rcemip.py --ncol 512 --compare-fortran   # benchmark
+```
 
-`tests/test_rfmip.py` runs the RFMIP clear-sky case end to end -- coefficient file,
-reduction, all four gas-optics kernels, and the RTE solvers -- against the reference
-fluxes shipped in `extern/rrtmgp-data`, which RRTMGP itself produced. Agreement over
-100 sites and 61 levels:
+Agreement with the reference fluxes shipped in `extern/rrtmgp-data`, which RRTMGP
+itself produced:
 
-| | longwave | shortwave |
+| | longwave up / down | shortwave up / down |
 |---|---|---|
-| upward | 4.8e-3 W/m2 | 6.0e-4 W/m2 |
-| downward | 1.0e-2 W/m2 | 9.3e-3 W/m2 |
+| RFMIP, 100 sites | 4.8e-3 / 1.0e-2 W/m2 | 6.0e-4 / 9.3e-3 W/m2 |
+| all-sky, 24 columns | 9.1e-13 / 9.1e-13 W/m2 | 7.2e-11 / 7.2e-11 W/m2 |
 
-RFMIP's own acceptance threshold is 5.8e-2 W/m2. The reference files are float32,
-whose spacing at these magnitudes is 3e-5 W/m2, so the residual is not storage
-precision -- it is the difference between this k-distribution and the one the 2018
-reference fluxes were generated with.
+RFMIP's own acceptance threshold is 5.8e-2 W/m2. Its reference files are float32, whose
+spacing at these magnitudes is 3e-5 W/m2, so its residual is not storage precision — it
+is the difference from the k-distribution the 2018 fluxes were generated with. The
+all-sky reference was generated with the data that ships beside it, which is why that
+one reaches round-off.
 
-`rte3d.rfmip` holds the case itself -- gas name and unit translation, and `solve_lw` /
-`solve_sw` -- so it is reusable outside the test.
+On performance, rte3d is currently about 3x slower per thread than the reference
+Fortran, with two thirds of the time in transport. The cause and the fix are described
+in [`cases/README.md`](cases/README.md#where-things-stand).
 
-Step 3 in progress: cloud optics (`include/cloud_optics.h`), from the lookup tables in
-`extern/rrtmgp-data`. Both spectral resolutions are supported: the `-bnd` files are
-resolved by band and combine with gas optics through the by-band increments, the
-`-g###` files by g-point. Only the lookup-table path is implemented -- the reference
-also offers Pade approximants, but no shipped coefficient file contains them.
-
-### All-sky
-
-`tests/test_allsky.py` runs the cloudy all-sky case against the reference fluxes in
-`extern/rrtmgp-data`, exercising cloud optics and the by-band increments. Unlike
-RFMIP it is stored surface-first (`top_at_1` is False), so between them the two cases
-cover both branches of every solver.
-
-Agreement is to **round-off**: 9e-13 W/m2 in the longwave and 7e-11 in the shortwave.
-These reference fluxes were generated with the same coefficient data that ships beside
-them, where the RFMIP ones date from 2018 -- which is why RFMIP agrees to 1e-2 W/m2
-and this agrees to machine precision.
-
-`rte3d.allsky` holds the case, including the boundary conditions and the ice roughness
-type the driver selects.
-
-Next: aerosol optics, then the Monte Carlo ray tracer.
+## Design notes
 
 ### Where gas names live
 
-In C++, and only in `Gas_concs` and the k-distribution loader -- never in a kernel.
-The reference resolves names at two moments: once at load, where the k-distribution is
+In C++, and only in `Gas_concs` and the k-distribution loader — never in a kernel. The
+reference resolves names at two moments: once at load, where the k-distribution is
 *reduced* to the gases the host actually supplies and every integer index array is
 rebuilt against that shorter list, and once per call, to look up each gas's mixing
-ratio. rte3d keeps both in C++ so that a host model with no Python can still load a
+ratio. rte3d keeps both in C++ so a host model with no Python can still load a
 coefficient file; Python's only job is reading the file into arrays.
 
 The reference loops minor absorbers serially, walking a per-column layer range for
 each. rte3d parallelises over (g-point, layer, column) instead, which needs the inverse
-mapping -- for each g-point, which minor absorbers contribute. `Minor_absorbers` holds
+mapping — for each g-point, which minor absorbers contribute. `Minor_absorbers` holds
 that as a CSR list built once by `build_map`.
 
 ### Interpolation weights are recomputed, not stored
@@ -130,6 +131,13 @@ reference puts `ncol` in the middle. This is the one place where a straight dime
 reversal would not have matched, so the gas-optics tests transpose before calling the
 reference. The library itself never transposes.
 
+### One source for both vertical orientations
+
+`Rte_kernels::Vert<top_at_1>` in `include_kernels/rte_solver_kernels.h` carries the two
+level offsets of a layer. The reference writes every loop out twice, once per
+orientation; templating on it keeps the explicit loops the compiler wants while writing
+the physics once.
+
 ### Known defects in the Fortran reference
 
 Each is reproduced or worked around deliberately, and pinned by a test.
@@ -145,21 +153,14 @@ Each is reproduced or worked around deliberately, and pinned by a test.
 - **`rte_kernels.h` mis-documents `flux_upJac`** as `(ncol,nlay+1,ngpt)`; the Fortran
   declares it `(ncol,nlay+1)`, since only broadband Jacobians are provided.
 
-The vertical orientation is handled by `Rte_kernels::Vert<top_at_1>` in
-`include_kernels/rte_solver_kernels.h`. The reference writes every loop out twice, once
-per orientation; templating on the orientation keeps the explicit loops the compiler
-wants while writing the physics once.
-
 ## Dependencies
 
-C++20 compiler, Python 3 with numpy and pytest. Kokkos and pybind11 come in as git
-submodules. There is deliberately **no** NetCDF, HDF5, or FFTW dependency: all file
-reading happens in Python and arrives through pybind11 as numpy arrays.
+A C++20 compiler, and Python 3 with numpy, xarray and a NetCDF backend
+(`netCDF4` or `h5netcdf`). `pytest` to run the tests, `matplotlib` only for `--plot`.
 
-```bash
-git submodule add https://github.com/kokkos/kokkos.git extern/kokkos
-git submodule add https://github.com/pybind/pybind11.git extern/pybind11
-```
+Kokkos, pybind11 and the RRTMGP coefficient data come in as git submodules; there is
+deliberately **no** NetCDF, HDF5 or FFTW dependency in the C++, since all file reading
+happens in Python and arrives through pybind11 as numpy arrays.
 
 ## Building
 
@@ -169,36 +170,43 @@ cmake .. -DSYST=macbook
 cmake --build .
 ```
 
-Switches, following MicroHH:
+| switch | meaning |
+|---|---|
+| `-DSYST=<system>` | **required**; picks `config/<system>.cmake` — `macbook` (clang), `macbook_gcc`, `ubuntu_22lts_gcc` |
+| `-DUSEGPU=1` | build for GPU; the backend (CUDA or HIP) comes from the config file |
+| `-DUSESP=1` | 32-bit floats instead of 64-bit |
+| `-DCMAKE_BUILD_TYPE=DEBUG` | unoptimised build |
 
-- `-DSYST=<system>` — required, picks `config/<system>.cmake`
-  (`macbook`, `macbook_gcc`, `ubuntu_22lts_gcc`)
-- `-DUSEGPU=1` — build for GPU; the backend (CUDA or HIP) comes from the config file
-- `-DUSESP=1` — 32-bit floats instead of 64-bit
-- `-DCMAKE_BUILD_TYPE=DEBUG`
+Use a separate build directory per configuration and point `RTE3D_PYTHON_PATH` at
+whichever you want; `build/` and `build_gcc/` can coexist.
 
 ## Testing
-
-The reduction inside `ty_gas_optics_rrtmgp%load` has no `bind(C)` entry point, so
-`tests/build_reference.sh` builds a second library from `tests/shim/rte3d_shim.F90`,
-which exposes it. Python reads the coefficient file once and hands the same raw arrays
-to both implementations. To let the shim read the reduced arrays, the build compiles a
-*copy* of `mo_gas_optics_rrtmgp.F90` with the type's `private` relaxed; the reference
-source is never modified.
-
 
 ```bash
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
 pytest tests
 ```
 
-To also run the comparisons against the reference implementation:
+That runs everything not needing the Fortran. To include the reference comparisons:
 
 ```bash
-./tests/build_reference.sh          # needs gfortran; set FC to override
+./tests/build_reference.sh                       # needs gfortran; set FC to override
 export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
+export RTE3D_FORTRAN_SHIM=$PWD/build/reference/librte3d_shim.dylib
 pytest tests
 ```
 
-Those tests skip when `RTE3D_FORTRAN_REF` is unset. The Fortran is a correctness oracle only — it is
-deprecated, never linked, and not needed to build or use rte3d.
+| variable | what it unlocks |
+|---|---|
+| `RTE3D_FORTRAN_REF` | the kernel-by-kernel comparisons, via the `bind(C)` API |
+| `RTE3D_FORTRAN_SHIM` | the k-distribution reduction and cloud optics comparisons |
+
+Tests needing either one skip when it is unset. The Fortran is a correctness oracle
+only — deprecated, never linked, and not needed to build or use rte3d.
+
+The shim exists because `ty_gas_optics_rrtmgp%load` and `ty_cloud_optics_rrtmgp` have
+no `bind(C)` entry points. `tests/build_reference.sh` builds a second library from
+`tests/shim/rte3d_shim.F90` that exposes them, and Python hands the same raw arrays to
+both implementations. To let the shim read the reduced arrays, the build compiles a
+*copy* of `mo_gas_optics_rrtmgp.F90` with the type's `private` relaxed; the reference
+source is never modified.

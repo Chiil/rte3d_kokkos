@@ -37,8 +37,10 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--expt', type=int, default=0,
                    help='RFMIP experiment index, 0-17 (default: 0, present day)')
-    p.add_argument('--plot', action='store_true', help='also write a figure')
-    p.add_argument('-o', '--output', default='rfmip_fluxes.nc')
+    p.add_argument('--plot', action='store_true',
+                   help='also write a figure alongside the NetCDF, named <output>.png')
+    p.add_argument('-o', '--output', default='rfmip_fluxes.nc',
+                   help='where to write the fluxes (default: %(default)s)')
     args = p.parse_args()
 
     results = {}
@@ -83,10 +85,11 @@ def main():
 
 
 def plot(results, references, plev, path):
-    """rte3d solid, the reference dashed on top, colour distinguishing up from down.
+    """rte3d in colour, the reference dotted in black on top.
 
-    At these residuals the two curves sit on top of each other; that is the point.
-    The numerical comparison is the printed table.
+    Black-on-colour is what makes the overlap visible: at these residuals the two
+    curves coincide, so the dotted line should sit exactly on the coloured one all the
+    way down. The numbers are in the printed table.
     """
     require_plotting()
     import matplotlib
@@ -101,8 +104,8 @@ def plot(results, references, plev, path):
         for name, colour in zip(pair, ('C0', 'C1')):
             ax.plot(results[name].mean(axis=1), p, '-', color=colour, lw=1.6,
                     label=f'{name} rte3d')
-            ax.plot(references[name].mean(axis=1), p, '--', color=colour, lw=1.6,
-                    dashes=(4, 3), label=f'{name} reference')
+            ax.plot(references[name].mean(axis=1), p, ':', color='k', lw=1.2,
+                    zorder=5, label=f'{name} reference')
         ax.set_title(band)
         ax.set_xlabel('flux [W m$^{-2}$]')
         ax.legend(fontsize=8)
@@ -112,7 +115,7 @@ def plot(results, references, plev, path):
     axes[0].invert_yaxis()
     axes[0].set_yscale('log')
 
-    fig.suptitle('RFMIP clear-sky, mean over 100 sites: rte3d (solid) vs reference (dashed)')
+    fig.suptitle('RFMIP clear-sky, mean over 100 sites: rte3d (colour) vs reference (black dots)')
     fig.tight_layout()
     fig.savefig(path, dpi=140)
     print(f'wrote {path}')
