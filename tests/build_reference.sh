@@ -76,6 +76,7 @@ awk 'BEGIN{n=0}
     "$src/gas-optics/mo_gas_optics.F90" \
     "$src/rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90" \
     "$out/mo_gas_optics_rrtmgp_open.F90" \
+    "$src/rrtmgp-frontend/mo_cloud_optics_rrtmgp.F90" \
     "$shim/rte3d_shim.F90" )
 
 echo "Built $out/librte_kernels.$ext"

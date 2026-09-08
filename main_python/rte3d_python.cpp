@@ -8,6 +8,7 @@
 #include "fluxes.h"
 #include "gas_optics.h"
 #include "gas_concs.h"
+#include "cloud_optics.h"
 
 
 PYBIND11_MODULE(rte3d_python, m)
@@ -23,4 +24,5 @@ PYBIND11_MODULE(rte3d_python, m)
     Gas_optics::init_load_python_bindings(m);
     Gas_optics::init_frontend_python_bindings(m);
     Gas_concs::init_python_bindings(m);
+    Clouds::init_python_bindings(m);
 }

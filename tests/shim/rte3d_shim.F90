@@ -9,12 +9,15 @@ module rte3d_shim
   use mo_rte_kind,           only: wp, wl
   use mo_gas_concentrations, only: ty_gas_concs
   use mo_gas_optics_rrtmgp,  only: ty_gas_optics_rrtmgp
+  use mo_cloud_optics_rrtmgp, only: ty_cloud_optics_rrtmgp
+  use mo_optical_props,      only: ty_optical_props_1scl, ty_optical_props_2str
   implicit none
 
   integer, parameter :: name_len = 32
 
   type(ty_gas_optics_rrtmgp), save :: k_dist
   type(ty_gas_concs),         save :: gas_concs
+  type(ty_cloud_optics_rrtmgp), save :: cloud_optics
 
 contains
 
@@ -178,5 +181,80 @@ contains
       kminor(1:size(k_dist%kminor_upper))             = reshape(k_dist%kminor_upper, [size(k_dist%kminor_upper)])
     end if
   end subroutine shim_get_minor
+
+  ! --- cloud optics -----------------------------------------------------------
+  !
+  ! ty_cloud_optics_rrtmgp%cloud_optics has no bind(C) entry point either. The tables
+  ! come in as arrays rather than a file, so this needs no NetCDF and is unaffected by
+  ! the radice/diamice rename in newer coefficient files.
+
+  subroutine shim_cloud_optics(nspec, nsize_liq, nsize_ice, nrghice, icergh, &
+                               ncol, nlay, two_stream,                       &
+                               band_lims_wvn,                                &
+                               radliq_lwr, radliq_upr, radice_lwr, radice_upr, &
+                               extliq, ssaliq, asyliq, extice, ssaice, asyice, &
+                               clwp, ciwp, reliq, reice,                     &
+                               tau, ssa, g, status) bind(C, name="rte3d_shim_cloud_optics")
+    integer(c_int), intent(in) :: nspec, nsize_liq, nsize_ice, nrghice, icergh
+    integer(c_int), intent(in) :: ncol, nlay, two_stream
+    real(c_double), intent(in) :: band_lims_wvn(2, nspec)
+    real(c_double), intent(in) :: radliq_lwr, radliq_upr, radice_lwr, radice_upr
+    real(c_double), intent(in) :: extliq(nsize_liq, nspec), ssaliq(nsize_liq, nspec)
+    real(c_double), intent(in) :: asyliq(nsize_liq, nspec)
+    real(c_double), intent(in) :: extice(nsize_ice, nspec, nrghice)
+    real(c_double), intent(in) :: ssaice(nsize_ice, nspec, nrghice)
+    real(c_double), intent(in) :: asyice(nsize_ice, nspec, nrghice)
+    real(c_double), intent(in) :: clwp(ncol, nlay), ciwp(ncol, nlay)
+    real(c_double), intent(in) :: reliq(ncol, nlay), reice(ncol, nlay)
+    real(c_double), intent(out) :: tau(*), ssa(*), g(*)
+    integer(c_int), intent(out) :: status
+
+    type(ty_optical_props_1scl) :: props_1scl
+    type(ty_optical_props_2str) :: props_2str
+    character(len=128) :: err
+    integer :: n
+
+    status = 0
+    n = ncol*nlay*nspec
+
+    ! The saved object may already hold tables from a previous call, and load()
+    ! allocates unconditionally.
+    call cloud_optics%finalize()
+
+    err = cloud_optics%load(band_lims_wvn, radliq_lwr, radliq_upr, radice_lwr, radice_upr, &
+                            extliq, ssaliq, asyliq, extice, ssaice, asyice)
+    if (len_trim(err) /= 0) then
+      status = 1
+      return
+    end if
+
+    err = cloud_optics%set_ice_roughness(icergh)
+    if (len_trim(err) /= 0) then
+      status = 2
+      return
+    end if
+
+    if (two_stream /= 0) then
+      err = props_2str%init(band_lims_wvn)
+      if (len_trim(err) == 0) err = props_2str%alloc_2str(ncol, nlay)
+      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, reice, props_2str)
+      if (len_trim(err) /= 0) then
+        status = 3
+        return
+      end if
+      tau(1:n) = reshape(props_2str%tau, [n])
+      ssa(1:n) = reshape(props_2str%ssa, [n])
+      g  (1:n) = reshape(props_2str%g,   [n])
+    else
+      err = props_1scl%init(band_lims_wvn)
+      if (len_trim(err) == 0) err = props_1scl%alloc_1scl(ncol, nlay)
+      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, reice, props_1scl)
+      if (len_trim(err) /= 0) then
+        status = 4
+        return
+      end if
+      tau(1:n) = reshape(props_1scl%tau, [n])
+    end if
+  end subroutine shim_cloud_optics
 
 end module rte3d_shim

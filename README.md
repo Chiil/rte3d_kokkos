@@ -79,7 +79,13 @@ reference fluxes were generated with.
 `rte3d.rfmip` holds the case itself -- gas name and unit translation, and `solve_lw` /
 `solve_sw` -- so it is reusable outside the test.
 
-Next: cloud and aerosol optics, then the Monte Carlo ray tracer.
+Step 3 in progress: cloud optics (`include/cloud_optics.h`), from the lookup tables in
+`extern/rrtmgp-data`. Both spectral resolutions are supported: the `-bnd` files are
+resolved by band and combine with gas optics through the by-band increments, the
+`-g###` files by g-point. Only the lookup-table path is implemented -- the reference
+also offers Pade approximants, but no shipped coefficient file contains them.
+
+Next: aerosol optics and the all-sky case, then the Monte Carlo ray tracer.
 
 ### Where gas names live
 

@@ -55,6 +55,16 @@ class Shim:
         lib.rte3d_shim_get_minor.restype = None
         lib.rte3d_shim_get_minor.argtypes = [_p] + [_i4]*6 + [_f8]
 
+        lib.rte3d_shim_cloud_optics.restype = None
+        lib.rte3d_shim_cloud_optics.argtypes = (
+            [_p]*8            # nspec nsize_liq nsize_ice nrghice icergh ncol nlay two_stream
+            + [_f8]           # band_lims_wvn
+            + [_p]*4          # radliq_lwr/upr radice_lwr/upr
+            + [_f8]*6         # extliq ssaliq asyliq extice ssaice asyice
+            + [_f8]*4         # clwp ciwp reliq reice
+            + [_f8]*3         # tau ssa g
+            + [_p])           # status
+
     def load(self, f, available):
         ngas_file = len(f['gas_names'])
         nminor_abs = len(f['gas_minor'])
@@ -136,3 +146,52 @@ class Shim:
             out[prefix + 'kminor'] = kminor
 
         return out
+
+    def cloud_optics(self, f, clwp, ciwp, reliq, reice, icergh=0, two_stream=True):
+        """Cloud optical properties from the reference.
+
+        Table shapes here are rte3d's; the reference wants them reversed, which for a
+        Fortran column-major array is the same memory, except that the tables are
+        indexed (size, spectral) there and (spectral, size) here.
+        """
+        nlay, ncol = clwp.shape
+        nspec, nsize_liq = f['extliq'].shape
+        nrghice, _, nsize_ice = f['extice'].shape
+
+        # The reference's cloud optics is band-resolved: it wants one spectral
+        # discretisation entry per table column. A g-point-resolved coefficient file
+        # has more table columns than bands, so synthesise one interval per column.
+        # The wavenumber limits play no part in the lookup -- only the size index does
+        # -- so this does not change the answer.
+        band_lims = np.ascontiguousarray(f['band_lims_wavenum'])
+        if band_lims.shape[0] != nspec:
+            edges = np.linspace(1.0, 1.0 + nspec, nspec + 1)
+            band_lims = np.ascontiguousarray(
+                np.stack([edges[:-1], edges[1:]], axis=1))
+
+        n = nspec*nlay*ncol
+        tau = np.zeros(n, dtype=FLOAT)
+        ssa = np.zeros(n, dtype=FLOAT)
+        g = np.zeros(n, dtype=FLOAT)
+        status = ctypes.c_int(-1)
+
+        self.lib.rte3d_shim_cloud_optics(
+            _i(nspec), _i(nsize_liq), _i(nsize_ice), _i(nrghice), _i(icergh + 1),
+            _i(ncol), _i(nlay), _i(1 if two_stream else 0),
+            band_lims,
+            _d(f['radliq_lwr']), _d(f['radliq_upr']),
+            _d(f['radice_lwr']), _d(f['radice_upr']),
+            f['extliq'], f['ssaliq'], f['asyliq'],
+            f['extice'], f['ssaice'], f['asyice'],
+            clwp, ciwp, reliq, reice,
+            tau, ssa, g, ctypes.byref(status))
+
+        if status.value != 0:
+            raise RuntimeError(f'rte3d_shim_cloud_optics failed with status {status.value}')
+
+        # The reference writes (ncol, nlay, nspec) in Fortran order, i.e. C order
+        # (nspec, nlay, ncol) once reshaped.
+        shape = (nspec, nlay, ncol)
+        if two_stream:
+            return tau.reshape(shape), ssa.reshape(shape), g.reshape(shape)
+        return tau.reshape(shape)

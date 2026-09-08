@@ -101,3 +101,33 @@ def _i4(da):
 
 def _i1(da):
     return np.ascontiguousarray(da.values.astype(np.int8))
+
+
+def read_cloud_optics(path):
+    """Read a cloud optics coefficient file into the dict rte3d.load_cloud_optics takes.
+
+    The spectral dimension is whatever the file provides: the -bnd files are resolved
+    by band, the -g### files by g-point.
+
+    The ice size bounds are named diamice_lwr/upr in current files and radice_lwr/upr
+    in older ones. The numbers are the same, but RRTMGP now documents the quantity as
+    an effective *diameter*, so a host model supplying an effective radius has to
+    double it.
+    """
+    d = xr.open_dataset(path)
+
+    spectral = 'ngpt' if 'ngpt' in d['extliq'].dims else 'nband'
+    ice_lwr = 'diamice_lwr' if 'diamice_lwr' in d else 'radice_lwr'
+    ice_upr = 'diamice_upr' if 'diamice_upr' in d else 'radice_upr'
+
+    return dict(
+        radliq_lwr=float(d['radliq_lwr']), radliq_upr=float(d['radliq_upr']),
+        radice_lwr=float(d[ice_lwr]), radice_upr=float(d[ice_upr]),
+        extliq=_f8(d['extliq'].transpose(spectral, 'nsize_liq')),
+        ssaliq=_f8(d['ssaliq'].transpose(spectral, 'nsize_liq')),
+        asyliq=_f8(d['asyliq'].transpose(spectral, 'nsize_liq')),
+        extice=_f8(d['extice'].transpose('nrghice', spectral, 'nsize_ice')),
+        ssaice=_f8(d['ssaice'].transpose('nrghice', spectral, 'nsize_ice')),
+        asyice=_f8(d['asyice'].transpose('nrghice', spectral, 'nsize_ice')),
+        band_lims_wavenum=_f8(d['bnd_limits_wavenumber']),
+    )
