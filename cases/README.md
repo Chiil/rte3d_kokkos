@@ -12,12 +12,12 @@ Every script needs `RTE3D_PYTHON_PATH` pointing at a build directory:
 export RTE3D_PYTHON_PATH=$PWD/build/main_python      # or build_gcc/main_python
 ```
 
-Two scripts optionally need more:
+In full:
 
 | variable | needed by | how to get it |
 |---|---|---|
-| `RTE3D_PYTHON_PATH` | all | required; points at the directory holding `rte3d_python*.so` |
-| `RTE3D_FORTRAN_REF` | `run_rcemip.py --compare-fortran` | `./tests/build_reference.sh` |
+| `RTE3D_PYTHON_PATH` | all three, always | the directory holding `rte3d_python*.so` |
+| `RTE3D_FORTRAN_REF` | `run_rcemip.py --compare-fortran` only | `./tests/build_reference.sh` |
 
 Plotting needs `matplotlib`. It is not a dependency of rte3d: without it the scripts
 still run and still write their NetCDF output, and `--plot` reports what to install.

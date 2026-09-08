@@ -187,14 +187,20 @@ export RTE3D_PYTHON_PATH=$PWD/build/main_python
 pytest tests
 ```
 
-That runs everything not needing the Fortran. To include the reference comparisons:
+That runs everything not needing the Fortran. To include the reference comparisons —
+the full suite:
 
 ```bash
 ./tests/build_reference.sh                       # needs gfortran; set FC to override
+
+export RTE3D_PYTHON_PATH=$PWD/build/main_python
 export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
 export RTE3D_FORTRAN_SHIM=$PWD/build/reference/librte3d_shim.dylib
 pytest tests
 ```
+
+The library extension is `.dylib` on macOS and `.so` on Linux;
+`build_reference.sh` prints the two `export` lines for your platform when it finishes.
 
 | variable | what it unlocks |
 |---|---|
