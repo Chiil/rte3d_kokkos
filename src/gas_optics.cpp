@@ -379,3 +379,176 @@ void Gas_optics::compute_tau_absorption(
             tau(igpt, ilay, icol) += tau_l;
         });
 }
+
+
+void Gas_optics::compute_tau_rayleigh(
+        const Kdist_gas& k,
+        const Interp_state& state,
+        const Array_2d<const TF>& col_dry,
+        const Array_3d<const TF>& col_gas,
+        const Array_3d<TF>& tau_rayleigh)
+{
+    const int ngpt = static_cast<int>(tau_rayleigh.extent(0));
+    const int nlay = static_cast<int>(tau_rayleigh.extent(1));
+    const int ncol = static_cast<int>(tau_rayleigh.extent(2));
+
+    const auto jtemp = state.jtemp;
+    const auto ftemp = state.ftemp;
+    const auto fpress = state.fpress;
+    const auto tropo = state.tropo;
+    const auto jeta = state.jeta;
+    const auto feta = state.feta;
+
+    const auto gpoint_flavor = k.gpoint_flavor;
+    const auto band_gpt_start = k.band_gpt_start;
+    const auto gpt_band = k.gpt_band;
+    const auto krayl = k.krayl;
+    const int idx_h2o = k.idx_h2o;
+
+    parallel_for_3d("compute_tau_rayleigh", {0, 0, 0}, {ngpt, nlay, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+        {
+            const int itropo = tropo(ilay, icol) ? 0 : 1;
+            const int jt = jtemp(ilay, icol);
+
+            // As for the major species, the flavour comes from the first g-point of
+            // this g-point's band.
+            const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
+
+            TF fmin[2][2], fmaj[2][2][2];
+            Gas_optics_kernels::interp_weights(
+                    ftemp(ilay, icol), fpress(ilay, icol),
+                    feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+
+            TF kr = TF(0.);
+            for (int itemp=0; itemp<2; ++itemp)
+            {
+                const int je = jeta(iflav, itemp, ilay, icol);
+                for (int ieta=0; ieta<2; ++ieta)
+                    kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
+            }
+
+            tau_rayleigh(igpt, ilay, icol) =
+                    kr * (col_gas(idx_h2o, ilay, icol) + col_dry(ilay, icol));
+        });
+}
+
+
+void Gas_optics::compute_planck_source(
+        const Kdist_gas& k,
+        const Interp_state& state,
+        const Array_2d<const TF>& tlay,
+        const Array_2d<const TF>& tlev,
+        const Array_1d<const TF>& tsfc,
+        const int sfc_lay,
+        const Source_func_lw& sources)
+{
+    const int ngpt = static_cast<int>(sources.lay_source.extent(0));
+    const int nlay = static_cast<int>(sources.lay_source.extent(1));
+    const int ncol = static_cast<int>(sources.lay_source.extent(2));
+    const int nlev = nlay + 1;
+    const int nplancktemp = static_cast<int>(k.totplnk.extent(1));
+
+    const auto jtemp = state.jtemp;
+    const auto ftemp = state.ftemp;
+    const auto jpress = state.jpress;
+    const auto fpress = state.fpress;
+    const auto tropo = state.tropo;
+    const auto jeta = state.jeta;
+    const auto feta = state.feta;
+
+    const auto gpoint_flavor = k.gpoint_flavor;
+    const auto band_gpt_start = k.band_gpt_start;
+    const auto gpt_band = k.gpt_band;
+    const auto pfracin = k.pfracin;
+    const auto totplnk = k.totplnk;
+    const TF temp_ref_min = k.temp_ref_min;
+    const TF totplnk_delta = k.totplnk_delta;
+
+    // Fraction of each band's Planck irradiance belonging to each g-point. This is the
+    // major-species interpolation with unit column mixing.
+    Array_3d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
+
+    parallel_for_3d("planck_pfrac", {0, 0, 0}, {ngpt, nlay, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+        {
+            const int itropo = tropo(ilay, icol) ? 0 : 1;
+            const int jt = jtemp(ilay, icol);
+            const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
+
+            TF fmin[2][2], fmaj[2][2][2];
+            Gas_optics_kernels::interp_weights(
+                    ftemp(ilay, icol), fpress(ilay, icol),
+                    feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+
+            const int jp0 = jpress(ilay, icol) + itropo;
+
+            TF frac = TF(0.);
+            for (int itemp=0; itemp<2; ++itemp)
+            {
+                const int je = jeta(iflav, itemp, ilay, icol);
+                for (int ipress=0; ipress<2; ++ipress)
+                    for (int ieta=0; ieta<2; ++ieta)
+                        frac += fmaj[itemp][ipress][ieta]
+                              * pfracin(igpt, jp0 + ipress, je + ieta, jt + itemp);
+            }
+
+            pfrac(igpt, ilay, icol) = frac;
+        });
+
+    const auto lay_source = sources.lay_source;
+    const auto lev_source = sources.lev_source;
+    const auto sfc_source = sources.sfc_source;
+    const auto sfc_source_jac = sources.sfc_source_jac;
+
+    // The band Planck function is cheap to interpolate, so it is recomputed per
+    // g-point rather than stored as (nbnd, nlev, ncol).
+    parallel_for_3d("planck_lay_source", {0, 0, 0}, {ngpt, nlay, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+        {
+            const TF planck = Gas_optics_kernels::interpolate_1d(
+                    tlay(ilay, icol), temp_ref_min, totplnk_delta,
+                    totplnk, gpt_band(igpt), nplancktemp);
+
+            lay_source(igpt, ilay, icol) = pfrac(igpt, ilay, icol) * planck;
+        });
+
+    parallel_for_3d("planck_lev_source", {0, 0, 0}, {ngpt, nlev, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilev, const int icol)
+        {
+            const TF planck = Gas_optics_kernels::interpolate_1d(
+                    tlev(ilev, icol), temp_ref_min, totplnk_delta,
+                    totplnk, gpt_band(igpt), nplancktemp);
+
+            // The two array ends take the adjacent layer's fraction; interior levels
+            // take the geometric mean of the layers either side. These are array
+            // positions, not physical top and surface, so this is orientation-agnostic.
+            TF frac;
+            if (ilev == 0)
+                frac = pfrac(igpt, 0, icol);
+            else if (ilev == nlay)
+                frac = pfrac(igpt, nlay - 1, icol);
+            else
+                frac = Kokkos::sqrt(pfrac(igpt, ilev - 1, icol) * pfrac(igpt, ilev, icol));
+
+            lev_source(igpt, ilev, icol) = frac * planck;
+        });
+
+    parallel_for_2d("planck_sfc_source", {0, 0}, {ngpt, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int icol)
+        {
+            const int ibnd = gpt_band(igpt);
+
+            const TF planck = Gas_optics_kernels::interpolate_1d(
+                    tsfc(icol), temp_ref_min, totplnk_delta, totplnk, ibnd, nplancktemp);
+
+            // The Jacobian is a one-Kelvin finite difference, as in the reference.
+            const TF planck_up = Gas_optics_kernels::interpolate_1d(
+                    tsfc(icol) + TF(1.), temp_ref_min, totplnk_delta, totplnk, ibnd, nplancktemp);
+
+            const TF frac = pfrac(igpt, sfc_lay, icol);
+
+            sfc_source(igpt, icol) = frac * planck;
+            sfc_source_jac(igpt, icol) = frac * (planck_up - planck);
+        });
+}

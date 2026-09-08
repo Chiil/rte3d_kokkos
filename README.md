@@ -41,9 +41,13 @@ The `rte-frontend/` layer is replaced rather than ported: its class hierarchy
 The top-level `rte_lw()` / `rte_sw()` drivers, which validate inputs and expand
 boundary conditions before calling the kernels, are not yet written.
 
-Step 2a in progress: the RRTMGP gas-optics kernels. `interpolation` and
-`compute_tau_absorption` are done (`include/gas_optics.h`); `compute_tau_rayleigh` and
-`compute_Planck_source` are next, then `Gas_concs` and the frontend.
+Step 2a complete: all four RRTMGP gas-optics kernels -- `interpolation`,
+`compute_tau_absorption`, `compute_tau_rayleigh` and `compute_planck_source`
+(`include/gas_optics.h`). The Planck kernel fills the same `Source_func_lw` the
+longwave solvers already take, so the two halves compose directly.
+
+Next, step 2b: `Gas_concs`, the frontend that orchestrates these kernels, and reading
+the coefficient files in Python.
 
 The reference loops minor absorbers serially, walking a per-column layer range for
 each. rte3d parallelises over (g-point, layer, column) instead, which needs the inverse

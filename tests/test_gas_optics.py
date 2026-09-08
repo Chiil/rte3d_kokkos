@@ -222,3 +222,99 @@ def test_tau_absorption_matches_reference(rte3d, fortran_ref, nlay, ncol, monoto
     np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
     assert np.all(actual >= 0.0)
     assert actual.max() > 0.0
+
+
+@pytest.mark.parametrize('nlay,ncol', [(20, 6), (1, 4), (8, 1)])
+def test_tau_rayleigh_matches_reference(rte3d, fortran_ref, nlay, ncol):
+    rng = np.random.default_rng(50)
+    bundle = kdist_full(rng)
+    kd, grid = flatten_kdist(bundle)
+
+    ngpt = kd['kmajor'].shape[0]
+    neta, ntemp = grid['neta'], grid['temp_ref'].shape[0]
+    kd['krayl'] = rng.uniform(0.0, 1e-26, (2, ngpt, neta, ntemp))
+
+    ngas = grid['vmr_ref'].shape[1] - 1
+    a = atmosphere(rng, ngas, nlay, ncol)
+    col_dry = rng.uniform(1e22, 1e25, (nlay, ncol))
+
+    interp = fortran_ref.interpolation(flavor=kd['flavor'], **grid, **a)
+    expected = fortran_ref.compute_tau_rayleigh(
+        kd, interp, col_dry, a['col_gas'], grid['neta'])
+
+    actual = rte3d.compute_tau_rayleigh(kdist=kd, col_dry=col_dry, **grid, **a)
+
+    np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
+    assert actual.max() > 0.0
+
+
+@pytest.mark.parametrize('nlay,ncol', [(20, 6), (1, 4), (8, 1)])
+def test_planck_source_matches_reference(rte3d, fortran_ref, nlay, ncol):
+    rng = np.random.default_rng(51)
+    bundle = kdist_full(rng)
+    kd, grid = flatten_kdist(bundle)
+
+    ngpt = kd['kmajor'].shape[0]
+    nbnd = kd['band_lims_gpt'].shape[0]
+    npres = grid['press_ref_log'].shape[0]
+    neta, ntemp = grid['neta'], grid['temp_ref'].shape[0]
+    nplancktemp = 196
+
+    kd['pfracin'] = rng.uniform(0.0, 1.0, (ngpt, npres + 1, neta, ntemp))
+    kd['totplnk'] = rng.uniform(0.0, 100.0, (nbnd, nplancktemp))
+    kd['temp_ref_min'] = grid['temp_ref_min']
+    kd['totplnk_delta'] = 1.0
+
+    ngas = grid['vmr_ref'].shape[1] - 1
+    a = atmosphere(rng, ngas, nlay, ncol)
+    tlev = rng.uniform(160.0, 355.0, (nlay + 1, ncol))
+    tsfc = rng.uniform(200.0, 320.0, ncol)
+    sfc_lay = nlay - 1
+
+    interp = fortran_ref.interpolation(flavor=kd['flavor'], **grid, **a)
+    expected = fortran_ref.compute_planck_source(
+        kd, interp, a['tlay'], tlev, tsfc, sfc_lay, grid['neta'])
+
+    actual = rte3d.compute_planck_source(
+        kdist=kd, tlev=tlev, tsfc=tsfc, sfc_lay=sfc_lay, **grid, **a)
+
+    tol = tolerance(rte3d)
+    for key in ('lay_source', 'lev_source', 'sfc_source', 'sfc_source_jac'):
+        np.testing.assert_allclose(actual[key], expected[key], rtol=tol, atol=0.0,
+                                   err_msg=f'{key} differs from the reference')
+
+
+def test_planck_sources_feed_the_longwave_solver(rte3d):
+    """The Planck kernel's output shapes are exactly what Source_func_lw and the
+    longwave solvers already take, so the two halves compose without adaptation."""
+    rng = np.random.default_rng(52)
+    bundle = kdist_full(rng)
+    kd, grid = flatten_kdist(bundle)
+
+    ngpt = kd['kmajor'].shape[0]
+    nbnd = kd['band_lims_gpt'].shape[0]
+    npres = grid['press_ref_log'].shape[0]
+    nlay, ncol = 12, 5
+
+    kd['pfracin'] = rng.uniform(0.0, 1.0, (ngpt, npres + 1, grid['neta'], 14))
+    kd['totplnk'] = rng.uniform(1.0, 100.0, (nbnd, 196))
+    kd['temp_ref_min'] = grid['temp_ref_min']
+    kd['totplnk_delta'] = 1.0
+
+    a = atmosphere(rng, grid['vmr_ref'].shape[1] - 1, nlay, ncol)
+    src = rte3d.compute_planck_source(
+        kdist=kd, tlev=rng.uniform(160.0, 355.0, (nlay + 1, ncol)),
+        tsfc=rng.uniform(200.0, 320.0, ncol), sfc_lay=nlay - 1, **grid, **a)
+
+    flux_up, flux_dn, _ = rte3d.lw_solver_noscat(
+        True,
+        secants=np.full((1, ngpt, ncol), 1.66),
+        weights=np.array([0.5]),
+        tau=10.0**rng.uniform(-4.0, 1.0, (ngpt, nlay, ncol)),
+        lay_source=src['lay_source'], lev_source=src['lev_source'],
+        sfc_emis=np.full((ngpt, ncol), 0.98),
+        sfc_source=src['sfc_source'],
+        inc_flux=np.zeros((ngpt, ncol)))
+
+    assert np.all(np.isfinite(flux_up)) and np.all(np.isfinite(flux_dn))
+    assert np.all(flux_up >= 0.0) and np.all(flux_dn >= 0.0)

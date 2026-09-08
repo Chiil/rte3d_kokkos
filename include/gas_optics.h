@@ -1,5 +1,6 @@
 #pragma once
 
+#include "source_functions.h"
 #include "types.h"
 
 
@@ -72,6 +73,15 @@ struct Kdist_gas
     Minor_absorbers upper;
 
     int idx_h2o = -1;              // index of water vapour in the gas dimension of col_gas
+
+    // Shortwave only: Rayleigh scattering coefficients, lower and upper atmosphere.
+    Array_4d<TF> krayl;            // (2, ngpt, neta, ntemp)
+
+    // Longwave only: the Planck tables.
+    Array_4d<TF> pfracin;          // (ngpt, npres+1, neta, ntemp)
+    Array_2d<TF> totplnk;          // (nbnd, nplancktemp)
+    TF totplnk_delta = TF(0.);
+    TF temp_ref_min = TF(0.);
 };
 
 
@@ -108,6 +118,27 @@ namespace Gas_optics
             const Array_2d<const TF>& tlay,     // (nlay, ncol)
             const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
             const Array_3d<TF>& tau);           // (ngpt, nlay, ncol), accumulated into
+
+    // Rayleigh scattering optical depth. Assigned, not accumulated, as in the
+    // reference. Reference: compute_tau_rayleigh.
+    void compute_tau_rayleigh(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& col_dry,   // (nlay, ncol)
+            const Array_3d<const TF>& col_gas,   // (ngas+1, nlay, ncol)
+            const Array_3d<TF>& tau_rayleigh);   // (ngpt, nlay, ncol)
+
+    // Planck sources at layer centres, layer edges and the surface, plus the
+    // surface-temperature Jacobian. Fills the same Source_func_lw the longwave
+    // solvers consume. Reference: compute_Planck_source.
+    void compute_planck_source(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& tlay,      // (nlay, ncol)
+            const Array_2d<const TF>& tlev,      // (nlev, ncol)
+            const Array_1d<const TF>& tsfc,      // (ncol)
+            const int sfc_lay,                   // 0-based layer adjacent to the surface
+            const Source_func_lw& sources);
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via

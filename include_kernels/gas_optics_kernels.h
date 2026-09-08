@@ -35,4 +35,27 @@ namespace Gas_optics_kernels
             }
         }
     }
+
+
+    // Linear interpolation along the last axis of a two-dimensional table, for one
+    // entry of the first. Reference: interpolate1D.
+    //
+    // The fraction is taken from the unclamped position while the index is clamped, so
+    // values outside the table extrapolate rather than saturate. That is the
+    // reference's behaviour, reproduced deliberately.
+    template<typename Table>
+    KOKKOS_INLINE_FUNCTION
+    TF interpolate_1d(
+            const TF val, const TF offset, const TF delta,
+            const Table& table, const int irow, const int nval)
+    {
+        const TF val0 = (val - offset) / delta;
+        const TF frac = val0 - static_cast<int>(val0);
+
+        // The reference clamps a 1-based index to [1, nval-1]; 0-based that is
+        // [0, nval-2].
+        const int index = Kokkos::min(nval - 2, Kokkos::max(0, static_cast<int>(val0)));
+
+        return table(irow, index) + frac * (table(irow, index + 1) - table(irow, index));
+    }
 }

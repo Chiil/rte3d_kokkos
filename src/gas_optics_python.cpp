@@ -173,4 +173,128 @@ void Gas_optics::init_python_bindings(py::module_& m)
         py::arg("play"), py::arg("tlay"), py::arg("col_gas"),
         "Interpolate and compute the absorption optical depth. Returns tau "
         "(ngpt, nlay, ncol). All indices in kdist are 0-based.");
+
+    m.def("compute_tau_rayleigh",
+        [](const py::dict& kdist,
+           const Numpy::In<TF>& press_ref_log, const Numpy::In<TF>& temp_ref,
+           const TF press_ref_log_delta, const TF temp_ref_min, const TF temp_ref_delta,
+           const TF press_ref_trop_log, const int neta,
+           const Numpy::In<TF>& vmr_ref,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& tlay,
+           const Numpy::In<TF>& col_dry, const Numpy::In<TF>& col_gas)
+        {
+            Runtime::get();
+
+            Kdist_gas k;
+            k.gpoint_flavor = Numpy::to_device_2d<int>(item<int>(kdist, "gpoint_flavor"), "gpoint_flavor");
+            k.gpt_band = Numpy::to_device_1d<int>(item<int>(kdist, "gpt_band"), "gpt_band");
+            k.band_gpt_start = Numpy::to_device_1d<int>(item<int>(kdist, "band_gpt_start"), "band_gpt_start");
+            k.krayl = Numpy::to_device_4d<TF>(item<TF>(kdist, "krayl"), "krayl");
+            k.idx_h2o = kdist["idx_h2o"].cast<int>();
+
+            auto flavor_d = Numpy::to_device_2d<int>(item<int>(kdist, "flavor"), "flavor");
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            auto col_gas_d = Numpy::to_device_3d<TF>(col_gas, "col_gas");
+
+            const int nflav = static_cast<int>(flavor_d.extent(0));
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.krayl.extent(1));
+
+            Interp_state state = Interp_state::create(nflav, nlay, ncol);
+            Gas_optics::interpolation(
+                    flavor_d,
+                    Numpy::to_device_1d<TF>(press_ref_log, "press_ref_log"),
+                    Numpy::to_device_1d<TF>(temp_ref, "temp_ref"),
+                    press_ref_log_delta, temp_ref_min, temp_ref_delta, press_ref_trop_log,
+                    neta, Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref"),
+                    play_d, Numpy::to_device_2d<TF>(tlay, "tlay"), col_gas_d, state);
+
+            Array_3d<TF> tau(Kokkos::view_alloc("tau_rayleigh", Kokkos::WithoutInitializing),
+                             ngpt, nlay, ncol);
+
+            Gas_optics::compute_tau_rayleigh(
+                    k, state, Numpy::to_device_2d<TF>(col_dry, "col_dry"), col_gas_d, tau);
+            Kokkos::fence();
+
+            return Numpy::from_device(tau);
+        },
+        py::arg("kdist"), py::arg("press_ref_log"), py::arg("temp_ref"),
+        py::arg("press_ref_log_delta"), py::arg("temp_ref_min"), py::arg("temp_ref_delta"),
+        py::arg("press_ref_trop_log"), py::arg("neta"), py::arg("vmr_ref"),
+        py::arg("play"), py::arg("tlay"), py::arg("col_dry"), py::arg("col_gas"),
+        "Interpolate and compute the Rayleigh scattering optical depth. "
+        "Returns tau_rayleigh (ngpt, nlay, ncol).");
+
+    m.def("compute_planck_source",
+        [](const py::dict& kdist,
+           const Numpy::In<TF>& press_ref_log, const Numpy::In<TF>& temp_ref,
+           const TF press_ref_log_delta, const TF temp_ref_min, const TF temp_ref_delta,
+           const TF press_ref_trop_log, const int neta,
+           const Numpy::In<TF>& vmr_ref,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& tlay,
+           const Numpy::In<TF>& tlev, const Numpy::In<TF>& tsfc,
+           const int sfc_lay,
+           const Numpy::In<TF>& col_gas) -> py::dict
+        {
+            Runtime::get();
+
+            Kdist_gas k;
+            k.gpoint_flavor = Numpy::to_device_2d<int>(item<int>(kdist, "gpoint_flavor"), "gpoint_flavor");
+            k.gpt_band = Numpy::to_device_1d<int>(item<int>(kdist, "gpt_band"), "gpt_band");
+            k.band_gpt_start = Numpy::to_device_1d<int>(item<int>(kdist, "band_gpt_start"), "band_gpt_start");
+            k.pfracin = Numpy::to_device_4d<TF>(item<TF>(kdist, "pfracin"), "pfracin");
+            k.totplnk = Numpy::to_device_2d<TF>(item<TF>(kdist, "totplnk"), "totplnk");
+            k.totplnk_delta = kdist["totplnk_delta"].cast<TF>();
+            k.temp_ref_min = temp_ref_min;
+
+            auto flavor_d = Numpy::to_device_2d<int>(item<int>(kdist, "flavor"), "flavor");
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+
+            const int nflav = static_cast<int>(flavor_d.extent(0));
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.pfracin.extent(0));
+
+            Interp_state state = Interp_state::create(nflav, nlay, ncol);
+            Gas_optics::interpolation(
+                    flavor_d,
+                    Numpy::to_device_1d<TF>(press_ref_log, "press_ref_log"),
+                    Numpy::to_device_1d<TF>(temp_ref, "temp_ref"),
+                    press_ref_log_delta, temp_ref_min, temp_ref_delta, press_ref_trop_log,
+                    neta, Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref"),
+                    play_d, Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    Numpy::to_device_3d<TF>(col_gas, "col_gas"), state);
+
+            const auto no_init = Kokkos::WithoutInitializing;
+            Source_func_lw sources;
+            sources.lay_source = Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol);
+            sources.lev_source = Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol);
+            sources.sfc_source = Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol);
+            sources.sfc_source_jac = Array_2d<TF>(Kokkos::view_alloc("sfc_source_jac", no_init), ngpt, ncol);
+
+            Gas_optics::compute_planck_source(
+                    k, state,
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    Numpy::to_device_2d<TF>(tlev, "tlev"),
+                    Numpy::to_device_1d<TF>(tsfc, "tsfc"),
+                    sfc_lay, sources);
+            Kokkos::fence();
+
+            py::dict out;
+            out["lay_source"] = Numpy::from_device(sources.lay_source);
+            out["lev_source"] = Numpy::from_device(sources.lev_source);
+            out["sfc_source"] = Numpy::from_device(sources.sfc_source);
+            out["sfc_source_jac"] = Numpy::from_device(sources.sfc_source_jac);
+
+            return out;
+        },
+        py::arg("kdist"), py::arg("press_ref_log"), py::arg("temp_ref"),
+        py::arg("press_ref_log_delta"), py::arg("temp_ref_min"), py::arg("temp_ref_delta"),
+        py::arg("press_ref_trop_log"), py::arg("neta"), py::arg("vmr_ref"),
+        py::arg("play"), py::arg("tlay"), py::arg("tlev"), py::arg("tsfc"),
+        py::arg("sfc_lay"), py::arg("col_gas"),
+        "Interpolate and compute the Planck sources. sfc_lay is 0-based. Returns a "
+        "dict with lay_source, lev_source, sfc_source and sfc_source_jac, in the "
+        "layouts Source_func_lw uses.");
 }

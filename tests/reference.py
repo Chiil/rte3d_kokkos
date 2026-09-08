@@ -126,6 +126,30 @@ class Reference:
             + [_i4]*3         # jeta jtemp jpress
             + [_f8])          # tau
 
+        lib.rrtmgp_compute_tau_rayleigh.restype = None
+        lib.rrtmgp_compute_tau_rayleigh.argtypes = (
+            [_p]*9            # ncol nlay nband ngpt ngas nflav neta npres ntemp
+            + [_i4]*2         # gpoint_flavor band_lims_gpt
+            + [_f8]           # krayl
+            + [_p]            # idx_h2o
+            + [_f8]*3         # col_dry col_gas fminor
+            + [_i4]*3         # jeta tropo jtemp
+            + [_f8])          # tau_rayleigh
+
+        lib.rrtmgp_compute_Planck_source.restype = None
+        lib.rrtmgp_compute_Planck_source.argtypes = (
+            [_p]*9            # ncol nlay nbnd ngpt nflav neta npres ntemp nPlanckTemp
+            + [_f8]*3         # tlay tlev tsfc
+            + [_p]            # sfc_lay
+            + [_f8]           # fmajor
+            + [_i4]*4         # jeta tropo jtemp jpress
+            + [_i4]*2         # gpoint_bands band_lims_gpt
+            + [_f8]           # pfracin
+            + [_p]*2          # temp_ref_min totplnk_delta
+            + [_f8]           # totplnk
+            + [_i4]           # gpoint_flavor
+            + [_f8]*4)        # sfc_src lay_src lev_src sfc_source_Jac
+
         # rte_sum_byband / rte_net_byband_full live in extensions/mo_fluxes_byband.F90,
         # not in the kernels this library is built from. They are plain band-wise sums,
         # so the tests check them against numpy instead.
@@ -405,3 +429,61 @@ class Reference:
             tau)
 
         return tau
+
+    def compute_tau_rayleigh(self, kdist, interp, col_dry, col_gas, neta):
+        nlay, ncol = col_dry.shape
+        ngpt = kdist['krayl'].shape[1]
+        nbnd = kdist['band_lims_gpt'].shape[0]
+        ngas = col_gas.shape[0] - 1
+        nflav = kdist['flavor'].shape[0]
+        ntemp = kdist['krayl'].shape[3]
+
+        tau = np.zeros((ngpt, nlay, ncol), dtype=FLOAT)
+
+        def i32(a, base=1):
+            return np.ascontiguousarray((a + base).astype(np.int32))
+
+        self.lib.rrtmgp_compute_tau_rayleigh(
+            _int(ncol), _int(nlay), _int(nbnd), _int(ngpt),
+            # npres is declared but unused by this kernel: krayl has no pressure axis.
+            _int(ngas), _int(nflav), _int(neta), _int(0), _int(ntemp),
+            i32(kdist['gpoint_flavor']), i32(kdist['band_lims_gpt']),
+            kdist['krayl'], _int(kdist['idx_h2o']),
+            col_dry, col_gas, interp['fminor'],
+            interp['jeta'], interp['tropo'], interp['jtemp'],
+            tau)
+
+        return tau
+
+    def compute_planck_source(self, kdist, interp, tlay, tlev, tsfc, sfc_lay, neta):
+        """sfc_lay is 0-based here, as in rte3d; the reference wants it 1-based."""
+        nlay, ncol = tlay.shape
+        ngpt = kdist['pfracin'].shape[0]
+        nbnd = kdist['band_lims_gpt'].shape[0]
+        nflav = kdist['flavor'].shape[0]
+        ntemp = kdist['pfracin'].shape[3]
+        npres = kdist['pfracin'].shape[1] - 1
+        nplancktemp = kdist['totplnk'].shape[1]
+
+        sfc_src = np.zeros((ngpt, ncol), dtype=FLOAT)
+        lay_src = np.zeros((ngpt, nlay, ncol), dtype=FLOAT)
+        lev_src = np.zeros((ngpt, nlay + 1, ncol), dtype=FLOAT)
+        sfc_jac = np.zeros((ngpt, ncol), dtype=FLOAT)
+
+        def i32(a, base=1):
+            return np.ascontiguousarray((a + base).astype(np.int32))
+
+        self.lib.rrtmgp_compute_Planck_source(
+            _int(ncol), _int(nlay), _int(nbnd), _int(ngpt),
+            _int(nflav), _int(neta), _int(npres), _int(ntemp), _int(nplancktemp),
+            tlay, tlev, tsfc, _int(sfc_lay + 1),
+            interp['fmajor'], interp['jeta'], interp['tropo'],
+            interp['jtemp'], interp['jpress'],
+            i32(kdist['gpt_band']), i32(kdist['band_lims_gpt']),
+            kdist['pfracin'],
+            _dbl(kdist['temp_ref_min']), _dbl(kdist['totplnk_delta']),
+            kdist['totplnk'], i32(kdist['gpoint_flavor']),
+            sfc_src, lay_src, lev_src, sfc_jac)
+
+        return dict(lay_source=lay_src, lev_source=lev_src,
+                    sfc_source=sfc_src, sfc_source_jac=sfc_jac)
