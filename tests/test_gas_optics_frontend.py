@@ -12,6 +12,8 @@ import os
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 LW_FILE = os.path.join(DATA, 'rrtmgp-gas-lw-g256.nc')
 SW_FILE = os.path.join(DATA, 'rrtmgp-gas-sw-g224.nc')
@@ -99,7 +101,7 @@ def test_lw_gas_optics_matches_reference(rte3d, fortran_ref, supply_col_dry):
         kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'], atm['tlev'],
         atm['tsfc'], col_dry)
 
-    np.testing.assert_allclose(actual['tau'], expected_tau, rtol=1e-11, atol=0.0)
+    assert_close(actual['tau'], expected_tau, rtol=1e-11)
 
     # Optical depths of a real atmosphere span many orders of magnitude, and none
     # should be negative.
@@ -113,7 +115,7 @@ def test_lw_gas_optics_matches_reference(rte3d, fortran_ref, supply_col_dry):
         atm['play'].shape[0] - 1, kdist.neta)
 
     for key in ('lay_source', 'lev_source', 'sfc_source', 'sfc_source_jac'):
-        np.testing.assert_allclose(actual[key], expected_src[key], rtol=1e-11, atol=0.0,
+        assert_close(actual[key], expected_src[key], rtol=1e-11,
                                    err_msg=f'{key} differs from the reference')
 
 

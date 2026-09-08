@@ -12,6 +12,8 @@ import os
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 REFERENCE = os.path.join(DATA, 'examples', 'all-sky', 'reference')
 
@@ -22,9 +24,16 @@ requires_data = pytest.mark.skipif(
     not os.path.exists(LW_REF), reason='rrtmgp-data submodule not checked out')
 
 # rte3d reproduces this case to round-off, so the tolerance is far tighter than
-# RFMIP's 5.8e-2 W/m2. Unlike the RFMIP fluxes, these reference files were generated
-# with the same coefficient data that ships alongside them.
-TOLERANCE = 1e-9
+# RFMIP's 5.8e-2 W/m2: these reference files were generated with the coefficient data
+# that ships alongside them, where the RFMIP ones date from 2018.
+#
+# Expressed relative to the flux scale rather than as an absolute number in W/m2,
+# because the residual is compiler-dependent: clang reaches 7e-11 W/m2 in the
+# shortwave and gcc 9e-9, the difference being their log and exp in the last bits,
+# amplified by the transport recurrence. Against a 1170 W/m2 flux both are around
+# 1e-11 relative. One part in 1e10 covers either with margin and is still six orders
+# tighter than RFMIP's threshold.
+TOLERANCE = 1e-10
 
 
 def _setup(rte3d, gas_file, cloud_file, ref_file):
@@ -50,8 +59,8 @@ def test_allsky_longwave(rte3d):
 
     up, dn = solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm)
 
-    np.testing.assert_allclose(up, atm['lw_flux_up'], rtol=0.0, atol=TOLERANCE)
-    np.testing.assert_allclose(dn, atm['lw_flux_dn'], rtol=0.0, atol=TOLERANCE)
+    assert_close(up, atm['lw_flux_up'], rtol=TOLERANCE)
+    assert_close(dn, atm['lw_flux_dn'], rtol=TOLERANCE)
 
     # Layer 0 is the surface here, so the outgoing flux is the last level.
     assert 100.0 < up[-1].mean() < 300.0
@@ -66,9 +75,9 @@ def test_allsky_shortwave(rte3d):
 
     up, dn, direct = solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm)
 
-    np.testing.assert_allclose(up, atm['sw_flux_up'], rtol=0.0, atol=TOLERANCE)
-    np.testing.assert_allclose(dn, atm['sw_flux_dn'], rtol=0.0, atol=TOLERANCE)
-    np.testing.assert_allclose(direct, atm['sw_flux_dir'], rtol=0.0, atol=TOLERANCE)
+    assert_close(up, atm['sw_flux_up'], rtol=TOLERANCE)
+    assert_close(dn, atm['sw_flux_dn'], rtol=TOLERANCE)
+    assert_close(direct, atm['sw_flux_dir'], rtol=TOLERANCE)
 
     # Incoming solar at the top is the total solar irradiance times the zenith cosine.
     np.testing.assert_allclose(dn[-1], kdist.solar_source.sum()*MU0, rtol=1e-12)
@@ -113,6 +122,7 @@ def test_ice_roughness_matters(rte3d):
         _, dn, _ = solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm)
         errors.append(np.abs(dn - atm['sw_flux_dn']).max())
 
-    assert errors[ICERGH] < TOLERANCE
+    scale = np.abs(atm['sw_flux_dn']).max()
+    assert errors[ICERGH] < TOLERANCE*scale
     for icergh in (0, 2):
         assert errors[icergh] > 1.0, f'roughness {icergh} should differ visibly'

@@ -2,6 +2,8 @@
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 SHAPES = [(16, 42, 7), (1, 3, 5), (8, 1, 4)]
 
 
@@ -46,8 +48,7 @@ def test_delta_scale_matches_reference(rte3d, fortran_ref, use_f, ngpt, nlay, nc
     actual = rte3d.delta_scale_2str(a['tau'], a['ssa'], a['g'], f)
 
     for name, exp, act in zip(('tau', 'ssa', 'g'), expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0,
-                                   err_msg=f'{name} differs')
+        assert_close(act, exp, rtol=tolerance(rte3d), err_msg=f'{name} differs')
 
 
 @pytest.mark.parametrize('ngpt,nlay,ncol', SHAPES)
@@ -62,7 +63,7 @@ def test_increments_match_reference(rte3d, fortran_ref, ngpt, nlay, ncol):
         expected = expected if isinstance(expected, tuple) else (expected,)
         actual = actual if isinstance(actual, tuple) else (actual,)
         for i, (exp, act) in enumerate(zip(expected, actual)):
-            np.testing.assert_allclose(act, exp, rtol=tol, atol=0.0,
+            assert_close(act, exp, rtol=tol,
                                        err_msg=f'{label}, output {i}')
 
     check(fortran_ref.increment_1scalar_by_1scalar(a['tau'], b['tau']),
@@ -112,7 +113,7 @@ def test_increment_1scalar_by_nstream_is_the_same_operation(rte3d, fortran_ref):
 
     ours = rte3d.increment_1scalar_by_2stream(a['tau'], b['tau'], b['ssa'])
     theirs = fortran_ref.increment_1scalar_by_2stream(a['tau'], b['tau'], b['ssa'])
-    np.testing.assert_allclose(ours, theirs, rtol=tolerance(rte3d), atol=0.0)
+    assert_close(ours, theirs, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('nbnd', [1, 3, 8])
@@ -128,27 +129,27 @@ def test_byband_increments_match_reference(rte3d, fortran_ref, nbnd):
     lims, ref_lims = bands(ngpt, nbnd)
     tol = tolerance(rte3d)
 
-    np.testing.assert_allclose(
+    assert_close(
         rte3d.increment_1scalar_by_1scalar(a['tau'], b['tau'], gpt_lims=lims),
         fortran_ref.inc_1scalar_by_1scalar_bybnd(a['tau'], b['tau'], ref_lims),
-        rtol=tol, atol=0.0)
+        rtol=tol)
 
-    np.testing.assert_allclose(
+    assert_close(
         rte3d.increment_1scalar_by_2stream(a['tau'], b['tau'], b['ssa'], gpt_lims=lims),
         fortran_ref.inc_1scalar_by_2stream_bybnd(a['tau'], b['tau'], b['ssa'], ref_lims),
-        rtol=tol, atol=0.0)
+        rtol=tol)
 
     for exp, act in zip(
             fortran_ref.inc_2stream_by_1scalar_bybnd(a['tau'], a['ssa'], b['tau'], ref_lims),
             rte3d.increment_2stream_by_1scalar(a['tau'], a['ssa'], b['tau'], gpt_lims=lims)):
-        np.testing.assert_allclose(act, exp, rtol=tol, atol=0.0)
+        assert_close(act, exp, rtol=tol)
 
     for exp, act in zip(
             fortran_ref.inc_2stream_by_2stream_bybnd(
                 a['tau'], a['ssa'], a['g'], b['tau'], b['ssa'], b['g'], ref_lims),
             rte3d.increment_2stream_by_2stream(
                 a['tau'], a['ssa'], a['g'], b['tau'], b['ssa'], b['g'], gpt_lims=lims)):
-        np.testing.assert_allclose(act, exp, rtol=tol, atol=0.0)
+        assert_close(act, exp, rtol=tol)
 
 
 def test_extract_subset(rte3d):
@@ -157,9 +158,10 @@ def test_extract_subset(rte3d):
 
     np.testing.assert_array_equal(rte3d.extract_subset(a['tau'], 2, 7), a['tau'][:, :, 2:7])
     np.testing.assert_array_equal(rte3d.extract_subset_4d(a['p'], 2, 7), a['p'][:, :, 2:7, :])
-    np.testing.assert_allclose(
+    assert_close(
         rte3d.extract_subset_absorption_tau(a['tau'], a['ssa'], 2, 7),
-        (a['tau']*(1.0 - a['ssa']))[:, :, 2:7], rtol=tolerance(rte3d), atol=0.0)
+        (a['tau']*(1.0 - a['ssa']))[:, :, 2:7],
+        rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('ngpt,nlev,ncol', [(16, 43, 7), (1, 4, 5)])
@@ -169,16 +171,18 @@ def test_flux_reduction_matches_reference(rte3d, fortran_ref, ngpt, nlev, ncol):
     up = rng.uniform(0.0, 500.0, (ngpt, nlev, ncol))
     tol = tolerance(rte3d)
 
-    np.testing.assert_allclose(rte3d.sum_broadband(dn), fortran_ref.sum_broadband(dn),
-                               rtol=tol, atol=0.0)
-    np.testing.assert_allclose(rte3d.net_broadband(dn, up),
-                               fortran_ref.net_broadband_full(dn, up), rtol=tol, atol=0.0)
+    assert_close(rte3d.sum_broadband(dn), fortran_ref.sum_broadband(dn), rtol=tol)
+    assert_close(
+        rte3d.net_broadband(dn, up),
+        fortran_ref.net_broadband_full(dn, up),
+        rtol=tol)
 
     dn_bb = dn.sum(axis=0)
     up_bb = up.sum(axis=0)
-    np.testing.assert_allclose(rte3d.net_broadband(dn_bb, up_bb),
-                               fortran_ref.net_broadband_precalc(dn_bb, up_bb),
-                               rtol=tol, atol=0.0)
+    assert_close(
+        rte3d.net_broadband(dn_bb, up_bb),
+        fortran_ref.net_broadband_precalc(dn_bb, up_bb),
+        rtol=tol)
 
 
 @pytest.mark.parametrize('nbnd', [1, 4, 16])
@@ -200,5 +204,5 @@ def test_byband_reduction(rte3d, nbnd):
     expected_sum = np.stack([dn[g0:g1+1].sum(axis=0) for g0, g1 in lims])
     expected_net = np.stack([(dn - up)[g0:g1+1].sum(axis=0) for g0, g1 in lims])
 
-    np.testing.assert_allclose(rte3d.sum_byband(lims, dn), expected_sum, rtol=tol, atol=0.0)
-    np.testing.assert_allclose(rte3d.net_byband(lims, dn, up), expected_net, rtol=tol, atol=0.0)
+    assert_close(rte3d.sum_byband(lims, dn), expected_sum, rtol=tol)
+    assert_close(rte3d.net_byband(lims, dn, up), expected_net, rtol=tol)

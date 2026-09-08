@@ -9,6 +9,8 @@ place that difference shows up; the library never transposes anything.
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 
 def tolerance(rte3d):
     return 1e-5 if rte3d.runtime().precision == 'single' else 1e-12
@@ -70,19 +72,22 @@ def test_interpolation_matches_reference(rte3d, fortran_ref, nlay, ncol, zero_co
     # (nflav, nlay, ncol, 2) -> (nflav, 2, nlay, ncol)
     np.testing.assert_array_equal(
         actual['jeta'], np.transpose(expected['jeta'], (0, 3, 1, 2)) - 1)
-    np.testing.assert_allclose(
-        actual['col_mix'], np.transpose(expected['col_mix'], (0, 3, 1, 2)),
-        rtol=tol, atol=0.0)
+    assert_close(
+        actual['col_mix'],
+        np.transpose(expected['col_mix'], (0, 3, 1, 2)),
+        rtol=tol)
 
     # (nflav, nlay, ncol, itemp, ieta) -> (nflav, itemp, ieta, nlay, ncol)
-    np.testing.assert_allclose(
-        actual['fminor'], np.transpose(expected['fminor'], (0, 3, 4, 1, 2)),
-        rtol=tol, atol=0.0)
+    assert_close(
+        actual['fminor'],
+        np.transpose(expected['fminor'], (0, 3, 4, 1, 2)),
+        rtol=tol)
 
     # (nflav, nlay, ncol, itemp, ipress, ieta) -> (nflav, itemp, ipress, ieta, nlay, ncol)
-    np.testing.assert_allclose(
-        actual['fmajor'], np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
-        rtol=tol, atol=0.0)
+    assert_close(
+        actual['fmajor'],
+        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
+        rtol=tol)
 
 
 def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
@@ -104,9 +109,10 @@ def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
 
     np.testing.assert_array_equal(actual['jtemp'], expected['jtemp'] - 1)
     np.testing.assert_array_equal(actual['jpress'], expected['jpress'] - 1)
-    np.testing.assert_allclose(
-        actual['fmajor'], np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
-        rtol=tolerance(rte3d), atol=0.0)
+    assert_close(
+        actual['fmajor'],
+        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
+        rtol=tolerance(rte3d))
 
 
 def test_weights_are_a_partition_of_unity(rte3d):
@@ -118,10 +124,8 @@ def test_weights_are_a_partition_of_unity(rte3d):
 
     out = rte3d.interpolation(**k, **a)
 
-    np.testing.assert_allclose(
-        out['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d), atol=0.0)
-    np.testing.assert_allclose(
-        out['fminor'].sum(axis=(1, 2)), 1.0, rtol=tolerance(rte3d), atol=0.0)
+    assert_close(out['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))
+    assert_close(out['fminor'].sum(axis=(1, 2)), 1.0, rtol=tolerance(rte3d))
 
 
 def minor_set(rng, band_lims, ngas, nminor, seed_shift=0):
@@ -219,7 +223,7 @@ def test_tau_absorption_matches_reference(rte3d, fortran_ref, nlay, ncol, monoto
 
     actual = rte3d.compute_tau_absorption(kdist=kd, **grid, **a)
 
-    np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
+    assert_close(actual, expected, rtol=tolerance(rte3d))
     assert np.all(actual >= 0.0)
     assert actual.max() > 0.0
 
@@ -244,7 +248,7 @@ def test_tau_rayleigh_matches_reference(rte3d, fortran_ref, nlay, ncol):
 
     actual = rte3d.compute_tau_rayleigh(kdist=kd, col_dry=col_dry, **grid, **a)
 
-    np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
+    assert_close(actual, expected, rtol=tolerance(rte3d))
     assert actual.max() > 0.0
 
 
@@ -280,7 +284,7 @@ def test_planck_source_matches_reference(rte3d, fortran_ref, nlay, ncol):
 
     tol = tolerance(rte3d)
     for key in ('lay_source', 'lev_source', 'sfc_source', 'sfc_source_jac'):
-        np.testing.assert_allclose(actual[key], expected[key], rtol=tol, atol=0.0,
+        assert_close(actual[key], expected[key], rtol=tol,
                                    err_msg=f'{key} differs from the reference')
 
 

@@ -8,11 +8,14 @@ are exactly the ones a port gets wrong.
 import numpy as np
 import pytest
 
+from compare import RECURRENCE_RTOL, assert_close
+
 SHAPES = [(16, 42, 7), (1, 3, 5), (8, 1, 4), (3, 12, 1)]
 
 
 def tolerance(rte3d):
-    return 1e-5 if rte3d.runtime().precision == 'single' else 1e-12
+    """These tests all run a solver, so they inherit the recurrence's amplification."""
+    return 1e-5 if rte3d.runtime().precision == 'single' else RECURRENCE_RTOL
 
 
 def random_inputs(ngpt, nlay, ncol, seed=0, conservative=False, night=False):
@@ -46,7 +49,7 @@ def test_noscat_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol
     expected = fortran_ref.sw_solver_noscat(top_at_1, a['tau'], a['mu0'], a['inc_flux_dir'])
     actual = rte3d.sw_solver_noscat(top_at_1, a['tau'], a['mu0'], a['inc_flux_dir'])
 
-    np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
+    assert_close(actual, expected, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -58,8 +61,11 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn', 'flux_dir'), expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0,
-                                   err_msg=f'{name} differs from the reference')
+        assert_close(
+            act,
+            exp,
+            rtol=tolerance(rte3d),
+            err_msg=f'{name} differs from the reference')
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -71,7 +77,7 @@ def test_2stream_matches_reference_with_diffuse_bc(rte3d, fortran_ref, top_at_1)
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
 
     for exp, act in zip(expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0)
+        assert_close(act, exp, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -83,7 +89,7 @@ def test_2stream_matches_reference_at_night(rte3d, fortran_ref, top_at_1):
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
 
     for exp, act in zip(expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0)
+        assert_close(act, exp, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -105,8 +111,8 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1):
     expected_dir = np.broadcast_to(inc[:, None, :] * 0.5, (ngpt, nlay+1, ncol))
 
     tol = tolerance(rte3d)
-    np.testing.assert_allclose(flux_dir, expected_dir, rtol=tol, atol=0.0)
-    np.testing.assert_allclose(flux_dn, expected_dir, rtol=tol, atol=0.0)
+    assert_close(flux_dir, expected_dir, rtol=tol)
+    assert_close(flux_dn, expected_dir, rtol=tol)
     np.testing.assert_allclose(flux_up, np.zeros_like(flux_up), rtol=0.0, atol=tol*1000.0)
 
 

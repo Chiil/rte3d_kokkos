@@ -9,6 +9,8 @@ import os
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 
 requires_data = pytest.mark.skipif(
@@ -58,10 +60,10 @@ def test_cloud_optics_matches_reference(rte3d, fortran_shim, coeff_file, icergh,
 
     if two_stream:
         for name, exp, act in zip(('tau', 'ssa', 'g'), expected, actual):
-            np.testing.assert_allclose(act, exp, rtol=1e-12, atol=0.0,
+            assert_close(act, exp, rtol=1e-12,
                                        err_msg=f'{name} differs from the reference')
     else:
-        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=0.0)
+        assert_close(actual, expected, rtol=1e-12)
 
 
 @requires_data

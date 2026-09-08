@@ -12,6 +12,8 @@ is already rte3d's index into col_gas, whose entry 0 is dry air.
 import numpy as np
 import pytest
 
+from compare import assert_close
+
 FILE_GASES = ['h2o', 'co2', 'o3', 'n2o', 'co', 'ch4', 'o2', 'n2']
 
 # Minor absorber identifiers and the gas each belongs to, as gas_minor/identifier_minor
@@ -138,7 +140,7 @@ def test_reduction_matches_reference(rte3d, fortran_shim, drop):
     # Flavours: the reference's values are already col_gas indices.
     np.testing.assert_array_equal(actual['flavor'], expected['flavor'])
     np.testing.assert_array_equal(actual['gpoint_flavor'], expected['gpoint_flavor'] - 1)
-    np.testing.assert_allclose(actual['vmr_ref'], expected['vmr_ref'], rtol=1e-15)
+    assert_close(actual['vmr_ref'], expected['vmr_ref'], rtol=1e-15)
 
     for prefix in ('lower_', 'upper_'):
         np.testing.assert_array_equal(
@@ -155,8 +157,7 @@ def test_reduction_matches_reference(rte3d, fortran_shim, drop):
         np.testing.assert_array_equal(
             actual[prefix + 'scale_by_complement'].astype(np.int32),
             expected[prefix + 'scale_by_complement'])
-        np.testing.assert_allclose(
-            actual[prefix + 'kminor'], expected[prefix + 'kminor'], rtol=1e-15)
+        assert_close(actual[prefix + 'kminor'], expected[prefix + 'kminor'], rtol=1e-15)
 
 
 def test_reduction_drops_absorbers_and_tiles_kminor(rte3d):

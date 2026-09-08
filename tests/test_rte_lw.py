@@ -2,11 +2,14 @@
 import numpy as np
 import pytest
 
+from compare import RECURRENCE_RTOL, assert_close
+
 SHAPES = [(16, 42, 7), (1, 3, 5), (8, 1, 4), (3, 12, 1)]
 
 
 def tolerance(rte3d):
-    return 1e-5 if rte3d.runtime().precision == 'single' else 1e-12
+    """These tests all run a solver, so they inherit the recurrence's amplification."""
+    return 1e-5 if rte3d.runtime().precision == 'single' else RECURRENCE_RTOL
 
 
 def random_inputs(ngpt, nlay, ncol, nmus=1, seed=0, inc_flux=True):
@@ -41,8 +44,11 @@ def test_noscat_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol
     actual = rte3d.lw_solver_noscat(top_at_1, **a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn'), expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0,
-                                   err_msg=f'{name} differs from the reference')
+        assert_close(
+            act,
+            exp,
+            rtol=tolerance(rte3d),
+            err_msg=f'{name} differs from the reference')
     assert actual[2] is None
 
 
@@ -55,7 +61,7 @@ def test_noscat_multi_angle_matches_reference(rte3d, fortran_ref, top_at_1, nmus
     actual = rte3d.lw_solver_noscat(top_at_1, **a)
 
     for exp, act in zip(expected[:2], actual[:2]):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0)
+        assert_close(act, exp, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -75,7 +81,7 @@ def test_noscat_jacobian_matches_reference(rte3d, fortran_ref, top_at_1, nmus):
 
     assert actual[2].shape == (21, 6)
     for exp, act in zip(expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0)
+        assert_close(act, exp, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -114,8 +120,8 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1, nmus):
         (np.pi*weights[:, None, None]*rad_up).sum(axis=0)[:, None, :], (ngpt, nlev, ncol))
 
     tol = tolerance(rte3d)
-    np.testing.assert_allclose(flux_dn, expected_dn, rtol=tol, atol=0.0)
-    np.testing.assert_allclose(flux_up, expected_up, rtol=tol, atol=0.0)
+    assert_close(flux_dn, expected_dn, rtol=tol)
+    assert_close(flux_up, expected_up, rtol=tol)
 
 
 def random_2stream_inputs(ngpt, nlay, ncol, seed=0):
@@ -153,8 +159,11 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
     actual = rte3d.lw_solver_2stream(top_at_1, **a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn'), expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0,
-                                   err_msg=f'{name} differs from the reference')
+        assert_close(
+            act,
+            exp,
+            rtol=tolerance(rte3d),
+            err_msg=f'{name} differs from the reference')
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -176,8 +185,8 @@ def test_2stream_gpt_varying_lev_source(rte3d, fortran_ref, top_at_1):
     flux_up, flux_dn = rte3d.lw_solver_2stream(top_at_1, **a)
 
     tol = tolerance(rte3d)
-    np.testing.assert_allclose(flux_up, expected_up, rtol=tol, atol=0.0)
-    np.testing.assert_allclose(flux_dn, expected_dn, rtol=tol, atol=0.0)
+    assert_close(flux_up, expected_up, rtol=tol)
+    assert_close(flux_dn, expected_dn, rtol=tol)
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -199,7 +208,7 @@ def test_2stream_reference_bug_gpt_indexing(rte3d, fortran_ref, top_at_1):
     actual = rte3d.lw_solver_2stream(top_at_1, **b)
 
     for exp, act in zip(expected, actual):
-        np.testing.assert_allclose(act, exp, rtol=tolerance(rte3d), atol=0.0)
+        assert_close(act, exp, rtol=tolerance(rte3d))
 
     # And confirm the two genuinely differ, so this test is not vacuous.
     straight = rte3d.lw_solver_2stream(top_at_1, **a)
@@ -233,5 +242,5 @@ def test_2stream_thin_layers_have_no_source(rte3d, top_at_1):
         (ngpt, nlev, ncol))
 
     tol = tolerance(rte3d)
-    np.testing.assert_allclose(flux_dn, expected_dn, rtol=tol, atol=0.0)
-    np.testing.assert_allclose(flux_up, expected_up, rtol=tol, atol=0.0)
+    assert_close(flux_dn, expected_dn, rtol=tol)
+    assert_close(flux_up, expected_up, rtol=tol)
