@@ -85,7 +85,22 @@ resolved by band and combine with gas optics through the by-band increments, the
 `-g###` files by g-point. Only the lookup-table path is implemented -- the reference
 also offers Pade approximants, but no shipped coefficient file contains them.
 
-Next: aerosol optics and the all-sky case, then the Monte Carlo ray tracer.
+### All-sky
+
+`tests/test_allsky.py` runs the cloudy all-sky case against the reference fluxes in
+`extern/rrtmgp-data`, exercising cloud optics and the by-band increments. Unlike
+RFMIP it is stored surface-first (`top_at_1` is False), so between them the two cases
+cover both branches of every solver.
+
+Agreement is to **round-off**: 9e-13 W/m2 in the longwave and 7e-11 in the shortwave.
+These reference fluxes were generated with the same coefficient data that ships beside
+them, where the RFMIP ones date from 2018 -- which is why RFMIP agrees to 1e-2 W/m2
+and this agrees to machine precision.
+
+`rte3d.allsky` holds the case, including the boundary conditions and the ice roughness
+type the driver selects.
+
+Next: aerosol optics, then the Monte Carlo ray tracer.
 
 ### Where gas names live
 
