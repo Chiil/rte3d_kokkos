@@ -216,3 +216,38 @@ no `bind(C)` entry points. `tests/build_reference.sh` builds a second library fr
 both implementations. To let the shim read the reduced arrays, the build compiles a
 *copy* of `mo_gas_optics_rrtmgp.F90` with the type's `private` relaxed; the reference
 source is never modified.
+
+## Benchmarking against the Fortran
+
+Copy-paste, from the repository root:
+
+```bash
+./tests/build_reference.sh                      # once; needs gfortran
+
+export RTE3D_PYTHON_PATH=$PWD/build/main_python
+export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
+
+# like for like: one thread each. This is the number that matters.
+OMP_NUM_THREADS=1 python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran --breakdown
+
+# all cores, against serial Fortran
+python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran
+```
+
+Typical result on 256 columns x 256 layers, longwave:
+
+```
+                       rte3d      reference    ratio
+  1 thread            856 ms         297 ms    0.35x     <- ~3x slower per thread
+    gas optics        302 ms
+    transport         559 ms                             <- two thirds of the time
+  15 threads          112 ms         320 ms    2.87x
+```
+
+The reference kernels are serial on the host, so the 15-thread row compares rte3d on
+15 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way.
+
+Raise `--ncol` for a bigger problem, but memory grows linearly: roughly 3.7 GB at 1024
+columns and 15 GB at the full 4096. `--band lw|sw` isolates one band. Point
+`RTE3D_PYTHON_PATH` at `build_gcc/main_python` to compare compilers — the two land
+within 8% of each other.
