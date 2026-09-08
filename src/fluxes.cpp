@@ -72,6 +72,37 @@ void Fluxes::sum_byband(
 }
 
 
+void Fluxes::accumulate_broadband(
+        const Array_map_2d<const TF>& gpt_flux,
+        const Array_2d<TF>& broadband_flux)
+{
+    const int nlev = static_cast<int>(broadband_flux.extent(0));
+    const int ncol = static_cast<int>(broadband_flux.extent(1));
+
+    parallel_for_2d("accumulate_broadband", {0, 0}, {nlev, ncol},
+        KOKKOS_LAMBDA(const int ilev, const int icol)
+        {
+            broadband_flux(ilev, icol) += gpt_flux(ilev, icol);
+        });
+}
+
+
+void Fluxes::accumulate_byband(
+        const int ibnd,
+        const Array_map_2d<const TF>& gpt_flux,
+        const Array_3d<TF>& byband_flux)
+{
+    const int nlev = static_cast<int>(byband_flux.extent(1));
+    const int ncol = static_cast<int>(byband_flux.extent(2));
+
+    parallel_for_2d("accumulate_byband", {0, 0}, {nlev, ncol},
+        KOKKOS_LAMBDA(const int ilev, const int icol)
+        {
+            byband_flux(ibnd, ilev, icol) += gpt_flux(ilev, icol);
+        });
+}
+
+
 void Fluxes::net_byband(
         const Array_2d<const int>& band_lims,
         const Array_3d<const TF>& spectral_flux_dn,

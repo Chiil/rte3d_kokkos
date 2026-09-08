@@ -1,8 +1,12 @@
 #include <limits>
 #include <vector>
 
+#include "fluxes.h"
 #include "gas_optics.h"
 #include "gas_optics_kernels.h"
+#include "optical_props.h"
+#include "rte_lw.h"
+#include "rte_sw.h"
 
 
 namespace
@@ -694,6 +698,261 @@ namespace
                 play, tlay, col_gas, state);
 
         return state;
+    }
+}
+
+
+Gas_optics::Solve_state Gas_optics::prepare(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Atmosphere& atm,
+        const bool do_lw,
+        const bool do_jacobian)
+{
+    const auto no_init = Kokkos::WithoutInitializing;
+
+    const int nlay = static_cast<int>(atm.play.extent(0));
+    const int ncol = static_cast<int>(atm.play.extent(1));
+    const int nlev = nlay + 1;
+    const int ngas = static_cast<int>(k.gas_names.size());
+
+    Solve_state s;
+
+    s.col_gas = Array_3d<TF>("col_gas", ngas + 1, nlay, ncol);
+    compute_col_gas(gas_concs, k.gas_names, atm.plev, atm.col_dry, Array_1d<TF>(), s.col_gas);
+
+    s.interp = interpolate_for(k, atm.play, atm.tlay, s.col_gas);
+
+    // The surface is the layer at whichever end of the array is at higher pressure.
+    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, atm.play);
+    s.sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
+
+    s.tau = Array_2d<TF>(Kokkos::view_alloc("tau", no_init), nlay, ncol);
+    s.ssa = Array_2d<TF>(Kokkos::view_alloc("ssa", no_init), nlay, ncol);
+    s.g = Array_2d<TF>(Kokkos::view_alloc("g", no_init), nlay, ncol);
+
+    if (do_lw)
+    {
+        s.lay_source = Array_2d<TF>(Kokkos::view_alloc("lay_source", no_init), nlay, ncol);
+        s.lev_source = Array_2d<TF>(Kokkos::view_alloc("lev_source", no_init), nlev, ncol);
+        s.sfc_source = Array_1d<TF>(Kokkos::view_alloc("sfc_source", no_init), ncol);
+        s.sfc_source_jac = Array_1d<TF>(
+                Kokkos::view_alloc("sfc_source_jac", no_init), do_jacobian ? ncol : 0);
+    }
+
+    s.flux_up = Array_2d<TF>(Kokkos::view_alloc("flux_up_gpt", no_init), nlev, ncol);
+    s.flux_dn = Array_2d<TF>(Kokkos::view_alloc("flux_dn_gpt", no_init), nlev, ncol);
+    s.flux_dir = Array_2d<TF>(
+            Kokkos::view_alloc("flux_dir_gpt", no_init), do_lw ? 0 : nlev, do_lw ? 0 : ncol);
+
+    return s;
+}
+
+
+namespace
+{
+    // This g-point's band slice of a band-resolved property set, or an empty view when
+    // the set is absent.
+    Array_map_2d<const TF> band_slice(const Array_3d<const TF>& a, const int ibnd)
+    {
+        if (a.size() == 0)
+            return Array_map_2d<const TF>();
+
+        return slice_2d(a, ibnd);
+    }
+}
+
+
+void Gas_optics::solve_lw_gpt(
+        const Kdist_gas& k,
+        const Solve_state& state,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const int igpt,
+        const Array_map_2d<const TF>& secants,
+        const Array_1d<const TF>& weights,
+        const Array_map_1d<const TF>& sfc_emis,
+        const Array_map_1d<const TF>& inc_flux,
+        const Band_props& clouds,
+        const Array_2d<TF>& flux_up_jac)
+{
+    // The absorption kernel accumulates, so start this g-point from zero.
+    Kokkos::deep_copy(state.tau, TF(0.));
+    compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
+
+    compute_planck_source(
+            k, state.interp, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt, state.sources());
+
+    // Clouds are absorption-only in the longwave here, matching the all-sky driver:
+    // the solver is the no-scattering one, so they enter as an optical depth.
+    const int ibnd = k.gpt_band_h(igpt);
+    const auto cloud_tau = band_slice(clouds.tau, ibnd);
+
+    if (cloud_tau.size() > 0)
+        Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+
+    Rte_lw::solver_noscat(
+            top_at_1, secants, weights, state.tau, state.sources(), sfc_emis, inc_flux,
+            state.flux_up, state.flux_dn, flux_up_jac);
+}
+
+
+void Gas_optics::solve_sw_gpt(
+        const Kdist_gas& k,
+        const Solve_state& state,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const int igpt,
+        const Array_2d<const TF>& mu0,
+        const Array_map_1d<const TF>& sfc_alb_dir,
+        const Array_map_1d<const TF>& sfc_alb_dif,
+        const Array_map_1d<const TF>& inc_flux_dir,
+        const Array_map_1d<const TF>& inc_flux_dif,
+        const Band_props& clouds)
+{
+    const int nlay = static_cast<int>(state.tau.extent(0));
+    const int ncol = static_cast<int>(state.tau.extent(1));
+
+    Kokkos::deep_copy(state.tau, TF(0.));
+    compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
+
+    // Rayleigh scattering needs the dry air column, which compute_col_gas put at
+    // index 0 of col_gas. ssa is free scratch until the combine below fills it.
+    const auto col_dry = slice_2d(state.col_gas, 0);
+    compute_tau_rayleigh(k, state.interp, col_dry, state.col_gas, igpt, state.ssa);
+
+    // Combine, as combine_abs_and_rayleigh does: tau becomes the total extinction and
+    // ssa the scattering fraction of it. g is zero for a pure gas atmosphere.
+    constexpr TF tiny_tf = std::numeric_limits<TF>::min();
+
+    const auto tau = state.tau;
+    const auto ssa = state.ssa;
+    const auto g = state.g;
+
+    parallel_for_2d("combine_abs_and_rayleigh", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
+        {
+            const TF tau_rayleigh = ssa(ilay, icol);
+            const TF t = tau(ilay, icol) + tau_rayleigh;
+
+            ssa(ilay, icol) = t > TF(2.)*tiny_tf ? tau_rayleigh / t : TF(0.);
+            tau(ilay, icol) = t;
+            g(ilay, icol) = TF(0.);
+        });
+
+    const int ibnd = k.gpt_band_h(igpt);
+    const auto cloud_tau = band_slice(clouds.tau, ibnd);
+
+    if (cloud_tau.size() > 0)
+        Optical_props::increment_2stream_by_2stream(
+                tau, ssa, g,
+                cloud_tau, band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+
+    Rte_sw::solver_2stream(
+            top_at_1, tau, ssa, g, mu0,
+            sfc_alb_dir, sfc_alb_dif, inc_flux_dir, inc_flux_dif,
+            state.flux_up, state.flux_dn, state.flux_dir);
+}
+
+
+namespace
+{
+    // Add this g-point's flux to the broadband total, and to its band's total when one
+    // was asked for.
+    void accumulate(
+            const int ibnd,
+            const Array_map_2d<const TF>& gpt_flux,
+            const Array_2d<TF>& broadband,
+            const Array_3d<TF>& byband)
+    {
+        Fluxes::accumulate_broadband(gpt_flux, broadband);
+
+        if (byband.size() > 0)
+            Fluxes::accumulate_byband(ibnd, gpt_flux, byband);
+    }
+
+    void zero(const Array_2d<TF>& a)
+    {
+        if (a.size() > 0)
+            Kokkos::deep_copy(a, TF(0.));
+    }
+
+    void zero(const Array_3d<TF>& a)
+    {
+        if (a.size() > 0)
+            Kokkos::deep_copy(a, TF(0.));
+    }
+}
+
+
+void Gas_optics::solve_lw(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const Array_2d<const TF>& secants,
+        const Array_1d<const TF>& weights,
+        const Array_2d<const TF>& sfc_emis,
+        const Array_2d<const TF>& inc_flux,
+        const Band_props& clouds,
+        const Fluxes_out& fluxes)
+{
+    const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+    const Solve_state state = prepare(k, gas_concs, atm, true, fluxes.up_jac.size() > 0);
+
+    zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
+    zero(fluxes.up_byband); zero(fluxes.dn_byband);
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        solve_lw_gpt(
+                k, state, atm, top_at_1, igpt, secants, weights,
+                slice_1d(sfc_emis, igpt),
+                inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
+                clouds, fluxes.up_jac);
+
+        const int ibnd = k.gpt_band_h(igpt);
+        accumulate(ibnd, state.flux_up, fluxes.up, fluxes.up_byband);
+        accumulate(ibnd, state.flux_dn, fluxes.dn, fluxes.dn_byband);
+    }
+}
+
+
+void Gas_optics::solve_sw(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const Array_2d<const TF>& mu0,
+        const Array_2d<const TF>& sfc_alb_dir,
+        const Array_2d<const TF>& sfc_alb_dif,
+        const Array_2d<const TF>& inc_flux_dir,
+        const Array_2d<const TF>& inc_flux_dif,
+        const Band_props& clouds,
+        const Fluxes_out& fluxes)
+{
+    const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+    const Solve_state state = prepare(k, gas_concs, atm, false);
+
+    zero(fluxes.up); zero(fluxes.dn); zero(fluxes.dir);
+    zero(fluxes.up_byband); zero(fluxes.dn_byband); zero(fluxes.dir_byband);
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        solve_sw_gpt(
+                k, state, atm, top_at_1, igpt, mu0,
+                slice_1d(sfc_alb_dir, igpt), slice_1d(sfc_alb_dif, igpt),
+                slice_1d(inc_flux_dir, igpt),
+                inc_flux_dif.size() > 0 ? slice_1d(inc_flux_dif, igpt)
+                                        : Array_map_1d<const TF>(),
+                clouds);
+
+        const int ibnd = k.gpt_band_h(igpt);
+        accumulate(ibnd, state.flux_up, fluxes.up, fluxes.up_byband);
+        accumulate(ibnd, state.flux_dn, fluxes.dn, fluxes.dn_byband);
+        accumulate(ibnd, state.flux_dir, fluxes.dir, fluxes.dir_byband);
     }
 }
 

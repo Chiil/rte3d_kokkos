@@ -60,11 +60,6 @@ def make_gas_concs(rte3d, atm):
     return g
 
 
-def _band_lims(kdist):
-    """Band g-point limits, (nbnd, 2) and 0-based inclusive, for the by-band increments."""
-    return np.ascontiguousarray(kdist.arrays()['band_lims_gpt'])
-
-
 def solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm):
     """Longwave all-sky fluxes.
 
@@ -72,59 +67,50 @@ def solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm):
     longwave solver used is the no-scattering one, so the cloud contribution enters as
     an absorption optical depth added by band.
     """
-    out = rte3d.gas_optics_lw(
-        kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'])
-
     cloud_tau = rte3d.cloud_optics(
         cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
         reliq=atm['rel'], reice=atm['rei'], two_stream=False)
 
-    tau = rte3d.increment_1scalar_by_1scalar(
-        out['tau'], cloud_tau, gpt_lims=_band_lims(kdist))
+    ngpt = kdist.ngpt
+    ncol = atm['play'].shape[1]
 
-    ngpt, _, ncol = tau.shape
-
-    flux_up, flux_dn, _ = rte3d.lw_solver_noscat(
+    out = rte3d.solve_lw(
+        kdist, gas_concs,
         False,  # layer 0 is at the surface
-        secants=np.full((1, ngpt, ncol), 1.0/0.6096748751),
+        atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
+        secants=np.full((1, ncol), 1.0/0.6096748751),
         weights=np.array([1.0]),
-        tau=tau,
-        lay_source=out['lay_source'], lev_source=out['lev_source'],
         sfc_emis=np.full((ngpt, ncol), SFC_EMIS),
-        sfc_source=out['sfc_source'],
-        inc_flux=np.zeros((ngpt, ncol)))
+        cloud_tau=cloud_tau)
 
-    return flux_up.sum(axis=0), flux_dn.sum(axis=0)
+    return out['flux_up'], out['flux_dn']
 
 
 def solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm):
     """Shortwave all-sky fluxes.
 
-    Cloud properties are delta-scaled before being added, as the driver does.
+    Cloud properties are delta-scaled before being added, as the driver does. They stay
+    band-resolved: the solve takes the slice for each g-point's own band.
     """
-    tau, ssa = rte3d.gas_optics_sw(
-        kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'])
-
     cloud_tau, cloud_ssa, cloud_g = rte3d.cloud_optics(
         cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
         reliq=atm['rel'], reice=atm['rei'])
 
     cloud_tau, cloud_ssa, cloud_g = rte3d.delta_scale_2str(cloud_tau, cloud_ssa, cloud_g)
 
-    g = np.zeros_like(tau)
-    tau, ssa, g = rte3d.increment_2stream_by_2stream(
-        tau, ssa, g, cloud_tau, cloud_ssa, cloud_g, gpt_lims=_band_lims(kdist))
-
-    ngpt, nlay, ncol = tau.shape
+    ngpt = kdist.ngpt
+    nlay, ncol = atm['play'].shape
 
     # The k-distribution's solar source is used as it stands: the all-sky case does not
     # renormalise to a per-column total solar irradiance the way RFMIP does.
     toa = np.ascontiguousarray(np.broadcast_to(kdist.solar_source[:, None], (ngpt, ncol)))
     albedo = np.full((ngpt, ncol), SFC_ALBEDO)
 
-    flux_up, flux_dn, flux_dir = rte3d.sw_solver_2stream(
-        False, tau, ssa, g,
+    out = rte3d.solve_sw(
+        kdist, gas_concs, False,
+        atm['play'], atm['plev'], atm['tlay'],
         mu0=np.full((nlay, ncol), MU0),
-        sfc_alb_dir=albedo, sfc_alb_dif=albedo, inc_flux_dir=toa)
+        sfc_alb_dir=albedo, sfc_alb_dif=albedo, inc_flux_dir=toa,
+        cloud_tau=cloud_tau, cloud_ssa=cloud_ssa, cloud_g=cloud_g)
 
-    return flux_up.sum(axis=0), flux_dn.sum(axis=0), flux_dir.sum(axis=0)
+    return out['flux_up'], out['flux_dn'], out['flux_dir']

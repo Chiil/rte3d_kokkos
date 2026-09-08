@@ -111,22 +111,18 @@ def solve_lw(rte3d, kdist, gas_concs, atm, n_quad_angles=1):
     if n_quad_angles != 1:
         raise NotImplementedError('only the single-angle quadrature is wired up here')
 
-    out = rte3d.gas_optics_lw(
-        kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'])
+    ngpt = kdist.ngpt
+    ncol = atm['play'].shape[1]
 
-    ngpt, _, ncol = out['tau'].shape
-
-    flux_up, flux_dn, _ = rte3d.lw_solver_noscat(
+    out = rte3d.solve_lw(
+        kdist, gas_concs,
         True,  # RFMIP stores the top of the atmosphere at index 0
-        secants=np.full((1, ngpt, ncol), 1.0/0.6096748751),
+        atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
+        secants=np.full((1, ncol), 1.0/0.6096748751),
         weights=np.array([1.0]),
-        tau=out['tau'],
-        lay_source=out['lay_source'], lev_source=out['lev_source'],
-        sfc_emis=_per_gpoint(atm['sfc_emis'], ngpt),
-        sfc_source=out['sfc_source'],
-        inc_flux=np.zeros((ngpt, ncol)))
+        sfc_emis=_per_gpoint(atm['sfc_emis'], ngpt))
 
-    return flux_up.sum(axis=0), flux_dn.sum(axis=0)
+    return out['flux_up'], out['flux_dn']
 
 
 def solve_sw(rte3d, kdist, gas_concs, atm):
@@ -135,10 +131,8 @@ def solve_sw(rte3d, kdist, gas_concs, atm):
     Returns broadband fluxes and the daytime mask. Night-time columns are zeroed, as
     the reference driver does; their fluxes are meaningless rather than wrong.
     """
-    tau, ssa = rte3d.gas_optics_sw(
-        kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'])
-
-    ngpt, nlay, ncol = tau.shape
+    ngpt = kdist.ngpt
+    nlay, ncol = atm['play'].shape
 
     daytime = atm['solar_zenith_angle'] < 90.0
     mu0 = np.where(daytime, np.cos(np.radians(atm['solar_zenith_angle'])), 1.0)
@@ -150,13 +144,14 @@ def solve_sw(rte3d, kdist, gas_concs, atm):
 
     albedo = _per_gpoint(atm['sfc_alb'], ngpt)
 
-    flux_up, flux_dn, _ = rte3d.sw_solver_2stream(
-        True, tau, ssa, np.zeros_like(tau),
+    out = rte3d.solve_sw(
+        kdist, gas_concs, True,
+        atm['play'], atm['plev'], atm['tlay'],
         mu0=np.ascontiguousarray(np.broadcast_to(mu0[None, :], (nlay, ncol))),
         sfc_alb_dir=albedo, sfc_alb_dif=albedo, inc_flux_dir=toa)
 
-    up = flux_up.sum(axis=0)
-    dn = flux_dn.sum(axis=0)
+    up = out['flux_up']
+    dn = out['flux_dn']
     up[:, ~daytime] = 0.0
     dn[:, ~daytime] = 0.0
 

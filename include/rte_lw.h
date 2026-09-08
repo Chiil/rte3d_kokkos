@@ -29,7 +29,7 @@ namespace Rte_lw
             const Array_map_2d<const TF>& tau,       // (nlay, ncol)
             const Source_func_lw& sources,
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
-            const Array_map_1d<const TF>& inc_flux,  // (ncol) incident diffuse flux
+            const Array_map_1d<const TF>& inc_flux,  // (ncol) incident diffuse flux, may be empty
             const Array_map_2d<TF>& flux_up,         // (nlev, ncol)
             const Array_map_2d<TF>& flux_dn,         // (nlev, ncol)
             const Array_2d<TF>& flux_up_jac);        // (nlev, ncol), may be empty

@@ -80,18 +80,17 @@ OMP_NUM_THREADS=1 python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran
 
 | flag | default | meaning |
 |---|---|---|
-| `--ncol N` | `4096` | columns to solve. Memory grows linearly — see the warning below. |
+| `--ncol N` | `4096` | columns to solve. The default is the whole domain. |
 | `--band lw\|sw\|both` | `both` | which band to run |
 | `--repeats N` | `3` | timed repetitions after one warm-up; the best is reported |
 | `--breakdown` | off | additionally time gas optics and transport separately |
 | `--compare-fortran` | off | also time the reference Fortran kernels and report the ratio. Needs `RTE3D_FORTRAN_REF`. |
 | `--input PATH` | the copy in `rte-rrtmgp-cpp` | where `rcemip_input.nc` lives |
 
-**Memory.** The solvers work one g-point at a time, so their scratch is `(nlay, ncol)`
-and costs nothing at spectral resolution. What is left is gas optics and the fluxes,
-which still carry a g-point dimension: about 14 GB at the full `--ncol 4096` in the
-longwave, roughly a third of it the returned `(ngpt, nlev, ncol)` fluxes. That goes
-when gas optics moves into the same per-g-point loop.
+**Memory.** Nothing in the solve carries a g-point dimension, so the full `--ncol 4096`
+needs about 1.1 GB for both bands. `--breakdown` is the exception: timing gas optics
+and transport separately means holding the whole spectrum between them, which is
+roughly 11 GB at 4096 columns. Use it at 1024 or below.
 
 ### What `--compare-fortran` actually times
 
@@ -118,30 +117,32 @@ Longwave, 256 columns x 256 layers, double precision, 15-core Apple Silicon:
 
 | | clang | gcc-16 | reference (gfortran) |
 |---|---|---|---|
-| 1 thread, total | 363 ms | 434 ms | **295 ms** |
-| &nbsp;&nbsp;gas optics | 304 ms | 367 ms | |
-| &nbsp;&nbsp;transport | 60 ms | 67 ms | |
-| 15 threads, total | 131 ms | | |
+| 1 thread, total | 358 ms | 429 ms | **290 ms** |
+| &nbsp;&nbsp;gas optics | 310 ms | | |
+| &nbsp;&nbsp;transport | 59 ms | | |
 
 Transport used to be 555 ms of that single-threaded total, two thirds of the runtime.
 Each `(g-point, column)` pair ran an entire sequential vertical recurrence, which suits
 a GPU but leaves the column loop with a single iteration's worth of independent work no
 matter what `ivdep` asserts. Solving one g-point at a time restores the reference's
 structure -- layer outside, `ncol` innermost -- and the recurrences now vectorize over
-columns: a 9x improvement, and gas optics is what remains of the gap.
+columns: a 9x improvement. Gas optics is what remains of the gap.
 
-Two things this has not fixed.
+Where it really pays is at scale, because a single g-point's working set stays in
+cache instead of streaming ~80 MB arrays through memory. Longwave, 15 threads:
 
-**Threaded runs at small column counts are launch-bound.** Each g-point issues four or
-five parallel regions of only `ncol` work each, so at `--ncol 256` on 15 threads
-transport is slower than it is on one thread. It pays off from a few thousand columns
-up; the structural fix is to parallelize over g-points on the host, which belongs with
-the same change that moves the g-point loop into the frontend.
+| columns | before | now |
+|---|---|---|
+| 256 | 131 ms | 221 ms |
+| 512 | 274 ms | 281 ms |
+| 1024 | 474 ms | 425 ms |
+| 4096 | 9495 ms, 11 GB | **1226 ms, 1.1 GB** |
 
-**Large column counts are cache-bound.** At `--ncol 4096` a single g-point's working set
-is already ~80 MB, so each of the sweeps re-reads it from memory. Blocking the whole
-solver over columns, rather than each sweep separately, would keep it resident; it has
-not been tried.
+Below about 512 columns the per-g-point solve is launch-bound: each g-point issues
+around ten parallel regions of only `ncol` work each, and at 256 columns on 15 threads
+that overhead outweighs the cache win. The fix is to parallelize over g-points on the
+host, giving each thread its own working set -- now possible, since the g-point loop
+lives in C++ rather than in the caller. It has not been done.
 
 Both builds agree with the reference to 1e-13 W/m2, so none of this is bought with
 accuracy.

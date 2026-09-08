@@ -140,12 +140,21 @@ the physics once.
 
 ### One g-point at a time
 
-The solvers take `(nlay, ncol)` optical properties and return `(nlev, ncol)` fluxes: no
-field they touch carries a g-point dimension, so their working set is the same whether
-the k-distribution has 16 g-points or 256. The caller loops g-points and accumulates.
-That is what makes the solvers fit on a GPU, and it is also why they are fast on a CPU
-— the vertical recurrences become sweeps over layers with the column loop inside them,
-which is the structure the reference Fortran has.
+`Gas_optics::solve_lw` and `solve_sw` are the way to run a case. They loop g-points,
+and for each one compute the optical properties, increment the clouds for that
+g-point's band, run transport, and accumulate the flux. Nothing in that pipeline
+carries a g-point dimension, so the working set is the same whether the
+k-distribution has 16 g-points or 256: RCEMIP's full 4096 columns needs 1.1 GB rather
+than the 28 GB the spectrally resolved version would have.
+
+The loop body is public as `solve_lw_gpt` / `solve_sw_gpt`, for callers that want a
+single g-point — the Monte Carlo ray tracer, and the tests. `Solve_state` holds what
+does not depend on the g-point (the column gas amounts, the table interpolation) plus
+the one working set every iteration reuses.
+
+Doing it this way is also why the solvers are fast on a CPU: the vertical recurrences
+become sweeps over layers with the column loop inside them, which is the structure the
+reference Fortran has.
 
 The two backends want opposite nestings for such a sweep: layer-outer with columns
 vectorized on CPU, column-parallel with the layer loop inside the kernel on GPU. Both
@@ -257,17 +266,17 @@ Typical result on 256 columns x 256 layers, longwave:
 
 ```
                        rte3d      reference    ratio
-  1 thread            363 ms         295 ms    0.81x
-    gas optics        304 ms                             <- what is left of the gap
-    transport          60 ms
-  15 threads          131 ms         294 ms    2.24x
+  1 thread            358 ms         290 ms    0.81x
+    gas optics        310 ms                             <- what is left of the gap
+    transport          59 ms
+  15 threads          221 ms         295 ms    1.34x
 ```
 
 The reference kernels are serial on the host, so the 15-thread row compares rte3d on
 15 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way.
 
-Raise `--ncol` for a bigger problem. The solvers no longer grow with the number of
-g-points, so the full 4096 columns fits; gas optics and the returned spectral fluxes
-still do, which is about 14 GB there. `--band lw|sw` isolates one band. Point
-`RTE3D_PYTHON_PATH` at `build_gcc/main_python` to compare compilers — the two land
-within 20% of each other.
+Raise `--ncol` for a bigger problem: nothing in the solve grows with the number of
+g-points, so the full 4096 columns runs in about 1.1 GB and is where this build is at
+its best — 1226 ms against 9495 ms for the same case before the restructuring. `--band
+lw|sw` isolates one band. Point `RTE3D_PYTHON_PATH` at `build_gcc/main_python` to
+compare compilers — the two land within 20% of each other.

@@ -38,5 +38,18 @@ namespace Fluxes
             const Array_3d<const TF>& spectral_flux_up,
             const Array_3d<TF>& byband_flux_net);
 
+    // Add one g-point's flux to a running total. This is what the per-g-point solve
+    // uses, where the reductions above would need the whole spectrum in memory at
+    // once. The caller zeroes the totals before the g-point loop.
+    void accumulate_broadband(
+            const Array_map_2d<const TF>& gpt_flux,   // (nlev, ncol)
+            const Array_2d<TF>& broadband_flux);      // (nlev, ncol)
+
+    // ibnd is the band this g-point belongs to, from Kdist_gas::gpt_band_h.
+    void accumulate_byband(
+            const int ibnd,
+            const Array_map_2d<const TF>& gpt_flux,   // (nlev, ncol)
+            const Array_3d<TF>& byband_flux);         // (nbnd, nlev, ncol)
+
     void init_python_bindings(py::module_& m);
 }

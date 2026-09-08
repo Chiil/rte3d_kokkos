@@ -42,6 +42,10 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
             [](const Kdist_gas& k) { return k.gas_names; },
             "The gases this was reduced to, in the order col_gas uses. Entry 0 of that "
             "dimension is dry air, so gas_names[i] sits at col_gas index i+1.")
+        .def_property_readonly("ngpt",
+            [](const Kdist_gas& k) { return static_cast<int>(k.kmajor.extent(0)); })
+        .def_property_readonly("nbnd",
+            [](const Kdist_gas& k) { return static_cast<int>(k.band_lims_gpt.extent(0)); })
         .def_property_readonly("neta", [](const Kdist_gas& k) { return k.neta; })
         .def_property_readonly("idx_h2o", [](const Kdist_gas& k) { return k.idx_h2o; })
         .def_property_readonly("solar_source",
@@ -180,6 +184,75 @@ namespace
 }
 
 
+namespace
+{
+    // An optional array argument. None becomes an empty View, which the solve reads as
+    // "absent" throughout.
+    Array_2d<TF> optional_2d(const std::optional<Numpy::In<TF>>& a, const std::string& name)
+    {
+        return a.has_value() ? Numpy::to_device_2d<TF>(*a, name) : Array_2d<TF>();
+    }
+
+    Array_3d<TF> optional_3d(const std::optional<Numpy::In<TF>>& a, const std::string& name)
+    {
+        return a.has_value() ? Numpy::to_device_3d<TF>(*a, name) : Array_3d<TF>();
+    }
+
+    Gas_optics::Fluxes_out fluxes_out(
+            const int nlev, const int ncol, const int nbnd,
+            const bool byband, const bool do_dir, const bool do_jacobian)
+    {
+        const auto no_init = Kokkos::WithoutInitializing;
+
+        // The broadband totals are accumulated into, so the solve zeroes them; these
+        // need no initialisation here.
+        Gas_optics::Fluxes_out f;
+        f.up = Array_2d<TF>(Kokkos::view_alloc("flux_up", no_init), nlev, ncol);
+        f.dn = Array_2d<TF>(Kokkos::view_alloc("flux_dn", no_init), nlev, ncol);
+
+        if (do_dir)
+            f.dir = Array_2d<TF>(Kokkos::view_alloc("flux_dir", no_init), nlev, ncol);
+        if (do_jacobian)
+            f.up_jac = Array_2d<TF>(Kokkos::view_alloc("flux_up_jac", no_init), nlev, ncol);
+
+        if (byband)
+        {
+            f.up_byband = Array_3d<TF>(Kokkos::view_alloc("flux_up_byband", no_init), nbnd, nlev, ncol);
+            f.dn_byband = Array_3d<TF>(Kokkos::view_alloc("flux_dn_byband", no_init), nbnd, nlev, ncol);
+
+            if (do_dir)
+                f.dir_byband = Array_3d<TF>(
+                        Kokkos::view_alloc("flux_dir_byband", no_init), nbnd, nlev, ncol);
+        }
+
+        return f;
+    }
+
+    py::dict fluxes_dict(const Gas_optics::Fluxes_out& f)
+    {
+        py::dict out;
+        out["flux_up"] = Numpy::from_device(f.up);
+        out["flux_dn"] = Numpy::from_device(f.dn);
+
+        if (f.dir.size() > 0)
+            out["flux_dir"] = Numpy::from_device(f.dir);
+        if (f.up_jac.size() > 0)
+            out["flux_up_jac"] = Numpy::from_device(f.up_jac);
+
+        if (f.up_byband.size() > 0)
+        {
+            out["flux_up_byband"] = Numpy::from_device(f.up_byband);
+            out["flux_dn_byband"] = Numpy::from_device(f.dn_byband);
+
+            if (f.dir_byband.size() > 0)
+                out["flux_dir_byband"] = Numpy::from_device(f.dir_byband);
+        }
+
+        return out;
+    }
+}
+
+
 void Gas_optics::init_frontend_python_bindings(py::module_& m)
 {
     m.def("gas_optics_lw",
@@ -257,4 +330,114 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
         py::arg("tlay"), py::arg("col_dry") = py::none(),
         "Shortwave gas optics. Returns (tau, ssa), where tau is the total extinction "
         "and ssa the Rayleigh fraction of it.");
+
+    m.def("solve_lw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev,
+           const Numpy::In<TF>& tlay, const Numpy::In<TF>& tlev,
+           const Numpy::In<TF>& tsfc,
+           const Numpy::In<TF>& secants, const Numpy::In<TF>& weights,
+           const Numpy::In<TF>& sfc_emis,
+           const std::optional<Numpy::In<TF>>& inc_flux,
+           const std::optional<Numpy::In<TF>>& cloud_tau,
+           const std::optional<Numpy::In<TF>>& col_dry,
+           const bool byband, const bool jacobian) -> py::dict
+        {
+            Runtime::get();
+
+            Gas_optics::Atmosphere atm;
+            atm.play = Numpy::to_device_2d<TF>(play, "play");
+            atm.plev = Numpy::to_device_2d<TF>(plev, "plev");
+            atm.tlay = Numpy::to_device_2d<TF>(tlay, "tlay");
+            atm.tlev = Numpy::to_device_2d<TF>(tlev, "tlev");
+            atm.tsfc = Numpy::to_device_1d<TF>(tsfc, "tsfc");
+            atm.col_dry = optional_2d(col_dry, "col_dry");
+
+            const int nlev = static_cast<int>(atm.plev.extent(0));
+            const int ncol = static_cast<int>(atm.plev.extent(1));
+            const int nbnd = static_cast<int>(k.band_lims_gpt.extent(0));
+
+            Gas_optics::Band_props clouds;
+            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
+
+            const auto fluxes = fluxes_out(nlev, ncol, nbnd, byband, false, jacobian);
+
+            Gas_optics::solve_lw(
+                    k, gas_concs, atm, top_at_1,
+                    Numpy::to_device_2d<TF>(secants, "secants"),
+                    Numpy::to_device_1d<TF>(weights, "weights"),
+                    Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
+                    optional_2d(inc_flux, "inc_flux"),
+                    clouds, fluxes);
+            Kokkos::fence();
+
+            return fluxes_dict(fluxes);
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
+        py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("tlev"), py::arg("tsfc"),
+        py::arg("secants"), py::arg("weights"), py::arg("sfc_emis"),
+        py::arg("inc_flux") = py::none(), py::arg("cloud_tau") = py::none(),
+        py::arg("col_dry") = py::none(),
+        py::arg("byband") = false, py::arg("jacobian") = false,
+        "Longwave gas optics, clouds and transport, one g-point at a time. Nothing "
+        "allocated here carries a g-point dimension. secants is (nmus, ncol) and "
+        "sfc_emis (ngpt, ncol); cloud_tau, if given, is (nbnd, nlay, ncol). Returns a "
+        "dict with flux_up and flux_dn, plus flux_up_byband / flux_dn_byband when "
+        "byband, and flux_up_jac when jacobian.");
+
+    m.def("solve_sw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev, const Numpy::In<TF>& tlay,
+           const Numpy::In<TF>& mu0,
+           const Numpy::In<TF>& sfc_alb_dir, const Numpy::In<TF>& sfc_alb_dif,
+           const Numpy::In<TF>& inc_flux_dir,
+           const std::optional<Numpy::In<TF>>& inc_flux_dif,
+           const std::optional<Numpy::In<TF>>& cloud_tau,
+           const std::optional<Numpy::In<TF>>& cloud_ssa,
+           const std::optional<Numpy::In<TF>>& cloud_g,
+           const std::optional<Numpy::In<TF>>& col_dry,
+           const bool byband) -> py::dict
+        {
+            Runtime::get();
+
+            Gas_optics::Atmosphere atm;
+            atm.play = Numpy::to_device_2d<TF>(play, "play");
+            atm.plev = Numpy::to_device_2d<TF>(plev, "plev");
+            atm.tlay = Numpy::to_device_2d<TF>(tlay, "tlay");
+            atm.col_dry = optional_2d(col_dry, "col_dry");
+
+            const int nlev = static_cast<int>(atm.plev.extent(0));
+            const int ncol = static_cast<int>(atm.plev.extent(1));
+            const int nbnd = static_cast<int>(k.band_lims_gpt.extent(0));
+
+            Gas_optics::Band_props clouds;
+            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
+            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
+            clouds.g = optional_3d(cloud_g, "cloud_g");
+
+            const auto fluxes = fluxes_out(nlev, ncol, nbnd, byband, true, false);
+
+            Gas_optics::solve_sw(
+                    k, gas_concs, atm, top_at_1,
+                    Numpy::to_device_2d<TF>(mu0, "mu0"),
+                    Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir"),
+                    Numpy::to_device_2d<TF>(sfc_alb_dif, "sfc_alb_dif"),
+                    Numpy::to_device_2d<TF>(inc_flux_dir, "inc_flux_dir"),
+                    optional_2d(inc_flux_dif, "inc_flux_dif"),
+                    clouds, fluxes);
+            Kokkos::fence();
+
+            return fluxes_dict(fluxes);
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
+        py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("mu0"),
+        py::arg("sfc_alb_dir"), py::arg("sfc_alb_dif"), py::arg("inc_flux_dir"),
+        py::arg("inc_flux_dif") = py::none(),
+        py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
+        py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
+        py::arg("byband") = false,
+        "Shortwave gas optics, clouds and transport, one g-point at a time. mu0 is "
+        "(nlay, ncol); the boundary conditions are (ngpt, ncol); the cloud properties, "
+        "if given, are (nbnd, nlay, ncol) and already delta-scaled. Returns a dict "
+        "with flux_up, flux_dn and flux_dir, plus the by-band totals when byband.");
 }

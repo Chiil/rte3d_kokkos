@@ -153,6 +153,44 @@ void Optical_props::increment_2stream_by_2stream(
 }
 
 
+void Optical_props::increment_1scalar_by_1scalar(
+        const Array_map_2d<TF>& tau1,
+        const Array_map_2d<const TF>& tau2)
+{
+    parallel_for_2d("increment_1scalar_by_1scalar_gpt", {0, 0},
+        {static_cast<int64_t>(tau1.extent(0)), static_cast<int64_t>(tau1.extent(1))},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
+        {
+            tau1(ilay, icol) += tau2(ilay, icol);
+        });
+}
+
+
+void Optical_props::increment_2stream_by_2stream(
+        const Array_map_2d<TF>& tau1, const Array_map_2d<TF>& ssa1,
+        const Array_map_2d<TF>& g1,
+        const Array_map_2d<const TF>& tau2, const Array_map_2d<const TF>& ssa2,
+        const Array_map_2d<const TF>& g2)
+{
+    parallel_for_2d("increment_2stream_by_2stream_gpt", {0, 0},
+        {static_cast<int64_t>(tau1.extent(0)), static_cast<int64_t>(tau1.extent(1))},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
+        {
+            const TF tau12 = tau1(ilay, icol) + tau2(ilay, icol);
+            const TF tauscat12 = tau1(ilay, icol) * ssa1(ilay, icol)
+                               + tau2(ilay, icol) * ssa2(ilay, icol);
+
+            g1(ilay, icol) =
+                    (tau1(ilay, icol) * ssa1(ilay, icol) * g1(ilay, icol)
+                     + tau2(ilay, icol) * ssa2(ilay, icol) * g2(ilay, icol))
+                    / Kokkos::max(eps, tauscat12);
+
+            ssa1(ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            tau1(ilay, icol) = tau12;
+        });
+}
+
+
 void Optical_props::increment_2stream_by_nstream(
         const Array_3d<TF>& tau1, const Array_3d<TF>& ssa1, const Array_3d<TF>& g1,
         const Array_3d<const TF>& tau2, const Array_3d<const TF>& ssa2, const Array_4d<const TF>& p2,

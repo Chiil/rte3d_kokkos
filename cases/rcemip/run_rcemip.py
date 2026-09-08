@@ -95,15 +95,21 @@ def _grid(kdist):
 
 
 def rte3d_lw(kdist, gas_concs, atm, secants, weights):
-    out = rte3d.gas_optics_lw(kdist, gas_concs, atm['play'], atm['plev'],
-                              atm['tlay'], atm['tlev'], atm['tsfc'])
-    ngpt, _, ncol = out['tau'].shape
+    """The fused solve: gas optics and transport per g-point, broadband fluxes out.
 
-    return rte3d.lw_solver_noscat(
-        False, secants=secants, weights=weights, tau=out['tau'],
-        lay_source=out['lay_source'], lev_source=out['lev_source'],
-        sfc_emis=np.full((ngpt, ncol), atm['sfc_emis']),
-        sfc_source=out['sfc_source'], inc_flux=np.zeros((ngpt, ncol)))
+    Nothing here is (ngpt, nlay, ncol), which is why this scales to the full 4096
+    columns where the staged path below does not.
+    """
+    ngpt, ncol = kdist.ngpt, atm['play'].shape[1]
+
+    out = rte3d.solve_lw(
+        kdist, gas_concs, False,
+        atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
+        secants=np.ascontiguousarray(secants[:, 0, :]),
+        weights=weights,
+        sfc_emis=np.full((ngpt, ncol), atm['sfc_emis']))
+
+    return out['flux_up'], out['flux_dn']
 
 
 def fortran_lw(ref, kdist, gas_concs, atm, secants, weights):
@@ -126,17 +132,21 @@ def fortran_lw(ref, kdist, gas_concs, atm, secants, weights):
 
 
 def rte3d_sw(kdist, gas_concs, atm):
-    tau, ssa = rte3d.gas_optics_sw(kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'])
-    ngpt, nlay, ncol = tau.shape
+    """The fused shortwave solve; see rte3d_lw."""
+    ngpt = kdist.ngpt
+    nlay, ncol = atm['play'].shape
 
     toa = np.ascontiguousarray(np.broadcast_to(kdist.solar_source[:, None], (ngpt, ncol)))
     toa = toa*atm['tsi']/toa.sum(axis=0)[None, :]
     alb = np.full((ngpt, ncol), atm['sfc_alb'])
 
-    return rte3d.sw_solver_2stream(
-        False, tau, ssa, np.zeros_like(tau),
+    out = rte3d.solve_sw(
+        kdist, gas_concs, False,
+        atm['play'], atm['plev'], atm['tlay'],
         mu0=np.full((nlay, ncol), atm['mu0']),
         sfc_alb_dir=alb, sfc_alb_dif=alb, inc_flux_dir=toa)
+
+    return out['flux_up'], out['flux_dn']
 
 
 def fortran_sw(ref, kdist, gas_concs, atm):
@@ -162,7 +172,11 @@ def fortran_sw(ref, kdist, gas_concs, atm):
 
 
 def _stages(band, kdist, gas_concs, atm, ngpt, ncol):
-    """Gas optics and transport separately, to show where the time goes."""
+    """Gas optics and transport separately, to show where the time goes.
+
+    Unlike the fused solve above, this has to hold the whole spectrum between the two
+    stages, so --breakdown carries the (ngpt, nlay, ncol) memory the fused path avoids.
+    """
     nlay = atm['play'].shape[0]
 
     if band == 'lw':
@@ -280,7 +294,9 @@ def main():
             print('   ' + tf.report(ncol=ncol))
             print(f'   {"speedup":28s} {t.best and tf.best/t.best:9.2f} x')
 
-            err = max(np.abs(a.sum(axis=0) - b.sum(axis=0)).max()
+            # rte3d accumulates as it goes and returns broadband fluxes; the reference
+            # returns them per g-point.
+            err = max(np.abs(a - b.sum(axis=0)).max()
                       for a, b in zip(result[:2], expected[:2]))
             print(f'   {"max flux difference":28s} {err:9.2e} W/m2')
         print()

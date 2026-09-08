@@ -294,6 +294,7 @@ Kdist_gas Gas_optics::load(const Kdist_file& file, const Gas_concs& available_ga
     k.band_lims_gpt = to_device(band_lims);
     k.band_gpt_start = to_device(band_start);
     k.gpt_band = to_device(gpt_band);
+    k.gpt_band_h = gpt_band;
     k.kmajor = to_device(file.kmajor);
 
     // ---- interpolation grid and the scalars derived from it -------------------

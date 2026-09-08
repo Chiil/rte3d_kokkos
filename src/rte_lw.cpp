@@ -35,6 +35,7 @@ namespace
         const int nmus = static_cast<int>(weights.extent(0));
 
         const bool do_jacobians = flux_up_jac.size() > 0;
+        const bool has_inc_flux = inc_flux.size() > 0;
 
         const Array_map_2d<const TF> lay_source = sources.lay_source;
         const Array_map_2d<const TF> lev_source = sources.lev_source;
@@ -92,7 +93,7 @@ namespace
                 KOKKOS_LAMBDA(const int j, const int icol)
                 {
                     if (j == 0)
-                        rad_dn(lev_toa, icol) = inc_flux(icol) / scaling;
+                        rad_dn(lev_toa, icol) = has_inc_flux ? inc_flux(icol) / scaling : TF(0.);
 
                     const int ilay = V::lay_from_toa(j, nlay);
                     rad_dn(ilay + V::lev_dn(), icol) =

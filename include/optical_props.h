@@ -87,6 +87,19 @@ namespace Optical_props
             const Array_3d<const TF>& tau2, const Array_3d<const TF>& ssa2, const Array_4d<const TF>& p2,
             const Array_1d<const int>& gpt2set);
 
+    // Single-g-point increments, for the fused per-g-point solve. Both sets are
+    // already the same g-point, so there is no map: the caller picked the second
+    // set's band slice. Same arithmetic, in the same order, as the versions above.
+    void increment_1scalar_by_1scalar(
+            const Array_map_2d<TF>& tau1,            // (nlay, ncol)
+            const Array_map_2d<const TF>& tau2);     // (nlay, ncol)
+
+    void increment_2stream_by_2stream(
+            const Array_map_2d<TF>& tau1, const Array_map_2d<TF>& ssa1,
+            const Array_map_2d<TF>& g1,
+            const Array_map_2d<const TF>& tau2, const Array_map_2d<const TF>& ssa2,
+            const Array_map_2d<const TF>& g2);
+
     // Column subsetting. col_start is 0-based and col_end exclusive, unlike the
     // reference's inclusive 1-based colS/colE.
     void extract_subset(
