@@ -111,6 +111,21 @@ class Reference:
             + [_f8]*3         # fmajor fminor col_mix
             + [_i4]*3)        # tropo jeta jpress
 
+        lib.rrtmgp_compute_tau_absorption.restype = None
+        lib.rrtmgp_compute_tau_absorption.argtypes = (
+            [_p]*14           # ncol nlay nband ngpt ngas nflav neta npres ntemp
+                              # nminorlower nminorklower nminorupper nminorkupper idx_h2o
+            + [_i4]*2         # gpoint_flavor band_lims_gpt
+            + [_f8]*3         # kmajor kminor_lower kminor_upper
+            + [_i4]*2         # minor_limits_gpt lower/upper
+            + [_i4]*4         # scales_with_density, scale_by_complement (lower/upper)
+            + [_i4]*6         # idx_minor, idx_minor_scaling, kminor_start (lower/upper)
+            + [_i4]           # tropo
+            + [_f8]*3         # col_mix fmajor fminor
+            + [_f8]*3         # play tlay col_gas
+            + [_i4]*3         # jeta jtemp jpress
+            + [_f8])          # tau
+
         # rte_sum_byband / rte_net_byband_full live in extensions/mo_fluxes_byband.F90,
         # not in the kernels this library is built from. They are plain band-wise sums,
         # so the tests check them against numpy instead.
@@ -348,3 +363,45 @@ class Reference:
 
         return dict(jtemp=jtemp, jpress=jpress, tropo=tropo, jeta=jeta,
                     col_mix=col_mix, fminor=fminor, fmajor=fmajor)
+
+    def compute_tau_absorption(self, kdist, interp, play, tlay, col_gas, neta):
+        """kdist and interp use rte3d's 0-based indices; this converts to the
+        reference's 1-based ones and passes its own interpolation output straight
+        through, so only the tau kernel is under test."""
+        nlay, ncol = play.shape
+        ngpt = kdist['kmajor'].shape[0]
+        nbnd = kdist['band_lims_gpt'].shape[0]
+        ngas = col_gas.shape[0] - 1
+        nflav = kdist['flavor'].shape[0]
+        ntemp = kdist['kmajor'].shape[3]
+        npres = kdist['kmajor'].shape[1] - 1
+
+        lo = {k[6:]: v for k, v in kdist.items() if k.startswith('lower_')}
+        up = {k[6:]: v for k, v in kdist.items() if k.startswith('upper_')}
+
+        tau = np.zeros((ngpt, nlay, ncol), dtype=FLOAT)
+
+        def i32(a, base=1):
+            return np.ascontiguousarray((a + base).astype(np.int32))
+
+        self.lib.rrtmgp_compute_tau_absorption(
+            _int(ncol), _int(nlay), _int(nbnd), _int(ngpt),
+            _int(ngas), _int(nflav), _int(neta), _int(npres), _int(ntemp),
+            _int(lo['minor_limits_gpt'].shape[0]), _int(lo['kminor'].shape[0]),
+            _int(up['minor_limits_gpt'].shape[0]), _int(up['kminor'].shape[0]),
+            _int(kdist['idx_h2o']),
+            i32(kdist['gpoint_flavor']), i32(kdist['band_lims_gpt']),
+            kdist['kmajor'], lo['kminor'], up['kminor'],
+            i32(lo['minor_limits_gpt']), i32(up['minor_limits_gpt']),
+            i32(lo['scales_with_density'], 0), i32(up['scales_with_density'], 0),
+            i32(lo['scale_by_complement'], 0), i32(up['scale_by_complement'], 0),
+            i32(lo['idx_minor'], 0), i32(up['idx_minor'], 0),
+            i32(lo['idx_minor_scaling'], 0), i32(up['idx_minor_scaling'], 0),
+            i32(lo['kminor_start']), i32(up['kminor_start']),
+            interp['tropo'],
+            interp['col_mix'], interp['fmajor'], interp['fminor'],
+            play, tlay, col_gas,
+            interp['jeta'], interp['jtemp'], interp['jpress'],
+            tau)
+
+        return tau

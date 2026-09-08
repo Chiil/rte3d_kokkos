@@ -41,9 +41,14 @@ The `rte-frontend/` layer is replaced rather than ported: its class hierarchy
 The top-level `rte_lw()` / `rte_sw()` drivers, which validate inputs and expand
 boundary conditions before calling the kernels, are not yet written.
 
-Step 2a in progress: the RRTMGP gas-optics kernels. `interpolation` is done
-(`include/gas_optics.h`); `compute_tau_absorption`, `compute_tau_rayleigh` and
+Step 2a in progress: the RRTMGP gas-optics kernels. `interpolation` and
+`compute_tau_absorption` are done (`include/gas_optics.h`); `compute_tau_rayleigh` and
 `compute_Planck_source` are next, then `Gas_concs` and the frontend.
+
+The reference loops minor absorbers serially, walking a per-column layer range for
+each. rte3d parallelises over (g-point, layer, column) instead, which needs the inverse
+mapping -- for each g-point, which minor absorbers contribute. `Minor_absorbers` holds
+that as a CSR list built once by `build_map`.
 
 ### Interpolation weights are recomputed, not stored
 

@@ -1,4 +1,5 @@
 #include <limits>
+#include <vector>
 
 #include "gas_optics.h"
 #include "gas_optics_kernels.h"
@@ -153,5 +154,228 @@ void Gas_optics::expand_weights(
                     for (int ipress=0; ipress<2; ++ipress)
                         fmajor(iflav, itemp, ipress, ieta, ilay, icol) = fmaj[itemp][ipress][ieta];
                 }
+        });
+}
+
+
+void Minor_absorbers::build_map(
+        const Array_2d<const int>& gpoint_flavor, const int ngpt, const int itropo)
+{
+    const int nminor = static_cast<int>(minor_limits_gpt.extent(0));
+
+    auto limits_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, minor_limits_gpt);
+    auto gpt_flavor_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, gpoint_flavor);
+
+    // Count contributors per g-point, then fill. A minor absorber covers a contiguous
+    // g-point range, and ranges from different absorbers may overlap.
+    std::vector<int> count(ngpt + 1, 0);
+    for (int imnr=0; imnr<nminor; ++imnr)
+        for (int igpt=limits_h(imnr, 0); igpt<=limits_h(imnr, 1); ++igpt)
+            ++count[igpt + 1];
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+        count[igpt + 1] += count[igpt];
+
+    const int nnz = count[ngpt];
+
+    gpt_offset = Array_1d<int>(Kokkos::view_alloc("gpt_offset", Kokkos::WithoutInitializing), ngpt + 1);
+    gpt_minor = Array_1d<int>(Kokkos::view_alloc("gpt_minor", Kokkos::WithoutInitializing), nnz);
+    flavor = Array_1d<int>(Kokkos::view_alloc("minor_flavor", Kokkos::WithoutInitializing), nminor);
+
+    auto offset_h = Kokkos::create_mirror_view(gpt_offset);
+    auto minor_h = Kokkos::create_mirror_view(gpt_minor);
+    auto flavor_h = Kokkos::create_mirror_view(flavor);
+
+    for (int igpt=0; igpt<=ngpt; ++igpt)
+        offset_h(igpt) = count[igpt];
+
+    std::vector<int> fill(ngpt, 0);
+    for (int imnr=0; imnr<nminor; ++imnr)
+    {
+        // The reference takes the flavour from the first g-point of the absorber's
+        // range, not from each g-point separately.
+        flavor_h(imnr) = gpt_flavor_h(limits_h(imnr, 0), itropo);
+
+        for (int igpt=limits_h(imnr, 0); igpt<=limits_h(imnr, 1); ++igpt)
+            minor_h(offset_h(igpt) + fill[igpt]++) = imnr;
+    }
+
+    Kokkos::deep_copy(gpt_offset, offset_h);
+    Kokkos::deep_copy(gpt_minor, minor_h);
+    Kokkos::deep_copy(flavor, flavor_h);
+}
+
+
+void Gas_optics::compute_tau_absorption(
+        const Kdist_gas& k,
+        const Interp_state& state,
+        const Array_2d<const TF>& play,
+        const Array_2d<const TF>& tlay,
+        const Array_3d<const TF>& col_gas,
+        const Array_3d<TF>& tau)
+{
+    const int ngpt = static_cast<int>(tau.extent(0));
+    const int nlay = static_cast<int>(tau.extent(1));
+    const int ncol = static_cast<int>(tau.extent(2));
+
+    const auto jtemp = state.jtemp;
+    const auto ftemp = state.ftemp;
+    const auto jpress = state.jpress;
+    const auto fpress = state.fpress;
+    const auto tropo = state.tropo;
+    const auto jeta = state.jeta;
+    const auto feta = state.feta;
+    const auto col_mix = state.col_mix;
+
+    // Layer limits of the lower and upper atmosphere, per column. The reference finds
+    // the extreme pressure among the layers on each side of the tropopause and treats
+    // everything between there and the domain edge as belonging to that side. For a
+    // monotonic pressure profile that is exactly the set of layers where tropo holds,
+    // but we reproduce the range form so non-monotonic input matches too.
+    Array_2d<int> lower_limits(Kokkos::view_alloc("lower_limits", Kokkos::WithoutInitializing), ncol, 2);
+    Array_2d<int> upper_limits(Kokkos::view_alloc("upper_limits", Kokkos::WithoutInitializing), ncol, 2);
+
+    // top_at_1 is decided from the first column, as in the reference.
+    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
+    const bool top_at_1 = play_h(0, 0) < play_h(nlay - 1, 0);
+
+    parallel_for_1d("tau_absorption_limits", 0, ncol,
+        KOKKOS_LAMBDA(const int icol)
+        {
+            // minloc over layers where tropo holds, maxloc where it does not. Zero
+            // means no such layer, matching the reference's guard value.
+            int arg_min = 0;
+            int arg_max = 0;
+            TF p_min = TF(0.);
+            TF p_max = TF(0.);
+
+            for (int ilay=0; ilay<nlay; ++ilay)
+            {
+                const TF p = play(ilay, icol);
+
+                if (tropo(ilay, icol))
+                {
+                    if (arg_min == 0 || p < p_min) { p_min = p; arg_min = ilay + 1; }
+                }
+                else
+                {
+                    if (arg_max == 0 || p > p_max) { p_max = p; arg_max = ilay + 1; }
+                }
+            }
+
+            if (top_at_1)
+            {
+                lower_limits(icol, 0) = arg_min;  lower_limits(icol, 1) = nlay;
+                upper_limits(icol, 0) = 1;        upper_limits(icol, 1) = arg_max;
+            }
+            else
+            {
+                lower_limits(icol, 0) = 1;        lower_limits(icol, 1) = arg_min;
+                upper_limits(icol, 0) = arg_max;  upper_limits(icol, 1) = nlay;
+            }
+        });
+
+    const auto gpoint_flavor = k.gpoint_flavor;
+    const auto band_gpt_start = k.band_gpt_start;
+    const auto gpt_band = k.gpt_band;
+    const auto kmajor = k.kmajor;
+    const int idx_h2o = k.idx_h2o;
+
+    const Minor_absorbers lower = k.lower;
+    const Minor_absorbers upper = k.upper;
+
+    parallel_for_3d("compute_tau_absorption", {0, 0, 0}, {ngpt, nlay, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+        {
+            const int itropo = tropo(ilay, icol) ? 0 : 1;
+            const int jt = jtemp(ilay, icol);
+            const TF ft = ftemp(ilay, icol);
+            const TF fp = fpress(ilay, icol);
+
+            TF tau_l = TF(0.);
+
+            // ---- major species -------------------------------------------------
+            // The flavour comes from the first g-point of this g-point's band.
+            {
+                const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
+
+                TF fmin[2][2], fmaj[2][2][2];
+                Gas_optics_kernels::interp_weights(
+                        ft, fp, feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+
+                // The reference indexes kmajor at jpress-1 and jpress with a 1-based
+                // jpress+itropo; 0-based that is jpress+itropo and one beyond.
+                const int jp0 = jpress(ilay, icol) + itropo;
+
+                for (int itemp=0; itemp<2; ++itemp)
+                {
+                    const int je = jeta(iflav, itemp, ilay, icol);
+                    TF acc = TF(0.);
+
+                    for (int ipress=0; ipress<2; ++ipress)
+                        for (int ieta=0; ieta<2; ++ieta)
+                            acc += fmaj[itemp][ipress][ieta]
+                                 * kmajor(igpt, jp0 + ipress, je + ieta, jt + itemp);
+
+                    tau_l += col_mix(iflav, itemp, ilay, icol) * acc;
+                }
+            }
+
+            // ---- minor species -------------------------------------------------
+            for (int side=0; side<2; ++side)
+            {
+                const Minor_absorbers& m = side == 0 ? lower : upper;
+                const auto& limits = side == 0 ? lower_limits : upper_limits;
+
+                // The reference walks a per-column layer range; a zero start means
+                // this column has no layers on this side of the tropopause.
+                if (limits(icol, 0) == 0)
+                    continue;
+                if (ilay + 1 < limits(icol, 0) || ilay + 1 > limits(icol, 1))
+                    continue;
+
+                for (int i=m.gpt_offset(igpt); i<m.gpt_offset(igpt + 1); ++i)
+                {
+                    const int imnr = m.gpt_minor(i);
+
+                    TF scaling = col_gas(m.idx_minor(imnr), ilay, icol);
+
+                    if (m.scales_with_density(imnr))
+                    {
+                        // Pressure in hPa, as the density scaling expects.
+                        scaling *= TF(0.01) * play(ilay, icol) / tlay(ilay, icol);
+
+                        const int idx_scaling = m.idx_minor_scaling(imnr);
+                        if (idx_scaling > 0)
+                        {
+                            const TF vmr_fact = TF(1.) / col_gas(0, ilay, icol);
+                            const TF dry_fact =
+                                    TF(1.) / (TF(1.) + col_gas(idx_h2o, ilay, icol) * vmr_fact);
+
+                            const TF f = col_gas(idx_scaling, ilay, icol) * vmr_fact * dry_fact;
+                            scaling *= m.scale_by_complement(imnr) ? TF(1.) - f : f;
+                        }
+                    }
+
+                    const int iflav = m.flavor(imnr);
+                    const int ik = m.kminor_start(imnr) + (igpt - m.minor_limits_gpt(imnr, 0));
+
+                    TF fmin[2][2], fmaj[2][2][2];
+                    Gas_optics_kernels::interp_weights(
+                            ft, fp, feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+
+                    TF acc = TF(0.);
+                    for (int itemp=0; itemp<2; ++itemp)
+                    {
+                        const int je = jeta(iflav, itemp, ilay, icol);
+                        for (int ieta=0; ieta<2; ++ieta)
+                            acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
+                    }
+
+                    tau_l += scaling * acc;
+                }
+            }
+
+            tau(igpt, ilay, icol) += tau_l;
         });
 }

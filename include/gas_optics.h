@@ -32,6 +32,49 @@ struct Interp_state
 };
 
 
+// One of the two sets of minor absorbers, lower or upper atmosphere.
+//
+// The reference loops minor absorbers serially and, for each, walks a per-column layer
+// range. We parallelise over (g-point, layer, column) instead, which needs the inverse
+// mapping: for each g-point, which minor absorbers contribute. gpt_offset and gpt_minor
+// hold that as a CSR list, built once by Minor_absorbers::build_map.
+struct Minor_absorbers
+{
+    Array_3d<TF> kminor;                 // (nminork, neta, ntemp)
+    Array_2d<int> minor_limits_gpt;      // (nminor, 2) first and last g-point, 0-based inclusive
+    Array_1d<Bool> scales_with_density;  // (nminor)
+    Array_1d<Bool> scale_by_complement;  // (nminor)
+    Array_1d<int> idx_minor;             // (nminor) index into the gas dimension of col_gas
+    Array_1d<int> idx_minor_scaling;     // (nminor) second gas affecting absorption, 0 for none
+    Array_1d<int> kminor_start;          // (nminor) 0-based start in kminor
+
+    Array_1d<int> gpt_offset;            // (ngpt+1) CSR row offsets
+    Array_1d<int> gpt_minor;             // (nnz)    absorber index per entry
+    Array_1d<int> flavor;                // (nminor) 0-based flavour, from the range's first g-point
+
+    // Build gpt_offset, gpt_minor and flavor. gpoint_flavor is (ngpt, 2), 0-based;
+    // itropo selects its column (0 lower, 1 upper).
+    void build_map(const Array_2d<const int>& gpoint_flavor, const int ngpt, const int itropo);
+};
+
+
+// The gas-optics k-distribution: everything read from the coefficient file that the
+// optical depth kernels need.
+struct Kdist_gas
+{
+    Array_2d<int> gpoint_flavor;   // (ngpt, 2) 0-based flavour per g-point, lower and upper
+    Array_2d<int> band_lims_gpt;   // (nbnd, 2) first and last g-point, 0-based inclusive
+    Array_4d<TF> kmajor;           // (ngpt, npres+1, neta, ntemp)
+    Array_1d<int> gpt_band;        // (ngpt) band each g-point belongs to
+    Array_1d<int> band_gpt_start;  // (nbnd) first g-point of each band
+
+    Minor_absorbers lower;
+    Minor_absorbers upper;
+
+    int idx_h2o = -1;              // index of water vapour in the gas dimension of col_gas
+};
+
+
 namespace Gas_optics
 {
     // Locate each (layer, column) in the k-distribution's temperature, pressure and
@@ -55,6 +98,16 @@ namespace Gas_optics
             const Array_2d<const TF>& tlay,         // (nlay, ncol)
             const Array_3d<const TF>& col_gas,      // (ngas+1, nlay, ncol)
             const Interp_state& state);
+
+    // Absorption optical depth from major and minor gases. Accumulates into tau, as
+    // the reference does. Reference: compute_tau_absorption.
+    void compute_tau_absorption(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& play,     // (nlay, ncol)
+            const Array_2d<const TF>& tlay,     // (nlay, ncol)
+            const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
+            const Array_3d<TF>& tau);           // (ngpt, nlay, ncol), accumulated into
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via

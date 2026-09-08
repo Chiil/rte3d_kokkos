@@ -122,3 +122,103 @@ def test_weights_are_a_partition_of_unity(rte3d):
         out['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d), atol=0.0)
     np.testing.assert_allclose(
         out['fminor'].sum(axis=(1, 2)), 1.0, rtol=tolerance(rte3d), atol=0.0)
+
+
+def minor_set(rng, band_lims, ngas, nminor, seed_shift=0):
+    """A set of minor absorbers, each covering one band's g-point range.
+
+    kminor_start is the cumulative offset of each absorber's block in kminor, so the
+    blocks tile the table exactly, as in the real coefficient files.
+    """
+    nbnd = band_lims.shape[0]
+    which_band = rng.integers(0, nbnd, nminor)
+    limits = np.ascontiguousarray(band_lims[which_band].astype(np.int32))
+
+    widths = limits[:, 1] - limits[:, 0] + 1
+    starts = np.concatenate([[0], np.cumsum(widths)[:-1]]).astype(np.int32)
+    nminork = int(widths.sum())
+
+    return dict(
+        kminor=rng.uniform(0.0, 1e-3, (nminork, 9, 14)),
+        minor_limits_gpt=limits,
+        scales_with_density=rng.integers(0, 2, nminor).astype(np.int8),
+        scale_by_complement=rng.integers(0, 2, nminor).astype(np.int8),
+        idx_minor=rng.integers(1, ngas + 1, nminor).astype(np.int32),
+        # 0 means no second gas scales this absorber, the reference's sentinel.
+        idx_minor_scaling=(rng.integers(0, ngas + 1, nminor)).astype(np.int32),
+        kminor_start=np.ascontiguousarray(starts),
+    )
+
+
+def kdist_full(rng, nbnd=4, gpts_per_band=4, ngas=8, nflav=5, ntemp=14, npres=59, neta=9):
+    """A synthetic k-distribution, 0-based throughout, in rte3d's layouts."""
+    ngpt = nbnd * gpts_per_band
+
+    band_lims = np.stack([
+        np.arange(nbnd) * gpts_per_band,
+        np.arange(nbnd) * gpts_per_band + gpts_per_band - 1], axis=1).astype(np.int32)
+    gpt_band = np.repeat(np.arange(nbnd), gpts_per_band).astype(np.int32)
+
+    # Flavour is constant within a band, as it is in the real files: both the reference
+    # and rte3d take it from the first g-point of a band or minor range.
+    band_flavor = rng.integers(0, nflav, (nbnd, 2))
+
+    k = kdist(rng, ngas=ngas, nflav=nflav, ntemp=ntemp, npres=npres, neta=neta)
+    k.update(
+        kdist=dict(
+            flavor=k['flavor'],
+            gpoint_flavor=np.ascontiguousarray(band_flavor[gpt_band].astype(np.int32)),
+            band_lims_gpt=band_lims,
+            gpt_band=gpt_band,
+            band_gpt_start=np.ascontiguousarray(band_lims[:, 0].copy()),
+            kmajor=rng.uniform(0.0, 1e-2, (ngpt, npres + 1, neta, ntemp)),
+            idx_h2o=1,
+        ))
+    for prefix, nminor in (('lower_', 6), ('upper_', 4)):
+        for key, val in minor_set(rng, band_lims, ngas, nminor).items():
+            k['kdist'][prefix + key] = val
+
+    return k
+
+
+def flatten_kdist(k):
+    """Split the bundle from kdist_full into the k-distribution dict and the grid
+    arguments the interpolation takes.
+
+    flavor belongs to both: the interpolation takes it directly, and rte3d's tau kernel
+    reads it out of the k-distribution.
+    """
+    kd = k.pop('kdist')
+    kd['flavor'] = k.pop('flavor')
+    return kd, k
+
+
+@pytest.mark.parametrize('monotonic', [True, False])
+@pytest.mark.parametrize('nlay,ncol', [(20, 6), (1, 4), (8, 1)])
+def test_tau_absorption_matches_reference(rte3d, fortran_ref, nlay, ncol, monotonic):
+    """The reference's own interpolation output is fed straight to its tau kernel, so
+    only the tau kernel is compared here; interpolation is checked separately above.
+
+    The non-monotonic case matters because the reference bounds the minor-gas layer
+    loop by a contiguous range found with minloc/maxloc rather than by the tropo mask.
+    For a real atmosphere the two agree; for scrambled pressures they do not, and
+    rte3d reproduces the range form.
+    """
+    rng = np.random.default_rng(40)
+    bundle = kdist_full(rng)
+    kd, grid = flatten_kdist(bundle)
+
+    ngas = grid['vmr_ref'].shape[1] - 1
+    a = atmosphere(rng, ngas, nlay, ncol)
+    if monotonic:
+        a['play'] = np.sort(a['play'], axis=0)
+
+    interp = fortran_ref.interpolation(flavor=kd['flavor'], **grid, **a)
+    expected = fortran_ref.compute_tau_absorption(
+        kd, interp, a['play'], a['tlay'], a['col_gas'], grid['neta'])
+
+    actual = rte3d.compute_tau_absorption(kdist=kd, **grid, **a)
+
+    np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
+    assert np.all(actual >= 0.0)
+    assert actual.max() > 0.0
