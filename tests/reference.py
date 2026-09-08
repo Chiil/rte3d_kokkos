@@ -26,6 +26,10 @@ def _bool(value):
     return ctypes.byref(_BOOL(1 if value else 0))
 
 
+def _dbl(value):
+    return ctypes.byref(ctypes.c_double(value))
+
+
 class Reference:
     """The reference kernels, called on (ngpt, nlay, ncol) C-order numpy arrays.
 
@@ -95,6 +99,17 @@ class Reference:
             fn = getattr(lib, name)
             fn.restype = None
             fn.argtypes = [_p]*3 + [_f8]*n_array + [_p, _i4]
+
+        lib.rrtmgp_interpolation.restype = None
+        lib.rrtmgp_interpolation.argtypes = (
+            [_p]*7            # ncol nlay ngas nflav neta npres ntemp
+            + [_i4]           # flavor
+            + [_f8]*2         # press_ref_log temp_ref
+            + [_p]*4          # press_ref_log_delta temp_ref_min temp_ref_delta press_ref_trop_log
+            + [_f8]*4         # vmr_ref play tlay col_gas
+            + [_i4]           # jtemp
+            + [_f8]*3         # fmajor fminor col_mix
+            + [_i4]*3)        # tropo jeta jpress
 
         # rte_sum_byband / rte_net_byband_full live in extensions/mo_fluxes_byband.F90,
         # not in the kernels this library is built from. They are plain band-wise sums,
@@ -299,3 +314,37 @@ class Reference:
         self.lib.rte_inc_2stream_by_2stream_bybnd(
             *self._sizes(tau1), tau1, ssa1, g1, tau2, ssa2, g2, _int(nbnd), gpt_lims)
         return tau1, ssa1, g1
+
+    # --- gas optics ---------------------------------------------------------
+
+    def interpolation(self, flavor, press_ref_log, temp_ref, press_ref_log_delta,
+                      temp_ref_min, temp_ref_delta, press_ref_trop_log, neta,
+                      vmr_ref, play, tlay, col_gas):
+        """Shapes here are rte3d's, which are the reference's reversed and therefore
+        the same memory. Outputs come back in the reference's own index order; the
+        tests transpose them to rte3d's."""
+        nlay, ncol = play.shape
+        nflav = flavor.shape[0]
+        ntemp = temp_ref.shape[0]
+        npres = press_ref_log.shape[0]
+        ngas = col_gas.shape[0] - 1
+
+        jtemp = np.zeros((nlay, ncol), dtype=np.int32)
+        jpress = np.zeros((nlay, ncol), dtype=np.int32)
+        tropo = np.zeros((nlay, ncol), dtype=np.int32)
+        jeta = np.zeros((nflav, nlay, ncol, 2), dtype=np.int32)
+        col_mix = np.zeros((nflav, nlay, ncol, 2), dtype=FLOAT)
+        fminor = np.zeros((nflav, nlay, ncol, 2, 2), dtype=FLOAT)
+        fmajor = np.zeros((nflav, nlay, ncol, 2, 2, 2), dtype=FLOAT)
+
+        self.lib.rrtmgp_interpolation(
+            _int(ncol), _int(nlay), _int(ngas), _int(nflav), _int(neta),
+            _int(npres), _int(ntemp),
+            flavor, press_ref_log, temp_ref,
+            _dbl(press_ref_log_delta), _dbl(temp_ref_min), _dbl(temp_ref_delta),
+            _dbl(press_ref_trop_log),
+            vmr_ref, play, tlay, col_gas,
+            jtemp, fmajor, fminor, col_mix, tropo, jeta, jpress)
+
+        return dict(jtemp=jtemp, jpress=jpress, tropo=tropo, jeta=jeta,
+                    col_mix=col_mix, fminor=fminor, fmajor=fmajor)

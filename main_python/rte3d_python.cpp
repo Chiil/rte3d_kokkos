@@ -6,6 +6,7 @@
 #include "rte_lw.h"
 #include "optical_props.h"
 #include "fluxes.h"
+#include "gas_optics.h"
 
 
 PYBIND11_MODULE(rte3d_python, m)
@@ -17,4 +18,5 @@ PYBIND11_MODULE(rte3d_python, m)
     Rte_lw::init_python_bindings(m);
     Optical_props::init_python_bindings(m);
     Fluxes::init_python_bindings(m);
+    Gas_optics::init_python_bindings(m);
 }

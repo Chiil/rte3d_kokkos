@@ -41,7 +41,23 @@ The `rte-frontend/` layer is replaced rather than ported: its class hierarchy
 The top-level `rte_lw()` / `rte_sw()` drivers, which validate inputs and expand
 boundary conditions before calling the kernels, are not yet written.
 
-Next: gas optics.
+Step 2a in progress: the RRTMGP gas-optics kernels. `interpolation` is done
+(`include/gas_optics.h`); `compute_tau_absorption`, `compute_tau_rayleigh` and
+`compute_Planck_source` are next, then `Gas_concs` and the frontend.
+
+### Interpolation weights are recomputed, not stored
+
+The reference materialises `fmajor(2,2,2,ncol,nlay,nflav)` and
+`fminor(2,2,ncol,nlay,nflav)`. Both are pure functions of `ftemp`, `fpress` and `feta`,
+which the same kernel already computes, so rte3d stores those instead and rebuilds the
+weights where they are used (`Gas_optics_kernels::interp_weights`). That trades twelve
+stored values per (flavour, layer, column) for four multiplies: at `ncol = 1e5`,
+`nlay = 60`, `nflav = 10` it is roughly 2.4 GB instead of 7 GB.
+
+rte3d also keeps the column as the fastest-varying dimension in these arrays, where the
+reference puts `ncol` in the middle. This is the one place where a straight dimension
+reversal would not have matched, so the gas-optics tests transpose before calling the
+reference. The library itself never transposes.
 
 ### Known defects in the Fortran reference
 

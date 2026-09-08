@@ -3,8 +3,8 @@
 # Build the deprecated Fortran reference as a shared library, for use as a test
 # oracle only. rte3d itself never links this and needs no Fortran compiler.
 #
-# The RTE kernels depend on nothing but mo_rte_kind and mo_rte_util_array, so this is
-# five files and no data.
+# The RTE and RRTMGP kernels depend on nothing but mo_rte_kind and mo_rte_util_array,
+# so this is six files and no data.
 #
 #   ./tests/build_reference.sh [rte-rrtmgp-dir] [output-dir]
 #   export RTE3D_FORTRAN_REF=<output-dir>/librte_kernels.<ext>
@@ -34,7 +34,8 @@ out="$(cd "$out" && pwd)"
     "$src/rte-kernels/mo_rte_util_array.F90" \
     "$src/rte-kernels/mo_rte_solver_kernels.F90" \
     "$src/rte-kernels/mo_optical_props_kernels.F90" \
-    "$src/rte-kernels/mo_fluxes_broadband_kernels.F90" )
+    "$src/rte-kernels/mo_fluxes_broadband_kernels.F90" \
+    "$src/rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90" )
 
 echo "Built $out/librte_kernels.$ext"
 echo "export RTE3D_FORTRAN_REF=$out/librte_kernels.$ext"

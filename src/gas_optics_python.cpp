@@ -1,0 +1,76 @@
+#include <pybind11/stl.h>
+
+#include "gas_optics.h"
+#include "runtime.h"
+
+
+void Gas_optics::init_python_bindings(py::module_& m)
+{
+    m.def("interpolation",
+        [](const Numpy::In<int>& flavor,
+           const Numpy::In<TF>& press_ref_log,
+           const Numpy::In<TF>& temp_ref,
+           const TF press_ref_log_delta,
+           const TF temp_ref_min,
+           const TF temp_ref_delta,
+           const TF press_ref_trop_log,
+           const int neta,
+           const Numpy::In<TF>& vmr_ref,
+           const Numpy::In<TF>& play,
+           const Numpy::In<TF>& tlay,
+           const Numpy::In<TF>& col_gas) -> py::dict
+        {
+            Runtime::get();
+
+            auto flavor_d = Numpy::to_device_2d<int>(flavor, "flavor");
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+
+            const int nflav = static_cast<int>(flavor_d.extent(0));
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+
+            Interp_state state = Interp_state::create(nflav, nlay, ncol);
+
+            Gas_optics::interpolation(
+                    flavor_d,
+                    Numpy::to_device_1d<TF>(press_ref_log, "press_ref_log"),
+                    Numpy::to_device_1d<TF>(temp_ref, "temp_ref"),
+                    press_ref_log_delta, temp_ref_min, temp_ref_delta, press_ref_trop_log,
+                    neta,
+                    Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref"),
+                    play_d,
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    Numpy::to_device_3d<TF>(col_gas, "col_gas"),
+                    state);
+
+            // Test support: the reference returns fmajor and fminor, which we
+            // reconstruct on demand rather than store.
+            Array_5d<TF> fminor(Kokkos::view_alloc("fminor", Kokkos::WithoutInitializing),
+                                nflav, 2, 2, nlay, ncol);
+            Array_6d<TF> fmajor(Kokkos::view_alloc("fmajor", Kokkos::WithoutInitializing),
+                                nflav, 2, 2, 2, nlay, ncol);
+            Gas_optics::expand_weights(state, fminor, fmajor);
+            Kokkos::fence();
+
+            py::dict out;
+            out["jtemp"] = Numpy::from_device(state.jtemp);
+            out["ftemp"] = Numpy::from_device(state.ftemp);
+            out["jpress"] = Numpy::from_device(state.jpress);
+            out["fpress"] = Numpy::from_device(state.fpress);
+            out["tropo"] = Numpy::from_device(state.tropo);
+            out["jeta"] = Numpy::from_device(state.jeta);
+            out["feta"] = Numpy::from_device(state.feta);
+            out["col_mix"] = Numpy::from_device(state.col_mix);
+            out["fminor"] = Numpy::from_device(fminor);
+            out["fmajor"] = Numpy::from_device(fmajor);
+
+            return out;
+        },
+        py::arg("flavor"), py::arg("press_ref_log"), py::arg("temp_ref"),
+        py::arg("press_ref_log_delta"), py::arg("temp_ref_min"), py::arg("temp_ref_delta"),
+        py::arg("press_ref_trop_log"), py::arg("neta"), py::arg("vmr_ref"),
+        py::arg("play"), py::arg("tlay"), py::arg("col_gas"),
+        "Locate each (layer, column) in the k-distribution grids. Returns a dict of the "
+        "interpolation state. jtemp, jpress and jeta are 0-based, unlike the reference. "
+        "fmajor and fminor are materialised for testing only.");
+}
