@@ -4,6 +4,8 @@
 #include "runtime.h"
 #include "rte_sw.h"
 #include "rte_lw.h"
+#include "optical_props.h"
+#include "fluxes.h"
 
 
 PYBIND11_MODULE(rte3d_python, m)
@@ -13,4 +15,6 @@ PYBIND11_MODULE(rte3d_python, m)
     Runtime::init_python_bindings(m);
     Rte_sw::init_python_bindings(m);
     Rte_lw::init_python_bindings(m);
+    Optical_props::init_python_bindings(m);
+    Fluxes::init_python_bindings(m);
 }

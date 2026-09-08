@@ -259,6 +259,9 @@ using Array_map_2d_host = Kokkos::View<T**, Kokkos::LayoutRight, Kokkos::HostSpa
 template<typename T>
 using Array_map_3d_host = Kokkos::View<T***, Kokkos::LayoutRight, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::Restrict>>;
 
+template<typename T>
+using Array_map_4d_host = Kokkos::View<T****, Kokkos::LayoutRight, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::Restrict>>;
+
 
 // This helper function creates a new host mirror using pinned memory if GPU is enabled.
 template<typename View_type>
@@ -324,6 +327,21 @@ namespace Numpy
 
         Array_3d<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing), info.shape[0], info.shape[1], info.shape[2]);
         Array_map_3d_host<const T> host(static_cast<const T*>(info.ptr), info.shape[0], info.shape[1], info.shape[2]);
+        Kokkos::deep_copy(view, host);
+
+        return view;
+    }
+
+    template<typename T>
+    Array_4d<T> to_device_4d(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 4, name);
+
+        Array_4d<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing),
+                         info.shape[0], info.shape[1], info.shape[2], info.shape[3]);
+        Array_map_4d_host<const T> host(static_cast<const T*>(info.ptr),
+                                        info.shape[0], info.shape[1], info.shape[2], info.shape[3]);
         Kokkos::deep_copy(view, host);
 
         return view;

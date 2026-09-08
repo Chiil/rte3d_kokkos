@@ -4,7 +4,11 @@ file(GLOB sourcefiles
     "rte_sw.cpp"
     "rte_sw_python.cpp"
     "rte_lw.cpp"
-    "rte_lw_python.cpp")
+    "rte_lw_python.cpp"
+    "optical_props.cpp"
+    "optical_props_python.cpp"
+    "fluxes.cpp"
+    "fluxes_python.cpp")
 
 add_library(rte3d_core STATIC ${sourcefiles})
 

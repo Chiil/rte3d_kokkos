@@ -18,18 +18,34 @@ that `rte-rrtmgp-cpp` carries.
 
 ## Status
 
-Step 1c complete. Build scaffolding and the numpy/Kokkos array plumbing
-(`include/types.h`); the shortwave solvers `sw_solver_noscat` and `sw_solver_2stream`
-(`include/rte_sw.h`); and the longwave `lw_solver_noscat` with multi-angle quadrature
-and the surface-temperature Jacobian and `lw_solver_2stream` (`include/rte_lw.h`). All match the reference to ~1e-15
-relative in double precision. Next: optical-props operations and flux reduction.
+Step 1 complete: the RTE core.
 
-Not yet implemented: the approximate-scattering rescaling of Tang et al. 2018
-(`do_rescaling` / `lw_transport_1rescl`); see the note at the top of `src/rte_lw.cpp`.
+- `include/types.h` -- precision, array aliases, parallel-for wrappers, numpy interop
+- `include/rte_sw.h` -- `sw_solver_noscat`, `sw_solver_2stream`
+- `include/rte_lw.h` -- `lw_solver_noscat` with multi-angle quadrature and the
+  surface-temperature Jacobian, `lw_solver_2stream`
+- `include/optical_props.h` -- delta-scaling, the increment operations, column subsetting
+- `include/fluxes.h` -- broadband and by-band flux reduction
 
-### Two known defects in the Fortran reference
+Everything is validated against the Fortran reference at ~1e-15 relative in double
+precision.
 
-Both are reproduced or worked around deliberately, and pinned by tests.
+Two things in `rte-kernels/` are deliberately not ported:
+
+- `lw_transport_1rescl`, the approximate-scattering rescaling of Tang et al. 2018.
+  See the note at the top of `src/rte_lw.cpp`.
+- `zero_array_*`, which `Kokkos::deep_copy` already covers.
+
+The `rte-frontend/` layer is replaced rather than ported: its class hierarchy
+(`ty_optical_props`, `ty_source_func_lw`, `ty_fluxes`) becomes the plain structs above.
+The top-level `rte_lw()` / `rte_sw()` drivers, which validate inputs and expand
+boundary conditions before calling the kernels, are not yet written.
+
+Next: gas optics.
+
+### Known defects in the Fortran reference
+
+Each is reproduced or worked around deliberately, and pinned by a test.
 
 - **`lw_solver_2stream` ignores the g-point index of `lev_source`**
   (`rte-kernels/mo_rte_solver_kernels.F90:422`): the call to `lw_source_2str` passes

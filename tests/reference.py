@@ -65,6 +65,41 @@ class Reference:
             _f8, _f8, _f8, _f8, _f8, _f8, _f8, _f8,
             _f8, _f8]
 
+        _i4 = np.ctypeslib.ndpointer(dtype=np.int32, flags='C_CONTIGUOUS')
+        _p = ctypes.c_void_p  # scalars, all passed by reference
+
+        # (name, number of leading scalar arguments, number of float array arguments)
+        for name, n_scalar, n_array in [
+                ('rte_delta_scale_2str_k', 3, 3),
+                ('rte_delta_scale_2str_f_k', 3, 4),
+                ('rte_increment_1scalar_by_1scalar', 3, 2),
+                ('rte_increment_1scalar_by_2stream', 3, 3),
+                ('rte_increment_2stream_by_1scalar', 3, 3),
+                ('rte_increment_2stream_by_2stream', 3, 6),
+                ('rte_increment_2stream_by_nstream', 4, 6),
+                ('rte_increment_nstream_by_2stream', 4, 6),
+                ('rte_increment_nstream_by_nstream', 5, 6),
+                ('rte_sum_broadband', 3, 2),
+                ('rte_net_broadband_full', 3, 3),
+                ('rte_net_broadband_precalc', 2, 3)]:
+            fn = getattr(lib, name)
+            fn.restype = None
+            fn.argtypes = [_p]*n_scalar + [_f8]*n_array
+
+        # The by-band variants take the band limits after the arrays.
+        for name, n_array in [
+                ('rte_inc_1scalar_by_1scalar_bybnd', 2),
+                ('rte_inc_1scalar_by_2stream_bybnd', 3),
+                ('rte_inc_2stream_by_1scalar_bybnd', 3),
+                ('rte_inc_2stream_by_2stream_bybnd', 6)]:
+            fn = getattr(lib, name)
+            fn.restype = None
+            fn.argtypes = [_p]*3 + [_f8]*n_array + [_p, _i4]
+
+        # rte_sum_byband / rte_net_byband_full live in extensions/mo_fluxes_byband.F90,
+        # not in the kernels this library is built from. They are plain band-wise sums,
+        # so the tests check them against numpy instead.
+
     def sw_solver_noscat(self, top_at_1, tau, mu0, inc_flux_dir):
         ngpt, nlay, ncol = tau.shape
         flux_dir = np.zeros((ngpt, nlay+1, ncol), dtype=FLOAT)
@@ -150,3 +185,117 @@ class Reference:
             flux_up, flux_dn)
 
         return flux_up, flux_dn
+
+    # --- optical properties -------------------------------------------------
+
+    def delta_scale_2str(self, tau, ssa, g, f=None):
+        ngpt, nlay, ncol = tau.shape
+        tau, ssa, g = tau.copy(), ssa.copy(), g.copy()
+
+        if f is None:
+            self.lib.rte_delta_scale_2str_k(_int(ncol), _int(nlay), _int(ngpt), tau, ssa, g)
+        else:
+            self.lib.rte_delta_scale_2str_f_k(_int(ncol), _int(nlay), _int(ngpt), tau, ssa, g, f)
+
+        return tau, ssa, g
+
+    def _sizes(self, tau1):
+        ngpt, nlay, ncol = tau1.shape
+        return _int(ncol), _int(nlay), _int(ngpt)
+
+    def increment_1scalar_by_1scalar(self, tau1, tau2):
+        tau1 = tau1.copy()
+        self.lib.rte_increment_1scalar_by_1scalar(*self._sizes(tau1), tau1, tau2)
+        return tau1
+
+    def increment_1scalar_by_2stream(self, tau1, tau2, ssa2):
+        tau1 = tau1.copy()
+        self.lib.rte_increment_1scalar_by_2stream(*self._sizes(tau1), tau1, tau2, ssa2)
+        return tau1
+
+    def increment_2stream_by_1scalar(self, tau1, ssa1, tau2):
+        tau1, ssa1 = tau1.copy(), ssa1.copy()
+        self.lib.rte_increment_2stream_by_1scalar(*self._sizes(tau1), tau1, ssa1, tau2)
+        return tau1, ssa1
+
+    def increment_2stream_by_2stream(self, tau1, ssa1, g1, tau2, ssa2, g2):
+        tau1, ssa1, g1 = tau1.copy(), ssa1.copy(), g1.copy()
+        self.lib.rte_increment_2stream_by_2stream(
+            *self._sizes(tau1), tau1, ssa1, g1, tau2, ssa2, g2)
+        return tau1, ssa1, g1
+
+    def increment_2stream_by_nstream(self, tau1, ssa1, g1, tau2, ssa2, p2):
+        tau1, ssa1, g1 = tau1.copy(), ssa1.copy(), g1.copy()
+        nmom2 = p2.shape[3]
+        self.lib.rte_increment_2stream_by_nstream(
+            *self._sizes(tau1), _int(nmom2), tau1, ssa1, g1, tau2, ssa2, p2)
+        return tau1, ssa1, g1
+
+    def increment_nstream_by_2stream(self, tau1, ssa1, p1, tau2, ssa2, g2):
+        tau1, ssa1, p1 = tau1.copy(), ssa1.copy(), p1.copy()
+        nmom1 = p1.shape[3]
+        self.lib.rte_increment_nstream_by_2stream(
+            *self._sizes(tau1), _int(nmom1), tau1, ssa1, p1, tau2, ssa2, g2)
+        return tau1, ssa1, p1
+
+    def increment_nstream_by_nstream(self, tau1, ssa1, p1, tau2, ssa2, p2):
+        tau1, ssa1, p1 = tau1.copy(), ssa1.copy(), p1.copy()
+        nmom1, nmom2 = p1.shape[3], p2.shape[3]
+        self.lib.rte_increment_nstream_by_nstream(
+            *self._sizes(tau1), _int(nmom1), _int(nmom2), tau1, ssa1, p1, tau2, ssa2, p2)
+        return tau1, ssa1, p1
+
+    # --- flux reduction -----------------------------------------------------
+
+    def sum_broadband(self, spectral_flux):
+        ngpt, nlev, ncol = spectral_flux.shape
+        out = np.zeros((nlev, ncol), dtype=FLOAT)
+        self.lib.rte_sum_broadband(_int(ncol), _int(nlev), _int(ngpt), spectral_flux, out)
+        return out
+
+    def net_broadband_full(self, flux_dn, flux_up):
+        ngpt, nlev, ncol = flux_dn.shape
+        out = np.zeros((nlev, ncol), dtype=FLOAT)
+        self.lib.rte_net_broadband_full(
+            _int(ncol), _int(nlev), _int(ngpt), flux_dn, flux_up, out)
+        return out
+
+    def net_broadband_precalc(self, flux_dn, flux_up):
+        nlev, ncol = flux_dn.shape
+        out = np.zeros((nlev, ncol), dtype=FLOAT)
+        self.lib.rte_net_broadband_precalc(_int(ncol), _int(nlev), flux_dn, flux_up, out)
+        return out
+
+    # --- by-band increments -------------------------------------------------
+    #
+    # The reference declares gpt_lims as Fortran (2, nbnd). Column-major, that is the
+    # same memory as a C-order (nbnd, 2) array, so these take rte3d's (nbnd, 2) shape
+    # with 1-based indices.
+
+    def inc_1scalar_by_1scalar_bybnd(self, tau1, tau2, gpt_lims):
+        tau1 = tau1.copy()
+        nbnd = gpt_lims.shape[0]
+        self.lib.rte_inc_1scalar_by_1scalar_bybnd(
+            *self._sizes(tau1), tau1, tau2, _int(nbnd), gpt_lims)
+        return tau1
+
+    def inc_1scalar_by_2stream_bybnd(self, tau1, tau2, ssa2, gpt_lims):
+        tau1 = tau1.copy()
+        nbnd = gpt_lims.shape[0]
+        self.lib.rte_inc_1scalar_by_2stream_bybnd(
+            *self._sizes(tau1), tau1, tau2, ssa2, _int(nbnd), gpt_lims)
+        return tau1
+
+    def inc_2stream_by_1scalar_bybnd(self, tau1, ssa1, tau2, gpt_lims):
+        tau1, ssa1 = tau1.copy(), ssa1.copy()
+        nbnd = gpt_lims.shape[0]
+        self.lib.rte_inc_2stream_by_1scalar_bybnd(
+            *self._sizes(tau1), tau1, ssa1, tau2, _int(nbnd), gpt_lims)
+        return tau1, ssa1
+
+    def inc_2stream_by_2stream_bybnd(self, tau1, ssa1, g1, tau2, ssa2, g2, gpt_lims):
+        tau1, ssa1, g1 = tau1.copy(), ssa1.copy(), g1.copy()
+        nbnd = gpt_lims.shape[0]
+        self.lib.rte_inc_2stream_by_2stream_bybnd(
+            *self._sizes(tau1), tau1, ssa1, g1, tau2, ssa2, g2, _int(nbnd), gpt_lims)
+        return tau1, ssa1, g1
