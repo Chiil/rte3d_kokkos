@@ -64,9 +64,10 @@ def main():
     print(f'{"":6s} {"max |difference|":>18s}   {"threshold":>10s}')
 
     worst = 0.0
+    references = {}
     for name in ('rlu', 'rld', 'rsu', 'rsd'):
-        reference = read_reference(reference_path(name), name, expt=args.expt)
-        err = np.abs(results[name] - reference).max()
+        references[name] = read_reference(reference_path(name), name, expt=args.expt)
+        err = np.abs(results[name] - references[name]).max()
         worst = max(worst, err)
         print(f'{name:6s} {err:18.3e}   {THRESHOLD:10.1e}  {"ok" if err < THRESHOLD else "FAIL"}')
 
@@ -76,12 +77,17 @@ def main():
     print(f'\nwrote {args.output}')
 
     if args.plot:
-        plot(results, plev, args.output.replace('.nc', '.png'))
+        plot(results, references, plev, args.output.replace('.nc', '.png'))
 
     return 0 if worst < THRESHOLD else 1
 
 
-def plot(results, plev, path):
+def plot(results, references, plev, path):
+    """rte3d solid, the reference dashed on top, colour distinguishing up from down.
+
+    At these residuals the two curves sit on top of each other; that is the point.
+    The numerical comparison is the printed table.
+    """
     require_plotting()
     import matplotlib
     matplotlib.use('Agg')
@@ -92,18 +98,21 @@ def plot(results, plev, path):
     fig, axes = plt.subplots(1, 2, figsize=(9, 5), sharey=True)
     for ax, (band, pair) in zip(axes, (('longwave', ('rlu', 'rld')),
                                        ('shortwave', ('rsu', 'rsd')))):
-        for name, style in zip(pair, ('-', '--')):
-            ax.plot(results[name].mean(axis=1), p, style, label=name)
+        for name, colour in zip(pair, ('C0', 'C1')):
+            ax.plot(results[name].mean(axis=1), p, '-', color=colour, lw=1.6,
+                    label=f'{name} rte3d')
+            ax.plot(references[name].mean(axis=1), p, '--', color=colour, lw=1.6,
+                    dashes=(4, 3), label=f'{name} reference')
         ax.set_title(band)
         ax.set_xlabel('flux [W m$^{-2}$]')
-        ax.legend()
+        ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
 
     axes[0].set_ylabel('pressure [hPa]')
     axes[0].invert_yaxis()
     axes[0].set_yscale('log')
 
-    fig.suptitle('RFMIP clear-sky, mean over 100 sites')
+    fig.suptitle('RFMIP clear-sky, mean over 100 sites: rte3d (solid) vs reference (dashed)')
     fig.tight_layout()
     fig.savefig(path, dpi=140)
     print(f'wrote {path}')

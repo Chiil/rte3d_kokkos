@@ -32,6 +32,7 @@ def main():
     args = p.parse_args()
 
     results = {}
+    references = {}
     worst = 0.0
 
     for band, gas_file, cloud_file, ref_file in (
@@ -59,7 +60,8 @@ def main():
         print(timer.report(ncol=ncol))
 
         for name, value in computed.items():
-            worst = max(worst, np.abs(value - atm[name]).max())
+            references[name] = atm[name]
+            worst = max(worst, np.abs(value - references[name]).max())
         results.update(computed)
         results['plev'] = atm['plev']
 
@@ -73,12 +75,12 @@ def main():
     print(f'wrote {args.output}')
 
     if args.plot:
-        plot(results, plev, atm, args.output.replace('.nc', '.png'))
+        plot(results, references, plev, atm, args.output.replace('.nc', '.png'))
 
     return 0 if worst < TOLERANCE else 1
 
 
-def plot(results, plev, atm, path):
+def plot(results, references, plev, atm, path):
     require_plotting()
     import matplotlib
     matplotlib.use('Agg')
@@ -89,13 +91,17 @@ def plot(results, plev, atm, path):
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 5), sharey=True)
 
+    # rte3d solid, reference dashed on top, colour distinguishing up from down. Only
+    # the cloudy columns are drawn: the clear ones are in the same figure's third
+    # panel by implication, and plotting both halves doubles the curves for nothing.
     for ax, (band, names) in zip(axes, (('longwave', ('lw_flux_up', 'lw_flux_dn')),
                                         ('shortwave', ('sw_flux_up', 'sw_flux_dn')))):
-        for name, style in zip(names, ('-', '--')):
-            ax.plot(results[name][:, cloudy].mean(axis=1), p, style, label=f'{name} cloudy')
-            ax.plot(results[name][:, ~cloudy].mean(axis=1), p, style, alpha=0.4,
-                    label=f'{name} clear')
-        ax.set_title(band)
+        for name, colour in zip(names, ('C0', 'C1')):
+            ax.plot(results[name][:, cloudy].mean(axis=1), p, '-', color=colour, lw=1.6,
+                    label=f'{name} rte3d')
+            ax.plot(references[name][:, cloudy].mean(axis=1), p, '--', color=colour, lw=1.6,
+                    dashes=(4, 3), label=f'{name} reference')
+        ax.set_title(f'{band}, cloudy columns')
         ax.set_xlabel('flux [W m$^{-2}$]')
         ax.legend(fontsize=8)
         ax.grid(alpha=0.3)
@@ -113,7 +119,7 @@ def plot(results, plev, atm, path):
     axes[0].invert_yaxis()
     axes[0].set_yscale('log')
 
-    fig.suptitle('All-sky, cloudy and clear columns')
+    fig.suptitle('All-sky: rte3d (solid) vs reference (dashed)')
     fig.tight_layout()
     fig.savefig(path, dpi=140)
     print(f'wrote {path}')
