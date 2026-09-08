@@ -46,9 +46,20 @@ Step 2a complete: all four RRTMGP gas-optics kernels -- `interpolation`,
 (`include/gas_optics.h`). The Planck kernel fills the same `Source_func_lw` the
 longwave solvers already take, so the two halves compose directly.
 
-Step 2b in progress. `Gas_concs`, `compute_col_dry`, `compute_col_gas` and the
-k-distribution reduction (`Gas_optics::load`) are done. Next: the frontend that
-orchestrates the four kernels, then reading coefficient files with xarray.
+Step 2 complete: gas optics.
+
+- `include/gas_concs.h` -- volume mixing ratios by name
+- `include/gas_optics.h` -- the four RRTMGP kernels, the k-distribution reduction
+  (`Gas_optics::load`) and the `gas_optics_lw` / `gas_optics_sw` frontends
+- `main_python/rte3d/kdist.py` -- the only place rte3d touches NetCDF
+
+The real coefficient files are in `extern/rrtmgp-data`. Loading
+`rrtmgp-gas-lw-g256.nc` with eight gases reduces 19 absorbers to 8, 60 lower minor
+absorbers to 45, and the lower `kminor` table from 960 contributors to 720. Gas optics
+driven straight into `lw_solver_noscat` gives an outgoing longwave flux of ~171 W/m2
+for a standard-atmosphere column.
+
+Next: cloud and aerosol optics, then the Monte Carlo ray tracer.
 
 ### Where gas names live
 

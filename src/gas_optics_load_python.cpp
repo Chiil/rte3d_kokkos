@@ -1,3 +1,5 @@
+#include <optional>
+
 #include <pybind11/stl.h>
 
 #include "gas_optics.h"
@@ -25,10 +27,28 @@ namespace
 }
 
 
+namespace
+{
+    py::dict kdist_arrays(const Kdist_gas& k);
+}
+
+
 void Gas_optics::init_load_python_bindings(py::module_& m)
 {
+    py::class_<Kdist_gas>(m, "Kdist_gas",
+            "A k-distribution reduced to one set of gases. Opaque; use arrays() to "
+            "inspect the reduced index arrays.")
+        .def_property_readonly("gas_names",
+            [](const Kdist_gas& k) { return k.gas_names; },
+            "The gases this was reduced to, in the order col_gas uses. Entry 0 of that "
+            "dimension is dry air, so gas_names[i] sits at col_gas index i+1.")
+        .def_property_readonly("neta", [](const Kdist_gas& k) { return k.neta; })
+        .def_property_readonly("idx_h2o", [](const Kdist_gas& k) { return k.idx_h2o; })
+        .def("arrays", [](const Kdist_gas& k) { return kdist_arrays(k); },
+            "Every reduced array, 0-based. For testing against the reference.");
+
     m.def("load_kdist",
-        [](const py::dict& f, const Gas_concs& gas_concs) -> py::dict
+        [](const py::dict& f, const Gas_concs& gas_concs) -> Kdist_gas
         {
             Runtime::get();
 
@@ -78,8 +98,19 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
             if (f.contains("rayl"))
                 file.rayl = Numpy::to_host_4d<TF>(get<TF>(f, "rayl"), "rayl");
 
-            const Kdist_gas k = Gas_optics::load(file, gas_concs);
+            return Gas_optics::load(file, gas_concs);
+        },
+        py::arg("file"), py::arg("gas_concs"),
+        "Reduce a coefficient file to the gases in gas_concs and build every derived "
+        "index array. Input indices are 1-based, as in the file; the result is "
+        "0-based throughout.");
+}
 
+
+namespace
+{
+    py::dict kdist_arrays(const Kdist_gas& k)
+    {
             py::dict out;
             out["gas_names"] = k.gas_names;
             out["flavor"] = Numpy::from_device(k.flavor);
@@ -89,6 +120,24 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
             out["gpt_band"] = Numpy::from_device(k.gpt_band);
             out["band_gpt_start"] = Numpy::from_device(k.band_gpt_start);
             out["idx_h2o"] = k.idx_h2o;
+
+            out["press_ref_log"] = Numpy::from_device(k.press_ref_log);
+            out["temp_ref"] = Numpy::from_device(k.temp_ref);
+            out["press_ref_log_delta"] = k.press_ref_log_delta;
+            out["temp_ref_min"] = k.temp_ref_min;
+            out["temp_ref_max"] = k.temp_ref_max;
+            out["temp_ref_delta"] = k.temp_ref_delta;
+            out["press_ref_trop_log"] = k.press_ref_trop_log;
+            out["kmajor"] = Numpy::from_device(k.kmajor);
+
+            if (k.totplnk.size() > 0)
+            {
+                out["totplnk"] = Numpy::from_device(k.totplnk);
+                out["pfracin"] = Numpy::from_device(k.pfracin);
+                out["totplnk_delta"] = k.totplnk_delta;
+            }
+            if (k.krayl.size() > 0)
+                out["krayl"] = Numpy::from_device(k.krayl);
 
             for (const auto& [prefix, m_] : {std::pair{"lower_", &k.lower}, std::pair{"upper_", &k.upper}})
             {
@@ -107,9 +156,89 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
             }
 
             return out;
+    }
+}
+
+
+void Gas_optics::init_frontend_python_bindings(py::module_& m)
+{
+    m.def("gas_optics_lw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev,
+           const Numpy::In<TF>& tlay, const Numpy::In<TF>& tlev,
+           const Numpy::In<TF>& tsfc,
+           const std::optional<Numpy::In<TF>>& col_dry) -> py::dict
+        {
+            Runtime::get();
+
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+            const auto no_init = Kokkos::WithoutInitializing;
+            Array_3d<TF> tau(Kokkos::view_alloc("tau", no_init), ngpt, nlay, ncol);
+
+            Source_func_lw sources;
+            sources.lay_source = Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol);
+            sources.lev_source = Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol);
+            sources.sfc_source = Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol);
+            sources.sfc_source_jac = Array_2d<TF>(Kokkos::view_alloc("sfc_source_jac", no_init), ngpt, ncol);
+
+            Gas_optics::gas_optics_lw(
+                    k, gas_concs, play_d,
+                    Numpy::to_device_2d<TF>(plev, "plev"),
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    Numpy::to_device_2d<TF>(tlev, "tlev"),
+                    Numpy::to_device_1d<TF>(tsfc, "tsfc"),
+                    col_dry.has_value() ? Numpy::to_device_2d<TF>(*col_dry, "col_dry")
+                                        : Array_2d<TF>(),
+                    tau, sources);
+            Kokkos::fence();
+
+            py::dict out;
+            out["tau"] = Numpy::from_device(tau);
+            out["lay_source"] = Numpy::from_device(sources.lay_source);
+            out["lev_source"] = Numpy::from_device(sources.lev_source);
+            out["sfc_source"] = Numpy::from_device(sources.sfc_source);
+            out["sfc_source_jac"] = Numpy::from_device(sources.sfc_source_jac);
+
+            return out;
         },
-        py::arg("file"), py::arg("gas_concs"),
-        "Reduce a coefficient file to the gases in gas_concs and build every derived "
-        "index array. Input indices are 1-based, as in the file; everything returned "
-        "is 0-based.");
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("play"), py::arg("plev"),
+        py::arg("tlay"), py::arg("tlev"), py::arg("tsfc"), py::arg("col_dry") = py::none(),
+        "Longwave gas optics. Returns tau and the Planck sources, in the layouts the "
+        "longwave solvers take.");
+
+    m.def("gas_optics_sw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev, const Numpy::In<TF>& tlay,
+           const std::optional<Numpy::In<TF>>& col_dry) -> py::tuple
+        {
+            Runtime::get();
+
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+            const auto no_init = Kokkos::WithoutInitializing;
+            Array_3d<TF> tau(Kokkos::view_alloc("tau", no_init), ngpt, nlay, ncol);
+            Array_3d<TF> ssa(Kokkos::view_alloc("ssa", no_init), ngpt, nlay, ncol);
+
+            Gas_optics::gas_optics_sw(
+                    k, gas_concs, play_d,
+                    Numpy::to_device_2d<TF>(plev, "plev"),
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    col_dry.has_value() ? Numpy::to_device_2d<TF>(*col_dry, "col_dry")
+                                        : Array_2d<TF>(),
+                    tau, ssa);
+            Kokkos::fence();
+
+            return py::make_tuple(Numpy::from_device(tau), Numpy::from_device(ssa));
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("play"), py::arg("plev"),
+        py::arg("tlay"), py::arg("col_dry") = py::none(),
+        "Shortwave gas optics. Returns (tau, ssa), where tau is the total extinction "
+        "and ssa the Rayleigh fraction of it.");
 }

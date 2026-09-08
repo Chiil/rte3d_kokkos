@@ -296,6 +296,30 @@ Kdist_gas Gas_optics::load(const Kdist_file& file, const Gas_concs& available_ga
     k.gpt_band = to_device(gpt_band);
     k.kmajor = to_device(file.kmajor);
 
+    // ---- interpolation grid and the scalars derived from it -------------------
+    // The reference assumes temperature runs low to high and pressure high to low.
+    {
+        const int npres = static_cast<int>(file.press_ref.extent(0));
+        const int ntemp = static_cast<int>(file.temp_ref.extent(0));
+
+        Array_1d_h<TF> press_ref_log("press_ref_log", npres);
+        for (int i=0; i<npres; ++i)
+            press_ref_log(i) = Kokkos::log(file.press_ref(i));
+
+        k.press_ref_log = to_device(press_ref_log);
+        k.temp_ref = to_device(file.temp_ref);
+
+        k.temp_ref_min = file.temp_ref(0);
+        k.temp_ref_max = file.temp_ref(ntemp - 1);
+        k.temp_ref_delta = (k.temp_ref_max - k.temp_ref_min) / static_cast<TF>(ntemp - 1);
+
+        k.press_ref_log_delta =
+                (press_ref_log(npres - 1) - press_ref_log(0)) / static_cast<TF>(npres - 1);
+        k.press_ref_trop_log = Kokkos::log(file.press_ref_trop);
+
+        k.neta = static_cast<int>(file.kmajor.extent(2));
+    }
+
     // ---- minor absorbers ------------------------------------------------------
     k.lower = reduce_minor(file, available_gases, k.gas_names,
                            file.minor_gases_lower, file.scaling_gas_lower,
@@ -319,8 +343,9 @@ Kdist_gas Gas_optics::load(const Kdist_file& file, const Gas_concs& available_ga
     {
         k.totplnk = to_device(file.totplnk);
         k.pfracin = to_device(file.planck_frac);
-        k.temp_ref_min = file.temp_ref(0);
-        k.totplnk_delta = (file.temp_ref_t - file.temp_ref_p)
+        // The Planck table spans the same temperature range as the k-distribution's
+        // own grid, not the reference P/T of the absorption coefficients.
+        k.totplnk_delta = (k.temp_ref_max - k.temp_ref_min)
                         / static_cast<TF>(file.totplnk.extent(1) - 1);
     }
 

@@ -112,6 +112,17 @@ struct Kdist_gas
     // col_gas index i+1.
     std::vector<std::string> gas_names;
 
+    // Interpolation grid and the scalars derived from it, so a caller never has to
+    // recompute them. The reference keeps these as components of ty_gas_optics_rrtmgp.
+    Array_1d<TF> press_ref_log;    // (npres) log of the reference pressures
+    Array_1d<TF> temp_ref;         // (ntemp)
+    TF press_ref_log_delta = TF(0.);
+    TF temp_ref_min = TF(0.);
+    TF temp_ref_max = TF(0.);
+    TF temp_ref_delta = TF(0.);
+    TF press_ref_trop_log = TF(0.);
+    int neta = 0;
+
     Array_2d<int> flavor;          // (nflav, 2) the pair of major species, as col_gas indices
     Array_2d<int> gpoint_flavor;   // (ngpt, 2) 0-based flavour per g-point, lower and upper
     Array_3d<TF> vmr_ref;          // (ntemp, ngas+1, 2)
@@ -132,7 +143,6 @@ struct Kdist_gas
     Array_4d<TF> pfracin;          // (ngpt, npres+1, neta, ntemp)
     Array_2d<TF> totplnk;          // (nbnd, nplancktemp)
     TF totplnk_delta = TF(0.);
-    TF temp_ref_min = TF(0.);
 };
 
 
@@ -203,6 +213,33 @@ namespace Gas_optics
     // Everything in the result is 0-based, unlike the reference.
     Kdist_gas load(const Kdist_file& file, const Gas_concs& available_gases);
 
+    // Full longwave gas optics: interpolation, absorption optical depth and the
+    // Planck sources. Reference: ty_gas_optics_rrtmgp%gas_optics for the longwave.
+    void gas_optics_lw(
+            const Kdist_gas& k,
+            const Gas_concs& gas_concs,
+            const Array_2d<const TF>& play,     // (nlay, ncol)
+            const Array_2d<const TF>& plev,     // (nlev, ncol)
+            const Array_2d<const TF>& tlay,     // (nlay, ncol)
+            const Array_2d<const TF>& tlev,     // (nlev, ncol)
+            const Array_1d<const TF>& tsfc,     // (ncol)
+            const Array_2d<const TF>& col_dry,  // (nlay, ncol), may be empty
+            const Array_3d<TF>& tau,            // (ngpt, nlay, ncol)
+            const Source_func_lw& sources);
+
+    // Full shortwave gas optics. tau is the total extinction and ssa the fraction of
+    // it that is Rayleigh scattering; g is left to the caller to zero, as the
+    // reference's combine_abs_and_rayleigh does.
+    void gas_optics_sw(
+            const Kdist_gas& k,
+            const Gas_concs& gas_concs,
+            const Array_2d<const TF>& play,
+            const Array_2d<const TF>& plev,
+            const Array_2d<const TF>& tlay,
+            const Array_2d<const TF>& col_dry,
+            const Array_3d<TF>& tau,
+            const Array_3d<TF>& ssa);
+
     // Rayleigh scattering optical depth. Assigned, not accumulated, as in the
     // reference. Reference: compute_tau_rayleigh.
     void compute_tau_rayleigh(
@@ -234,4 +271,5 @@ namespace Gas_optics
 
     void init_python_bindings(py::module_& m);
     void init_load_python_bindings(py::module_& m);
+    void init_frontend_python_bindings(py::module_& m);
 }

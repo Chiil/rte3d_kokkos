@@ -130,9 +130,10 @@ def test_reduction_matches_reference(rte3d, fortran_shim, drop):
     available = [g for g in FILE_GASES if g not in drop or g in key_gases]
 
     expected = fortran_shim.load(f, available)
-    actual = rte3d.load_kdist(f, make_gas_concs(rte3d, available))
+    loaded = rte3d.load_kdist(f, make_gas_concs(rte3d, available))
+    actual = loaded.arrays()
 
-    assert actual['gas_names'] == available
+    assert loaded.gas_names == available
 
     # Flavours: the reference's values are already col_gas indices.
     np.testing.assert_array_equal(actual['flavor'], expected['flavor'])
@@ -168,10 +169,10 @@ def test_reduction_drops_absorbers_and_tiles_kminor(rte3d):
     rng = np.random.default_rng(71)
     f = coefficient_file(rng)
 
-    full = rte3d.load_kdist(f, make_gas_concs(rte3d, FILE_GASES))
+    full = rte3d.load_kdist(f, make_gas_concs(rte3d, FILE_GASES)).arrays()
     key_gases = {FILE_GASES[i - 1] for i in np.unique(f['key_species']) if i > 0}
     reduced_names = [g for g in FILE_GASES if g in key_gases or g not in ('co', 'n2')]
-    reduced = rte3d.load_kdist(f, make_gas_concs(rte3d, reduced_names))
+    reduced = rte3d.load_kdist(f, make_gas_concs(rte3d, reduced_names)).arrays()
 
     for prefix in ('lower_', 'upper_'):
         for k in (full, reduced):

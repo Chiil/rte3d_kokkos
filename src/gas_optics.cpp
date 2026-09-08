@@ -656,3 +656,113 @@ void Gas_optics::compute_col_gas(
                     : vmr_c(igas, ilay, icol) * col_dry_c(ilay, icol);
         });
 }
+
+
+namespace
+{
+    // Run the interpolation for a k-distribution and atmosphere. Shared by the
+    // longwave and shortwave entry points.
+    Interp_state interpolate_for(
+            const Kdist_gas& k,
+            const Array_2d<const TF>& play,
+            const Array_2d<const TF>& tlay,
+            const Array_3d<const TF>& col_gas)
+    {
+        const int nflav = static_cast<int>(k.flavor.extent(0));
+        const int nlay = static_cast<int>(play.extent(0));
+        const int ncol = static_cast<int>(play.extent(1));
+
+        Interp_state state = Interp_state::create(nflav, nlay, ncol);
+
+        Gas_optics::interpolation(
+                k.flavor, k.press_ref_log, k.temp_ref,
+                k.press_ref_log_delta, k.temp_ref_min, k.temp_ref_delta,
+                k.press_ref_trop_log, k.neta, k.vmr_ref,
+                play, tlay, col_gas, state);
+
+        return state;
+    }
+}
+
+
+void Gas_optics::gas_optics_lw(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Array_2d<const TF>& play,
+        const Array_2d<const TF>& plev,
+        const Array_2d<const TF>& tlay,
+        const Array_2d<const TF>& tlev,
+        const Array_1d<const TF>& tsfc,
+        const Array_2d<const TF>& col_dry,
+        const Array_3d<TF>& tau,
+        const Source_func_lw& sources)
+{
+    const int nlay = static_cast<int>(play.extent(0));
+    const int ncol = static_cast<int>(play.extent(1));
+
+    Array_3d<TF> col_gas("col_gas", static_cast<int>(k.gas_names.size()) + 1, nlay, ncol);
+    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, Array_1d<TF>(), col_gas);
+
+    const Interp_state state = interpolate_for(k, play, tlay, col_gas);
+
+    // The kernel accumulates, so start from zero.
+    Kokkos::deep_copy(tau, TF(0.));
+    compute_tau_absorption(k, state, play, tlay, col_gas, tau);
+
+    // The surface is the layer at whichever end of the array is at higher pressure.
+    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
+    const int sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
+
+    compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, sources);
+}
+
+
+void Gas_optics::gas_optics_sw(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Array_2d<const TF>& play,
+        const Array_2d<const TF>& plev,
+        const Array_2d<const TF>& tlay,
+        const Array_2d<const TF>& col_dry,
+        const Array_3d<TF>& tau,
+        const Array_3d<TF>& ssa)
+{
+    const int ngpt = static_cast<int>(tau.extent(0));
+    const int nlay = static_cast<int>(play.extent(0));
+    const int ncol = static_cast<int>(play.extent(1));
+
+    Array_3d<TF> col_gas("col_gas", static_cast<int>(k.gas_names.size()) + 1, nlay, ncol);
+    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, Array_1d<TF>(), col_gas);
+
+    const Interp_state state = interpolate_for(k, play, tlay, col_gas);
+
+    Kokkos::deep_copy(tau, TF(0.));
+    compute_tau_absorption(k, state, play, tlay, col_gas, tau);
+
+    Array_3d<TF> tau_rayleigh(Kokkos::view_alloc("tau_rayleigh", Kokkos::WithoutInitializing),
+                              ngpt, nlay, ncol);
+
+    // Rayleigh scattering needs the dry air column, which compute_col_gas put at
+    // index 0.
+    const auto col_dry_view = Kokkos::subview(col_gas, 0, Kokkos::ALL, Kokkos::ALL);
+    Array_2d<TF> col_dry_work(Kokkos::view_alloc("col_dry", Kokkos::WithoutInitializing), nlay, ncol);
+    Kokkos::deep_copy(col_dry_work, col_dry_view);
+
+    compute_tau_rayleigh(k, state, col_dry_work, col_gas, tau_rayleigh);
+
+    // Combine, as combine_abs_and_rayleigh does: tau is the total extinction and ssa
+    // the scattering fraction of it.
+    const Array_3d<const TF> tau_rayleigh_c = tau_rayleigh;
+    constexpr TF tiny_tf = std::numeric_limits<TF>::min();
+
+    parallel_for_3d("combine_abs_and_rayleigh", {0, 0, 0}, {ngpt, nlay, ncol},
+        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+        {
+            const TF t = tau(igpt, ilay, icol) + tau_rayleigh_c(igpt, ilay, icol);
+
+            ssa(igpt, ilay, icol) = t > TF(2.)*tiny_tf
+                    ? tau_rayleigh_c(igpt, ilay, icol) / t
+                    : TF(0.);
+            tau(igpt, ilay, icol) = t;
+        });
+}
