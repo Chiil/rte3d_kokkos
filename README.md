@@ -71,8 +71,10 @@ fluxes shipped in `extern/rrtmgp-data`, which RRTMGP itself produced. Agreement 
 | upward | 4.8e-3 W/m2 | 6.0e-4 W/m2 |
 | downward | 1.0e-2 W/m2 | 9.3e-3 W/m2 |
 
-RFMIP's own acceptance threshold is 5.8e-2 W/m2. The residual is the difference
-between this k-distribution and the one the 2018 reference fluxes were generated with.
+RFMIP's own acceptance threshold is 5.8e-2 W/m2. The reference files are float32,
+whose spacing at these magnitudes is 3e-5 W/m2, so the residual is not storage
+precision -- it is the difference between this k-distribution and the one the 2018
+reference fluxes were generated with.
 
 `rte3d.rfmip` holds the case itself -- gas name and unit translation, and `solve_lw` /
 `solve_sw` -- so it is reusable outside the test.

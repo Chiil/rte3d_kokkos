@@ -117,3 +117,41 @@ def test_rfmip_longwave_across_experiments(rte3d):
 
     # Experiment 1 is pre-industrial, so it must emit more than present-day.
     assert olr[1] > olr[0]
+
+
+@requires_data
+def test_reference_fluxes_have_no_missing_values():
+    """xarray warns that the reference files declare _FillValue in two dtypes and
+    will decode both to NaN. Nothing is actually masked, and this keeps it that way:
+    a NaN slipping into the reference would silently turn a comparison into a pass."""
+    import xarray as xr
+
+    for name in ('rlu', 'rld', 'rsu', 'rsd'):
+        values = xr.open_dataset(_reference(name))[name].values
+        assert not np.isnan(values).any(), f'{name} contains missing values'
+
+
+@requires_data
+def test_netcdf_reads_match_ncdump():
+    """netCDF4's Cython extension is built against older numpy headers and warns about
+    it. The warning is ignored in pytest.ini on the strength of this check: values read
+    through it match the netCDF C library exactly.
+
+    The literals are ncdump's output, which prints 15 significant digits and so does
+    not always round-trip to the exact stored double; hence a tolerance of a few
+    ulp rather than exact equality. That is still many orders of magnitude tighter
+    than any corruption an ABI mismatch would cause.
+    """
+    import xarray as xr
+
+    d = xr.open_dataset(os.path.join(DATA, 'rrtmgp-gas-lw-g256.nc'))
+
+    np.testing.assert_allclose(
+        d['press_ref'].values[:3],
+        [109663.315842846, 89784.7291650418, 73509.5189241974], rtol=1e-14)
+    np.testing.assert_allclose(
+        d['kmajor'].values[0, 0, 0, :3],
+        [2.53463350242747e-22, 7.16234088408182e-22, 1.48047377615368e-21], rtol=1e-14)
+
+    # Integers are exact in both representations.
+    np.testing.assert_array_equal(d['temp_ref'].values, np.arange(160.0, 356.0, 15.0))
