@@ -17,9 +17,19 @@ namespace
 
         return Numpy::to_device_2d<TF>(*a, name);
     }
+
+    Array_map_1d<TF> optional_slice(const Array_2d<TF>& a, const int igpt)
+    {
+        if (a.size() == 0)
+            return Array_map_1d<TF>();
+
+        return slice_1d(a, igpt);
+    }
 }
 
 
+// The solvers run one g-point at a time; these bindings keep the spectrally resolved
+// interface and drive the g-point loop here. See the note in rte_lw_python.cpp.
 void Rte_sw::init_python_bindings(py::module_& m)
 {
     m.def("sw_solver_noscat",
@@ -41,7 +51,10 @@ void Rte_sw::init_python_bindings(py::module_& m)
             Array_3d<TF> flux_dir(
                     Kokkos::view_alloc("flux_dir", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
 
-            Rte_sw::solver_noscat(top_at_1, tau_d, mu0_d, inc_d, flux_dir);
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Rte_sw::solver_noscat(
+                        top_at_1, slice_2d(tau_d, igpt), mu0_d,
+                        slice_1d(inc_d, igpt), slice_2d(flux_dir, igpt));
             Kokkos::fence();
 
             return Numpy::from_device(flux_dir);
@@ -82,9 +95,13 @@ void Rte_sw::init_python_bindings(py::module_& m)
             Array_3d<TF> flux_dir(
                     Kokkos::view_alloc("flux_dir", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
 
-            Rte_sw::solver_2stream(
-                    top_at_1, tau_d, ssa_d, g_d, mu0_d, alb_dir_d, alb_dif_d,
-                    inc_dir_d, inc_dif_d, flux_up, flux_dn, flux_dir);
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Rte_sw::solver_2stream(
+                        top_at_1,
+                        slice_2d(tau_d, igpt), slice_2d(ssa_d, igpt), slice_2d(g_d, igpt), mu0_d,
+                        slice_1d(alb_dir_d, igpt), slice_1d(alb_dif_d, igpt),
+                        slice_1d(inc_dir_d, igpt), optional_slice(inc_dif_d, igpt),
+                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt), slice_2d(flux_dir, igpt));
             Kokkos::fence();
 
             return py::make_tuple(

@@ -97,9 +97,9 @@ is the difference from the k-distribution the 2018 fluxes were generated with. T
 all-sky reference was generated with the data that ships beside it, which is why that
 one reaches round-off.
 
-On performance, rte3d is currently about 3x slower per thread than the reference
-Fortran, with two thirds of the time in transport. The cause and the fix are described
-in [`cases/README.md`](cases/README.md#where-things-stand).
+On performance, rte3d is within about 20% of the reference Fortran per thread, and the
+remaining gap is entirely gas optics; see
+[`cases/README.md`](cases/README.md#where-things-stand).
 
 ## Design notes
 
@@ -137,6 +137,25 @@ reference. The library itself never transposes.
 level offsets of a layer. The reference writes every loop out twice, once per
 orientation; templating on it keeps the explicit loops the compiler wants while writing
 the physics once.
+
+### One g-point at a time
+
+The solvers take `(nlay, ncol)` optical properties and return `(nlev, ncol)` fluxes: no
+field they touch carries a g-point dimension, so their working set is the same whether
+the k-distribution has 16 g-points or 256. The caller loops g-points and accumulates.
+That is what makes the solvers fit on a GPU, and it is also why they are fast on a CPU
+— the vertical recurrences become sweeps over layers with the column loop inside them,
+which is the structure the reference Fortran has.
+
+The two backends want opposite nestings for such a sweep: layer-outer with columns
+vectorized on CPU, column-parallel with the layer loop inside the kernel on GPU. Both
+are driven from the same caller-supplied `f(ilay, icol)` by
+`parallel_for_column_sweep` in `include/types.h`, beside `parallel_for_2d`, so that
+choice stays in the one file allowed to know which backend is in use.
+
+Boundary conditions ride along at the ends of the sweeps rather than in launches of
+their own: the `j == 0` test is invariant in the vectorized column loop, and parallel
+regions are the scarcer resource.
 
 ### Known defects in the Fortran reference
 
@@ -238,16 +257,17 @@ Typical result on 256 columns x 256 layers, longwave:
 
 ```
                        rte3d      reference    ratio
-  1 thread            856 ms         297 ms    0.35x     <- ~3x slower per thread
-    gas optics        302 ms
-    transport         559 ms                             <- two thirds of the time
-  15 threads          112 ms         320 ms    2.87x
+  1 thread            363 ms         295 ms    0.81x
+    gas optics        304 ms                             <- what is left of the gap
+    transport          60 ms
+  15 threads          131 ms         294 ms    2.24x
 ```
 
 The reference kernels are serial on the host, so the 15-thread row compares rte3d on
 15 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way.
 
-Raise `--ncol` for a bigger problem, but memory grows linearly: roughly 3.7 GB at 1024
-columns and 15 GB at the full 4096. `--band lw|sw` isolates one band. Point
+Raise `--ncol` for a bigger problem. The solvers no longer grow with the number of
+g-points, so the full 4096 columns fits; gas optics and the returned spectral fluxes
+still do, which is about 14 GB there. `--band lw|sw` isolates one band. Point
 `RTE3D_PYTHON_PATH` at `build_gcc/main_python` to compare compilers — the two land
-within 8% of each other.
+within 20% of each other.

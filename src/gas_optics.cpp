@@ -441,7 +441,7 @@ void Gas_optics::compute_planck_source(
         const Array_2d<const TF>& tlev,
         const Array_1d<const TF>& tsfc,
         const int sfc_lay,
-        const Source_func_lw& sources)
+        const Source_func_lw_spectral& sources)
 {
     const int ngpt = static_cast<int>(sources.lay_source.extent(0));
     const int nlay = static_cast<int>(sources.lay_source.extent(1));
@@ -695,7 +695,7 @@ void Gas_optics::gas_optics_lw(
         const Array_1d<const TF>& tsfc,
         const Array_2d<const TF>& col_dry,
         const Array_3d<TF>& tau,
-        const Source_func_lw& sources)
+        const Source_func_lw_spectral& sources)
 {
     const int nlay = static_cast<int>(play.extent(0));
     const int ncol = static_cast<int>(play.extent(1));

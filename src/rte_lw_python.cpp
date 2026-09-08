@@ -6,6 +6,10 @@
 #include "runtime.h"
 
 
+// The solvers run one g-point at a time. These bindings keep the spectrally resolved
+// interface the tests and the reference kernels use, and drive the g-point loop here:
+// slicing an (ngpt, ...) array is free, since LayoutRight makes each g-point's block
+// contiguous.
 void Rte_lw::init_python_bindings(py::module_& m)
 {
     m.def("lw_solver_noscat",
@@ -30,7 +34,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
             auto sfc_emis_d = Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis");
             auto inc_flux_d = Numpy::to_device_2d<TF>(inc_flux, "inc_flux");
 
-            Source_func_lw sources;
+            Source_func_lw_spectral sources;
             sources.lay_source = Numpy::to_device_3d<TF>(lay_source, "lay_source");
             sources.lev_source = Numpy::to_device_3d<TF>(lev_source, "lev_source");
             sources.sfc_source = Numpy::to_device_2d<TF>(sfc_source, "sfc_source");
@@ -41,18 +45,35 @@ void Rte_lw::init_python_bindings(py::module_& m)
             const int ngpt = static_cast<int>(tau_d.extent(0));
             const int nlay = static_cast<int>(tau_d.extent(1));
             const int ncol = static_cast<int>(tau_d.extent(2));
+            const int nmus = static_cast<int>(weights_d.extent(0));
+
+            // The secants arrive as (nmus, ngpt, ncol), matching the reference; the
+            // solver wants one g-point's (nmus, ncol) contiguous, so reorder once.
+            Array_3d<TF> secants_g(
+                    Kokkos::view_alloc("secants_g", Kokkos::WithoutInitializing), ngpt, nmus, ncol);
+            parallel_for_3d("reorder_secants", {0, 0, 0}, {ngpt, nmus, ncol},
+                KOKKOS_LAMBDA(const int igpt, const int imu, const int icol)
+                {
+                    secants_g(igpt, imu, icol) = secants_d(imu, igpt, icol);
+                });
 
             Array_3d<TF> flux_up(
                     Kokkos::view_alloc("flux_up", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
             Array_3d<TF> flux_dn(
                     Kokkos::view_alloc("flux_dn", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
-            Array_2d<TF> flux_up_jac(
-                    Kokkos::view_alloc("flux_up_jac", Kokkos::WithoutInitializing),
-                    do_jacobians ? nlay+1 : 0, do_jacobians ? ncol : 0);
 
-            Rte_lw::solver_noscat(
-                    top_at_1, secants_d, weights_d, tau_d, sources, sfc_emis_d, inc_flux_d,
-                    flux_up, flux_dn, flux_up_jac);
+            // Spectrally integrated, so the solver accumulates into it across g-points.
+            Array_2d<TF> flux_up_jac(
+                    "flux_up_jac", do_jacobians ? nlay+1 : 0, do_jacobians ? ncol : 0);
+
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Rte_lw::solver_noscat(
+                        top_at_1,
+                        slice_2d(secants_g, igpt), weights_d, slice_2d(tau_d, igpt),
+                        sources.gpt(igpt),
+                        slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
+                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt),
+                        flux_up_jac);
             Kokkos::fence();
 
             if (!do_jacobians)
@@ -90,7 +111,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
             auto sfc_emis_d = Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis");
             auto inc_flux_d = Numpy::to_device_2d<TF>(inc_flux, "inc_flux");
 
-            Source_func_lw sources;
+            Source_func_lw_spectral sources;
             sources.lay_source = Numpy::to_device_3d<TF>(lay_source, "lay_source");
             sources.lev_source = Numpy::to_device_3d<TF>(lev_source, "lev_source");
             sources.sfc_source = Numpy::to_device_2d<TF>(sfc_source, "sfc_source");
@@ -104,8 +125,13 @@ void Rte_lw::init_python_bindings(py::module_& m)
             Array_3d<TF> flux_dn(
                     Kokkos::view_alloc("flux_dn", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
 
-            Rte_lw::solver_2stream(
-                    top_at_1, tau_d, ssa_d, g_d, sources, sfc_emis_d, inc_flux_d, flux_up, flux_dn);
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Rte_lw::solver_2stream(
+                        top_at_1,
+                        slice_2d(tau_d, igpt), slice_2d(ssa_d, igpt), slice_2d(g_d, igpt),
+                        sources.gpt(igpt),
+                        slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
+                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt));
             Kokkos::fence();
 
             return py::make_tuple(Numpy::from_device(flux_up), Numpy::from_device(flux_dn));

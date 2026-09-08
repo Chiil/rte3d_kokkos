@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -169,18 +170,53 @@ inline void parallel_for_4d(
 }
 
 
-// Column-wise solver pattern: independent work per (igpt, icol) with a sequential
-// recurrence over layers inside the kernel. Used by every RTE solver. Split out
-// from parallel_for_2d so the CPU/GPU trade-off for the recurrence can be tuned in
-// one place without touching the physics.
+// A sequential sweep over one dimension, independent across columns: the vertical
+// recurrences of the RTE solvers. The kernel is called as f(j, icol), with j running
+// 0..nsweep-1 in order for every column and no ordering implied between columns.
+//
+// The two backends want opposite nestings. On CPU the sweep has to be the outer loop
+// so that the column loop under it vectorizes -- that is the structure of the
+// reference kernels, and the reason they are fast -- with threads taking blocks of
+// columns. On GPU the column is the parallel dimension and the sweep runs inside the
+// kernel, so one launch covers the whole recurrence instead of nsweep tiny ones.
+// Both call the same kernel, so the physics never sees the split.
 template<typename Kernel>
-inline void parallel_for_gpt_col(
+inline void parallel_for_column_sweep(
         const std::string& name,
-        const int ngpt,
+        const int nsweep,
         const int ncol,
         const Kernel& kernel)
 {
-    parallel_for_2d(name, {0, 0}, {ngpt, ncol}, kernel);
+    #ifdef USEGPU
+    Kokkos::parallel_for(name,
+        Kokkos::RangePolicy<Default_exec>(0, ncol),
+        KOKKOS_LAMBDA(const int icol)
+        {
+            for (int j=0; j<nsweep; ++j)
+                kernel(j, icol);
+        });
+    #else
+    // Blocks wide enough to fill the vector units -- a handful of vector widths of
+    // doubles -- but no wider, so that at modest column counts there are still enough
+    // blocks to keep every thread busy.
+    constexpr int min_block = 16;
+    const int nthread = Default_exec().concurrency();
+    const int block = std::max(min_block, (ncol + nthread - 1)/nthread);
+    const int nblock = (ncol + block - 1)/block;
+
+    Kokkos::parallel_for(name,
+        Kokkos::RangePolicy<Default_exec>(0, nblock),
+        KOKKOS_LAMBDA(const int iblock)
+        {
+            const int cstart = iblock*block;
+            const int cend = (cstart + block < ncol) ? cstart + block : ncol;
+
+            for (int j=0; j<nsweep; ++j)
+                RTE3D_IVDEP
+                for (int icol=cstart; icol<cend; ++icol)
+                    kernel(j, icol);
+        });
+    #endif
 }
 
 
@@ -217,6 +253,24 @@ using Array_map_2d = Kokkos::View<T**, Kokkos::LayoutRight, Default_exec::memory
 
 template<typename T>
 using Array_map_3d = Kokkos::View<T***, Kokkos::LayoutRight, Default_exec::memory_space, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::Restrict>>;
+
+
+// One index along the slowest-varying dimension of a spectrally resolved array, as an
+// unmanaged slice. The solvers work on a single g-point, so this is how a caller that
+// still holds an (ngpt, ...) array hands them one. Spelled with the raw pointer rather
+// than Kokkos::subview so the result is exactly an Array_map_*, Restrict included;
+// LayoutRight makes the slice contiguous.
+template<typename T>
+inline Array_map_2d<T> slice_2d(const Array_3d<T>& v, const int i)
+{
+    return Array_map_2d<T>(v.data() + std::size_t(i)*v.extent(1)*v.extent(2), v.extent(1), v.extent(2));
+}
+
+template<typename T>
+inline Array_map_1d<T> slice_1d(const Array_2d<T>& v, const int i)
+{
+    return Array_map_1d<T>(v.data() + std::size_t(i)*v.extent(1), v.extent(1));
+}
 
 // Pinned on GPU so device <-> host transfers are fast and async-capable.
 #if defined(USECUDA)

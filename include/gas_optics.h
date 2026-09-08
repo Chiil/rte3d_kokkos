@@ -230,7 +230,7 @@ namespace Gas_optics
             const Array_1d<const TF>& tsfc,     // (ncol)
             const Array_2d<const TF>& col_dry,  // (nlay, ncol), may be empty
             const Array_3d<TF>& tau,            // (ngpt, nlay, ncol)
-            const Source_func_lw& sources);
+            const Source_func_lw_spectral& sources);
 
     // Full shortwave gas optics. tau is the total extinction and ssa the fraction of
     // it that is Rayleigh scattering; g is left to the caller to zero, as the
@@ -255,8 +255,8 @@ namespace Gas_optics
             const Array_3d<TF>& tau_rayleigh);   // (ngpt, nlay, ncol)
 
     // Planck sources at layer centres, layer edges and the surface, plus the
-    // surface-temperature Jacobian. Fills the same Source_func_lw the longwave
-    // solvers consume. Reference: compute_Planck_source.
+    // surface-temperature Jacobian. Reference: compute_Planck_source. The longwave
+    // solvers take one g-point at a time, so they consume Source_func_lw_spectral::gpt.
     void compute_planck_source(
             const Kdist_gas& k,
             const Interp_state& state,
@@ -264,7 +264,7 @@ namespace Gas_optics
             const Array_2d<const TF>& tlev,      // (nlev, ncol)
             const Array_1d<const TF>& tsfc,      // (ncol)
             const int sfc_lay,                   // 0-based layer adjacent to the surface
-            const Source_func_lw& sources);
+            const Source_func_lw_spectral& sources);
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via

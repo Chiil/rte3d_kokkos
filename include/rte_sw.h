@@ -5,18 +5,19 @@
 
 // Shortwave RTE solvers. Free functions on plain Views: no solver object, no state.
 //
-// Array convention throughout: (ngpt, nlay, ncol) or (ngpt, nlev, ncol) with
-// nlev = nlay+1, row-major, column fastest-varying. mu0 is (nlay, ncol) and the
-// boundary conditions are (ngpt, ncol).
+// Every solver works on a single g-point, so arrays are (nlay, ncol) or (nlev, ncol)
+// with nlev = nlay+1, row-major, column fastest-varying, and the boundary conditions
+// are (ncol). mu0 is (nlay, ncol) and shared by every g-point. The caller loops
+// g-points and accumulates; nothing here carries a g-point dimension.
 namespace Rte_sw
 {
     // Direct beam only, no scattering. Reference: sw_solver_noscat.
     void solver_noscat(
             const bool top_at_1,
-            const Array_3d<const TF>& tau,          // (ngpt, nlay, ncol)
-            const Array_2d<const TF>& mu0,          // (nlay, ncol)
-            const Array_2d<const TF>& inc_flux_dir, // (ngpt, ncol)
-            const Array_3d<TF>& flux_dir);          // (ngpt, nlev, ncol)
+            const Array_map_2d<const TF>& tau,          // (nlay, ncol)
+            const Array_map_2d<const TF>& mu0,          // (nlay, ncol)
+            const Array_map_1d<const TF>& inc_flux_dir, // (ncol)
+            const Array_map_2d<TF>& flux_dir);          // (nlev, ncol)
 
     // Two-stream with scattering. Reference: sw_solver_2stream.
     //
@@ -25,17 +26,17 @@ namespace Rte_sw
     // boundary condition.
     void solver_2stream(
             const bool top_at_1,
-            const Array_3d<const TF>& tau,          // (ngpt, nlay, ncol)
-            const Array_3d<const TF>& ssa,          // (ngpt, nlay, ncol)
-            const Array_3d<const TF>& g,            // (ngpt, nlay, ncol)
-            const Array_2d<const TF>& mu0,          // (nlay, ncol)
-            const Array_2d<const TF>& sfc_alb_dir,  // (ngpt, ncol)
-            const Array_2d<const TF>& sfc_alb_dif,  // (ngpt, ncol)
-            const Array_2d<const TF>& inc_flux_dir, // (ngpt, ncol)
-            const Array_2d<const TF>& inc_flux_dif, // (ngpt, ncol), may be empty
-            const Array_3d<TF>& flux_up,            // (ngpt, nlev, ncol)
-            const Array_3d<TF>& flux_dn,            // (ngpt, nlev, ncol)
-            const Array_3d<TF>& flux_dir);          // (ngpt, nlev, ncol)
+            const Array_map_2d<const TF>& tau,          // (nlay, ncol)
+            const Array_map_2d<const TF>& ssa,          // (nlay, ncol)
+            const Array_map_2d<const TF>& g,            // (nlay, ncol)
+            const Array_map_2d<const TF>& mu0,          // (nlay, ncol)
+            const Array_map_1d<const TF>& sfc_alb_dir,  // (ncol)
+            const Array_map_1d<const TF>& sfc_alb_dif,  // (ncol)
+            const Array_map_1d<const TF>& inc_flux_dir, // (ncol)
+            const Array_map_1d<const TF>& inc_flux_dif, // (ncol), may be empty
+            const Array_map_2d<TF>& flux_up,            // (nlev, ncol)
+            const Array_map_2d<TF>& flux_dn,            // (nlev, ncol)
+            const Array_map_2d<TF>& flux_dir);          // (nlev, ncol)
 
     void init_python_bindings(py::module_& m);
 }

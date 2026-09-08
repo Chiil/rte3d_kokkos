@@ -143,74 +143,93 @@ namespace Rte_kernels
     // Shonk and Hogan 2008, doi:10.1175/2007JCLI1940.1 (SH08). Shared by longwave and
     // shortwave. Reference: adding in mo_rte_solver_kernels.F90.
     //
-    // Runs entirely inside one (igpt, icol) thread: two sequential sweeps over the
-    // column, so albedo, src and denom are per-column scratch.
-    template<bool top_at_1, typename Albedo, typename Src, typename Denom>
-    KOKKOS_INLINE_FUNCTION
-    void adding_column(
-            const int igpt, const int icol, const int nlay,
-            const TF albedo_sfc,
-            const Array_3d<const TF>& rdif, const Array_3d<const TF>& tdif,
-            const Array_3d<const TF>& src_dn, const Array_3d<const TF>& src_up,
-            const TF src_sfc,
-            const Array_3d<TF>& flux_up, const Array_3d<TF>& flux_dn,
-            const Albedo& albedo, const Src& src, const Denom& denom)
+    // Two sequential sweeps over the column, issued separately so
+    // parallel_for_column_sweep can pick the loop nesting the backend wants. Each
+    // sweep applies its own starting condition at j == 0 rather than in a launch of
+    // its own: the branch is invariant in the vectorized column loop, and at modest
+    // column counts the saved parallel regions are worth more than the branch costs.
+    //
+    // albedo, src and denom carry state between the sweeps and are (nlev, ncol) or
+    // (nlay, ncol) scratch. flux_dn_toa is the incident diffuse flux, and may be empty
+    // for a zero boundary condition.
+    template<bool top_at_1>
+    inline void adding(
+            const int nlay, const int ncol,
+            const Array_map_1d<const TF>& albedo_sfc,   // (ncol)
+            const Array_map_1d<const TF>& src_sfc,      // (ncol)
+            const Array_map_1d<const TF>& flux_dn_toa,  // (ncol), may be empty
+            const Array_map_2d<const TF>& rdif, const Array_map_2d<const TF>& tdif,
+            const Array_map_2d<const TF>& src_dn, const Array_map_2d<const TF>& src_up,
+            const Array_map_2d<TF>& flux_up, const Array_map_2d<TF>& flux_dn,
+            const Array_2d<TF>& albedo, const Array_2d<TF>& src, const Array_2d<TF>& denom)
     {
         using V = Vert<top_at_1>;
 
-        // Reflectivity to diffuse radiation below this level (alpha in SH08) and the
-        // source of diffuse upwelling radiation (G in SH08) start at the surface.
-        albedo(igpt, V::lev_sfc(nlay), icol) = albedo_sfc;
-        src   (igpt, V::lev_sfc(nlay), icol) = src_sfc;
+        const int lev_sfc = V::lev_sfc(nlay);
+        const int lev_toa = V::lev_toa(nlay);
+        const bool has_dif_bc = flux_dn_toa.size() > 0;
 
-        // From the surface upward, accumulate albedo and the source of upward radiation.
-        for (int j=0; j<nlay; ++j)
-        {
-            const int ilay = V::lay_from_sfc(j, nlay);
-            const int lev_above = ilay + V::lev_up();
-            const int lev_below = ilay + V::lev_dn();
+        // From the surface upward, accumulate the reflectivity to diffuse radiation
+        // below each level (alpha in SH08) and the source of diffuse upwelling
+        // radiation (G in SH08), both of which start at the surface.
+        parallel_for_column_sweep("adding_up", nlay, ncol,
+            KOKKOS_LAMBDA(const int j, const int icol)
+            {
+                if (j == 0)
+                {
+                    albedo(lev_sfc, icol) = albedo_sfc(icol);
+                    src   (lev_sfc, icol) = src_sfc(icol);
+                }
 
-            const TF rdif_l = rdif(igpt, ilay, icol);
-            const TF tdif_l = tdif(igpt, ilay, icol);
+                const int ilay = V::lay_from_sfc(j, nlay);
+                const int lev_above = ilay + V::lev_up();
+                const int lev_below = ilay + V::lev_dn();
 
-            const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo(igpt, lev_below, icol));  // Eq 10
-            denom(igpt, ilay, icol) = denom_l;
+                const TF rdif_l = rdif(ilay, icol);
+                const TF tdif_l = tdif(ilay, icol);
+                const TF albedo_below = albedo(lev_below, icol);
 
-            albedo(igpt, lev_above, icol) =
-                    rdif_l + tdif_l*tdif_l * albedo(igpt, lev_below, icol) * denom_l;  // Eq 9
+                const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_below);  // Eq 10
+                denom(ilay, icol) = denom_l;
 
-            // Eq 11: upward emission at the top of the layer, plus radiation emitted at
-            // the bottom, transmitted through and reflected from the layers below.
-            src(igpt, lev_above, icol) =
-                    src_up(igpt, ilay, icol)
-                    + tdif_l * denom_l * (src(igpt, lev_below, icol)
-                                          + albedo(igpt, lev_below, icol) * src_dn(igpt, ilay, icol));
-        }
+                albedo(lev_above, icol) = rdif_l + tdif_l*tdif_l * albedo_below * denom_l;  // Eq 9
 
-        // Eq 12 at the top of the domain: reflection of the incident diffuse flux plus
-        // emission from below.
-        {
-            const int lev = V::lev_toa(nlay);
-            flux_up(igpt, lev, icol) = flux_dn(igpt, lev, icol) * albedo(igpt, lev, icol)
-                                     + src(igpt, lev, icol);
-        }
+                // Eq 11: upward emission at the top of the layer, plus radiation emitted
+                // at the bottom, transmitted through and reflected from the layers below.
+                src(lev_above, icol) =
+                        src_up(ilay, icol)
+                        + tdif_l * denom_l * (src(lev_below, icol)
+                                              + albedo_below * src_dn(ilay, icol));
+            });
 
         // From the top of the atmosphere downward, compute the fluxes.
-        for (int j=0; j<nlay; ++j)
-        {
-            const int ilay = V::lay_from_toa(j, nlay);
-            const int lev_prev = ilay + V::lev_up();
-            const int lev_dst  = ilay + V::lev_dn();
+        parallel_for_column_sweep("adding_dn", nlay, ncol,
+            KOKKOS_LAMBDA(const int j, const int icol)
+            {
+                if (j == 0)
+                {
+                    // Eq 12 at the top of the domain: reflection of the incident
+                    // diffuse flux plus emission from below.
+                    const TF flux_dn_l = has_dif_bc ? flux_dn_toa(icol) : TF(0.);
 
-            flux_dn(igpt, lev_dst, icol) =                                       // Eq 13
-                    (tdif(igpt, ilay, icol) * flux_dn(igpt, lev_prev, icol)
-                     + rdif(igpt, ilay, icol) * src(igpt, lev_dst, icol)
-                     + src_dn(igpt, ilay, icol)) * denom(igpt, ilay, icol);
+                    flux_dn(lev_toa, icol) = flux_dn_l;
+                    flux_up(lev_toa, icol) = flux_dn_l * albedo(lev_toa, icol)
+                                           + src(lev_toa, icol);
+                }
 
-            flux_up(igpt, lev_dst, icol) =                                       // Eq 12
-                    flux_dn(igpt, lev_dst, icol) * albedo(igpt, lev_dst, icol)
-                    + src(igpt, lev_dst, icol);
-        }
+                const int ilay = V::lay_from_toa(j, nlay);
+                const int lev_prev = ilay + V::lev_up();
+                const int lev_dst  = ilay + V::lev_dn();
+
+                const TF flux_dn_l =                                          // Eq 13
+                        (tdif(ilay, icol) * flux_dn(lev_prev, icol)
+                         + rdif(ilay, icol) * src(lev_dst, icol)
+                         + src_dn(ilay, icol)) * denom(ilay, icol);
+
+                flux_dn(lev_dst, icol) = flux_dn_l;
+                flux_up(lev_dst, icol) = flux_dn_l * albedo(lev_dst, icol)     // Eq 12
+                                       + src(lev_dst, icol);
+            });
     }
 
 

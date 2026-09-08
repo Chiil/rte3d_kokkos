@@ -2,41 +2,38 @@
 #include "rte_solver_kernels.h"
 
 using Rte_kernels::Vert;
-using Rte_kernels::adding_column;
+using Rte_kernels::adding;
 
 
 namespace
 {
     template<bool top_at_1>
     void solver_noscat_impl(
-            const Array_3d<const TF>& tau,
-            const Array_2d<const TF>& mu0,
-            const Array_2d<const TF>& inc_flux_dir,
-            const Array_3d<TF>& flux_dir)
+            const Array_map_2d<const TF>& tau,
+            const Array_map_2d<const TF>& mu0,
+            const Array_map_1d<const TF>& inc_flux_dir,
+            const Array_map_2d<TF>& flux_dir)
     {
         using V = Vert<top_at_1>;
 
-        const int ngpt = static_cast<int>(tau.extent(0));
-        const int nlay = static_cast<int>(tau.extent(1));
-        const int ncol = static_cast<int>(tau.extent(2));
+        const int nlay = static_cast<int>(tau.extent(0));
+        const int ncol = static_cast<int>(tau.extent(1));
 
-        parallel_for_gpt_col("sw_solver_noscat", ngpt, ncol,
-            KOKKOS_LAMBDA(const int igpt, const int icol)
+        const int lev_toa = V::lev_toa(nlay);
+        const int lay_toa = V::lay_from_toa(0, nlay);
+
+        parallel_for_column_sweep("sw_noscat_transport", nlay, ncol,
+            KOKKOS_LAMBDA(const int j, const int icol)
             {
-                const int lay_toa = V::lay_from_toa(0, nlay);
-                flux_dir(igpt, V::lev_toa(nlay), icol) = inc_flux_dir(igpt, icol) * mu0(lay_toa, icol);
+                if (j == 0)
+                    flux_dir(lev_toa, icol) = inc_flux_dir(icol) * mu0(lay_toa, icol);
 
-                for (int j=0; j<nlay; ++j)
-                {
-                    const int ilay = V::lay_from_toa(j, nlay);
-                    flux_dir(igpt, ilay + V::lev_dn(), icol) =
-                            flux_dir(igpt, ilay + V::lev_up(), icol)
-                            * Kokkos::exp(-tau(igpt, ilay, icol) / mu0(ilay, icol));
-                }
+                const int ilay = V::lay_from_toa(j, nlay);
+                flux_dir(ilay + V::lev_dn(), icol) =
+                        flux_dir(ilay + V::lev_up(), icol)
+                        * Kokkos::exp(-tau(ilay, icol) / mu0(ilay, icol));
             });
     }
-
-
 }
 
 
@@ -44,96 +41,100 @@ namespace
 {
     template<bool top_at_1>
     void solver_2stream_impl(
-            const Array_3d<const TF>& tau,
-            const Array_3d<const TF>& ssa,
-            const Array_3d<const TF>& g,
-            const Array_2d<const TF>& mu0,
-            const Array_2d<const TF>& sfc_alb_dir,
-            const Array_2d<const TF>& sfc_alb_dif,
-            const Array_2d<const TF>& inc_flux_dir,
-            const Array_2d<const TF>& inc_flux_dif,
-            const Array_3d<TF>& flux_up,
-            const Array_3d<TF>& flux_dn,
-            const Array_3d<TF>& flux_dir)
+            const Array_map_2d<const TF>& tau,
+            const Array_map_2d<const TF>& ssa,
+            const Array_map_2d<const TF>& g,
+            const Array_map_2d<const TF>& mu0,
+            const Array_map_1d<const TF>& sfc_alb_dir,
+            const Array_map_1d<const TF>& sfc_alb_dif,
+            const Array_map_1d<const TF>& inc_flux_dir,
+            const Array_map_1d<const TF>& inc_flux_dif,
+            const Array_map_2d<TF>& flux_up,
+            const Array_map_2d<TF>& flux_dn,
+            const Array_map_2d<TF>& flux_dir)
     {
         using V = Vert<top_at_1>;
 
-        const int ngpt = static_cast<int>(tau.extent(0));
-        const int nlay = static_cast<int>(tau.extent(1));
-        const int ncol = static_cast<int>(tau.extent(2));
+        const int nlay = static_cast<int>(tau.extent(0));
+        const int ncol = static_cast<int>(tau.extent(1));
         const int nlev = nlay + 1;
 
-        const bool has_dif_bc = inc_flux_dif.size() > 0;
+        // One g-point's worth of scratch: (nlay, ncol) whatever the spectral
+        // resolution, which is what makes the solver fit on a GPU.
+        Array_2d<TF> Rdif(Kokkos::view_alloc("Rdif", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> Tdif(Kokkos::view_alloc("Tdif", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> Rdir(Kokkos::view_alloc("Rdir", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> Tdir(Kokkos::view_alloc("Tdir", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> Tnoscat(Kokkos::view_alloc("Tnoscat", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> source_up(Kokkos::view_alloc("source_up", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> source_dn(Kokkos::view_alloc("source_dn", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_2d<TF> albedo(Kokkos::view_alloc("albedo", Kokkos::WithoutInitializing), nlev, ncol);
+        Array_2d<TF> src(Kokkos::view_alloc("src", Kokkos::WithoutInitializing), nlev, ncol);
+        Array_2d<TF> denom(Kokkos::view_alloc("denom", Kokkos::WithoutInitializing), nlay, ncol);
+        Array_1d<TF> src_sfc(Kokkos::view_alloc("src_sfc", Kokkos::WithoutInitializing), ncol);
 
-        // The reference loops g-points serially and keeps (ncol, nlay) scratch. We run
-        // them in parallel, so the scratch carries a g-point dimension. That is what
-        // buys a single CPU/GPU code path; the cost is ~7 arrays of (ngpt, nlay, ncol),
-        // which for large column counts will want g-point blocking later.
-        Array_3d<TF> Rdif(Kokkos::view_alloc("Rdif", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
-        Array_3d<TF> Tdif(Kokkos::view_alloc("Tdif", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
-        Array_3d<TF> source_up(Kokkos::view_alloc("source_up", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
-        Array_3d<TF> source_dn(Kokkos::view_alloc("source_dn", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
-        Array_3d<TF> albedo(Kokkos::view_alloc("albedo", Kokkos::WithoutInitializing), ngpt, nlev, ncol);
-        Array_3d<TF> src(Kokkos::view_alloc("src", Kokkos::WithoutInitializing), ngpt, nlev, ncol);
-        Array_3d<TF> denom(Kokkos::view_alloc("denom", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
-
-        const Array_3d<const TF> Rdif_c = Rdif;
-        const Array_3d<const TF> Tdif_c = Tdif;
-        const Array_3d<const TF> source_up_c = source_up;
-        const Array_3d<const TF> source_dn_c = source_dn;
-
-        parallel_for_gpt_col("sw_solver_2stream", ngpt, ncol,
-            KOKKOS_LAMBDA(const int igpt, const int icol)
+        // Cell properties. Layers are independent, so this is parallel over
+        // (layer, column); only the direct beam below needs a sweep.
+        parallel_for_2d("sw_2stream_cell", {0, 0}, {nlay, ncol},
+            KOKKOS_LAMBDA(const int ilay, const int icol)
             {
-                const int lev_toa = V::lev_toa(nlay);
+                TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
+                Rte_kernels::sw_two_stream(
+                        tau(ilay, icol), ssa(ilay, icol), g(ilay, icol), mu0(ilay, icol),
+                        Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l);
 
-                // Boundary conditions: the direct beam, and the diffuse field using
-                // zero when no condition is supplied.
-                flux_dir(igpt, lev_toa, icol) =
-                        inc_flux_dir(igpt, icol) * mu0(V::lay_from_toa(0, nlay), icol);
-                flux_dn(igpt, lev_toa, icol) = has_dif_bc ? inc_flux_dif(igpt, icol) : TF(0.);
+                Rdif(ilay, icol) = Rdif_l;
+                Tdif(ilay, icol) = Tdif_l;
+                Rdir(ilay, icol) = Rdir_l;
+                Tdir(ilay, icol) = Tdir_l;
+                Tnoscat(ilay, icol) = Tnoscat_l;
+            });
 
-                // Cell properties, and the direct beam attenuating downward.
-                for (int j=0; j<nlay; ++j)
-                {
-                    const int ilay = V::lay_from_toa(j, nlay);
-                    const TF mu0_l = mu0(ilay, icol);
+        const int lev_toa = V::lev_toa(nlay);
+        const int lay_toa = V::lay_from_toa(0, nlay);
+        const int lev_sfc = V::lev_sfc(nlay);
+        const int lay_sfc = V::lay_from_sfc(0, nlay);
 
-                    TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
-                    Rte_kernels::sw_two_stream(
-                            tau(igpt, ilay, icol), ssa(igpt, ilay, icol), g(igpt, ilay, icol), mu0_l,
-                            Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l);
+        // The direct beam attenuating downward, and the diffuse sources it feeds. The
+        // beam's boundary condition at the top and the surface source it leaves behind
+        // ride along at the ends of the sweep, saving two parallel regions.
+        parallel_for_column_sweep("sw_2stream_direct", nlay, ncol,
+            KOKKOS_LAMBDA(const int j, const int icol)
+            {
+                if (j == 0)
+                    flux_dir(lev_toa, icol) = inc_flux_dir(icol) * mu0(lay_toa, icol);
 
-                    Rdif(igpt, ilay, icol) = Rdif_l;
-                    Tdif(igpt, ilay, icol) = Tdif_l;
+                const int ilay = V::lay_from_toa(j, nlay);
+                const TF dir_inc = flux_dir(ilay + V::lev_up(), icol);
 
-                    const TF dir_inc = flux_dir(igpt, ilay + V::lev_up(), icol);
+                // T and R for the direct beam were computed with a nominal mu0 even
+                // where the sun is below the horizon; zero those out again.
+                const bool sunlit = mu0(ilay, icol) > TF(0.);
+                source_up(ilay, icol) = sunlit ? Rdir(ilay, icol) * dir_inc : TF(0.);
+                source_dn(ilay, icol) = sunlit ? Tdir(ilay, icol) * dir_inc : TF(0.);
 
-                    // T and R for the direct beam were computed with a nominal mu0 even
-                    // where the sun is below the horizon; zero those out again.
-                    const bool sunlit = mu0_l > TF(0.);
-                    source_up(igpt, ilay, icol) = sunlit ? Rdir_l * dir_inc : TF(0.);
-                    source_dn(igpt, ilay, icol) = sunlit ? Tdir_l * dir_inc : TF(0.);
+                flux_dir(ilay + V::lev_dn(), icol) = Tnoscat(ilay, icol) * dir_inc;
 
-                    flux_dir(igpt, ilay + V::lev_dn(), icol) = Tnoscat_l * dir_inc;
-                }
+                // Source for upward radiation at the surface, now that the beam has
+                // reached it.
+                if (j == nlay-1)
+                    src_sfc(icol) = mu0(lay_sfc, icol) > TF(0.)
+                            ? flux_dir(lev_sfc, icol) * sfc_alb_dir(icol)
+                            : TF(0.);
+            });
 
-                // Source for upward radiation at the surface.
-                const int lay_sfc = V::lay_from_sfc(0, nlay);
-                const TF source_sfc = mu0(lay_sfc, icol) > TF(0.)
-                        ? flux_dir(igpt, V::lev_sfc(nlay), icol) * sfc_alb_dir(igpt, icol)
-                        : TF(0.);
+        adding<top_at_1>(
+                nlay, ncol,
+                sfc_alb_dif, src_sfc, inc_flux_dif,
+                Rdif, Tdif, source_dn, source_up,
+                flux_up, flux_dn,
+                albedo, src, denom);
 
-                adding_column<top_at_1>(
-                        igpt, icol, nlay,
-                        sfc_alb_dif(igpt, icol),
-                        Rdif_c, Tdif_c, source_dn_c, source_up_c, source_sfc,
-                        flux_up, flux_dn,
-                        albedo, src, denom);
-
-                // adding() computes only the diffuse flux; flux_dn is the total.
-                for (int ilev=0; ilev<nlev; ++ilev)
-                    flux_dn(igpt, ilev, icol) += flux_dir(igpt, ilev, icol);
+        // adding() computes only the diffuse flux; flux_dn is the total.
+        parallel_for_2d("sw_2stream_total", {0, 0}, {nlev, ncol},
+            KOKKOS_LAMBDA(const int ilev, const int icol)
+            {
+                flux_dn(ilev, icol) += flux_dir(ilev, icol);
             });
     }
 }
@@ -141,10 +142,10 @@ namespace
 
 void Rte_sw::solver_noscat(
         const bool top_at_1,
-        const Array_3d<const TF>& tau,
-        const Array_2d<const TF>& mu0,
-        const Array_2d<const TF>& inc_flux_dir,
-        const Array_3d<TF>& flux_dir)
+        const Array_map_2d<const TF>& tau,
+        const Array_map_2d<const TF>& mu0,
+        const Array_map_1d<const TF>& inc_flux_dir,
+        const Array_map_2d<TF>& flux_dir)
 {
     if (top_at_1)
         solver_noscat_impl<true>(tau, mu0, inc_flux_dir, flux_dir);
@@ -155,17 +156,17 @@ void Rte_sw::solver_noscat(
 
 void Rte_sw::solver_2stream(
         const bool top_at_1,
-        const Array_3d<const TF>& tau,
-        const Array_3d<const TF>& ssa,
-        const Array_3d<const TF>& g,
-        const Array_2d<const TF>& mu0,
-        const Array_2d<const TF>& sfc_alb_dir,
-        const Array_2d<const TF>& sfc_alb_dif,
-        const Array_2d<const TF>& inc_flux_dir,
-        const Array_2d<const TF>& inc_flux_dif,
-        const Array_3d<TF>& flux_up,
-        const Array_3d<TF>& flux_dn,
-        const Array_3d<TF>& flux_dir)
+        const Array_map_2d<const TF>& tau,
+        const Array_map_2d<const TF>& ssa,
+        const Array_map_2d<const TF>& g,
+        const Array_map_2d<const TF>& mu0,
+        const Array_map_1d<const TF>& sfc_alb_dir,
+        const Array_map_1d<const TF>& sfc_alb_dif,
+        const Array_map_1d<const TF>& inc_flux_dir,
+        const Array_map_1d<const TF>& inc_flux_dif,
+        const Array_map_2d<TF>& flux_up,
+        const Array_map_2d<TF>& flux_dn,
+        const Array_map_2d<TF>& flux_dir)
 {
     if (top_at_1)
         solver_2stream_impl<true>(

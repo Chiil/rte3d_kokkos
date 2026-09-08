@@ -267,7 +267,7 @@ void Gas_optics::init_python_bindings(py::module_& m)
                     Numpy::to_device_3d<TF>(col_gas, "col_gas"), state);
 
             const auto no_init = Kokkos::WithoutInitializing;
-            Source_func_lw sources;
+            Source_func_lw_spectral sources;
             sources.lay_source = Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol);
             sources.lev_source = Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol);
             sources.sfc_source = Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol);
@@ -296,5 +296,5 @@ void Gas_optics::init_python_bindings(py::module_& m)
         py::arg("sfc_lay"), py::arg("col_gas"),
         "Interpolate and compute the Planck sources. sfc_lay is 0-based. Returns a "
         "dict with lay_source, lev_source, sfc_source and sfc_source_jac, in the "
-        "layouts Source_func_lw uses.");
+        "layouts Source_func_lw_spectral uses.");
 }

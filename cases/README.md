@@ -87,9 +87,11 @@ OMP_NUM_THREADS=1 python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran
 | `--compare-fortran` | off | also time the reference Fortran kernels and report the ratio. Needs `RTE3D_FORTRAN_REF`. |
 | `--input PATH` | the copy in `rte-rrtmgp-cpp` | where `rcemip_input.nc` lives |
 
-**Memory.** The two-stream solver keeps about seven `(ngpt, nlay, ncol)` scratch
-arrays, so the longwave needs roughly 3.7 GB at `--ncol 1024` and about 15 GB at the
-full 4096. Start small and work up.
+**Memory.** The solvers work one g-point at a time, so their scratch is `(nlay, ncol)`
+and costs nothing at spectral resolution. What is left is gas optics and the fluxes,
+which still carry a g-point dimension: about 14 GB at the full `--ncol 4096` in the
+longwave, roughly a third of it the returned `(ngpt, nlev, ncol)` fluxes. That goes
+when gas optics moves into the same per-g-point loop.
 
 ### What `--compare-fortran` actually times
 
@@ -116,28 +118,30 @@ Longwave, 256 columns x 256 layers, double precision, 15-core Apple Silicon:
 
 | | clang | gcc-16 | reference (gfortran) |
 |---|---|---|---|
-| 1 thread, total | 863 ms | 922 ms | **303 ms** |
-| &nbsp;&nbsp;gas optics | 306 ms | 366 ms | |
-| &nbsp;&nbsp;transport | 555 ms | 557 ms | |
-| 15 threads, total | 117 ms | 126 ms | |
+| 1 thread, total | 363 ms | 434 ms | **295 ms** |
+| &nbsp;&nbsp;gas optics | 304 ms | 367 ms | |
+| &nbsp;&nbsp;transport | 60 ms | 67 ms | |
+| 15 threads, total | 131 ms | | |
 
-Two things to read off this.
+Transport used to be 555 ms of that single-threaded total, two thirds of the runtime.
+Each `(g-point, column)` pair ran an entire sequential vertical recurrence, which suits
+a GPU but leaves the column loop with a single iteration's worth of independent work no
+matter what `ivdep` asserts. Solving one g-point at a time restores the reference's
+structure -- layer outside, `ncol` innermost -- and the recurrences now vectorize over
+columns: a 9x improvement, and gas optics is what remains of the gap.
 
-**Per thread, rte3d is about 3x slower than the reference**, and roughly two thirds of
-the time is transport. Threading recovers 7.4x of the 15 cores, about 49% efficiency,
-which puts the 15-thread build ~2.5x ahead of serial Fortran.
+Two things this has not fixed.
 
-**The compiler is not the reason.** gcc accepts `#pragma GCC ivdep` where clang reports
-through `-Wpass-failed` that it cannot vectorise, but the two produce transport times
-within 0.4% of each other. There is genuinely nothing to vectorise: each `(g-point,
-column)` pair runs an entire sequential vertical recurrence, which suits a GPU and
-leaves the column loop with a single iteration's worth of independent work no matter
-what the pragma asserts.
+**Threaded runs at small column counts are launch-bound.** Each g-point issues four or
+five parallel regions of only `ncol` work each, so at `--ncol 256` on 15 threads
+transport is slower than it is on one thread. It pays off from a few thousand columns
+up; the structural fix is to parallelize over g-points on the host, which belongs with
+the same change that moves the g-point loop into the frontend.
 
-The fix is to restructure rather than to re-flag: split the per-layer algebra into a
-`parallel_for_3d` over `(g-point, layer, column)`, which is most of the arithmetic and
-is fully parallel, and keep only the recurrences in the per-column kernel. The same
-change fixes the memory ceiling above. Neither is done yet.
+**Large column counts are cache-bound.** At `--ncol 4096` a single g-point's working set
+is already ~80 MB, so each of the sweeps re-reads it from memory. Blocking the whole
+solver over columns, rather than each sweep separately, would keep it resident; it has
+not been tried.
 
 Both builds agree with the reference to 1e-13 W/m2, so none of this is bought with
 accuracy.
