@@ -46,10 +46,9 @@ Step 2a complete: all four RRTMGP gas-optics kernels -- `interpolation`,
 (`include/gas_optics.h`). The Planck kernel fills the same `Source_func_lw` the
 longwave solvers already take, so the two halves compose directly.
 
-Step 2b in progress. `Gas_concs`, `compute_col_dry` and `compute_col_gas` are done
-(`include/gas_concs.h`, `include/gas_optics.h`). Next: the k-distribution reduction,
-then the frontend that orchestrates the kernels, then reading coefficient files with
-xarray.
+Step 2b in progress. `Gas_concs`, `compute_col_dry`, `compute_col_gas` and the
+k-distribution reduction (`Gas_optics::load`) are done. Next: the frontend that
+orchestrates the four kernels, then reading coefficient files with xarray.
 
 ### Where gas names live
 
@@ -127,6 +126,14 @@ Switches, following MicroHH:
 - `-DCMAKE_BUILD_TYPE=DEBUG`
 
 ## Testing
+
+The reduction inside `ty_gas_optics_rrtmgp%load` has no `bind(C)` entry point, so
+`tests/build_reference.sh` builds a second library from `tests/shim/rte3d_shim.F90`,
+which exposes it. Python reads the coefficient file once and hands the same raw arrays
+to both implementations. To let the shim read the reduced arrays, the build compiles a
+*copy* of `mo_gas_optics_rrtmgp.F90` with the type's `private` relaxed; the reference
+source is never modified.
+
 
 ```bash
 export RTE3D_PYTHON_PATH=$PWD/build/main_python

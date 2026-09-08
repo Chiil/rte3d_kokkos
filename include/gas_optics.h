@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "gas_concs.h"
 #include "source_functions.h"
 #include "types.h"
@@ -47,7 +50,7 @@ struct Minor_absorbers
     Array_1d<Bool> scales_with_density;  // (nminor)
     Array_1d<Bool> scale_by_complement;  // (nminor)
     Array_1d<int> idx_minor;             // (nminor) index into the gas dimension of col_gas
-    Array_1d<int> idx_minor_scaling;     // (nminor) second gas affecting absorption, 0 for none
+    Array_1d<int> idx_minor_scaling;     // (nminor) second gas affecting absorption, -1 for none
     Array_1d<int> kminor_start;          // (nminor) 0-based start in kminor
 
     Array_1d<int> gpt_offset;            // (ngpt+1) CSR row offsets
@@ -60,11 +63,58 @@ struct Minor_absorbers
 };
 
 
+// The raw contents of a coefficient file, before reduction. Python fills this from
+// the NetCDF; nothing here has been matched against the host's gas list yet.
+//
+// Index conventions follow the file, which means Fortran's: key_species, band2gpt,
+// minor_limits_gpt and kminor_start are all 1-based. Gas_optics::load converts.
+struct Kdist_file
+{
+    std::vector<std::string> gas_names;                                // (ngas_file)
+    std::vector<std::string> gas_minor, identifier_minor;              // (n_minor_absorbers)
+    std::vector<std::string> minor_gases_lower, minor_gases_upper;     // (nminor_*)
+    std::vector<std::string> scaling_gas_lower, scaling_gas_upper;     // (nminor_*)
+
+    Array_3d_h<int> key_species;      // (nbnd, 2, 2)
+    Array_2d_h<int> band2gpt;         // (nbnd, 2)
+    Array_1d_h<TF> press_ref;         // (npres)
+    Array_1d_h<TF> temp_ref;          // (ntemp)
+    TF press_ref_trop = TF(0.);
+    TF temp_ref_p = TF(0.);
+    TF temp_ref_t = TF(0.);
+    Array_3d_h<TF> vmr_ref;           // (ntemp, ngas_file+1, 2)
+    Array_4d_h<TF> kmajor;            // (ngpt, npres+1, neta, ntemp)
+
+    Array_3d_h<TF> kminor_lower, kminor_upper;                 // (ncontrib, neta, ntemp)
+    Array_2d_h<int> minor_limits_gpt_lower, minor_limits_gpt_upper;   // (nminor, 2)
+    Array_1d_h<Bool> minor_scales_with_density_lower, minor_scales_with_density_upper;
+    Array_1d_h<Bool> scale_by_complement_lower, scale_by_complement_upper;
+    Array_1d_h<int> kminor_start_lower, kminor_start_upper;    // (nminor)
+
+    // Longwave only.
+    Array_2d_h<TF> totplnk;           // (nbnd, nplancktemp)
+    Array_4d_h<TF> planck_frac;       // (ngpt, npres+1, neta, ntemp)
+
+    // Shortwave only.
+    Array_4d_h<TF> rayl;              // (2, ngpt, neta, ntemp), empty if absent
+};
+
+
 // The gas-optics k-distribution: everything read from the coefficient file that the
 // optical depth kernels need.
+//
+// Never capture this whole struct in a KOKKOS_LAMBDA: gas_names is a host container.
+// Capture the individual Views, or the Minor_absorbers, as the kernels do.
 struct Kdist_gas
 {
+    // The gases this k-distribution was reduced to, in the order the gas dimension of
+    // col_gas uses. Index 0 of that dimension is dry air, so gas_names[i] sits at
+    // col_gas index i+1.
+    std::vector<std::string> gas_names;
+
+    Array_2d<int> flavor;          // (nflav, 2) the pair of major species, as col_gas indices
     Array_2d<int> gpoint_flavor;   // (ngpt, 2) 0-based flavour per g-point, lower and upper
+    Array_3d<TF> vmr_ref;          // (ntemp, ngas+1, 2)
     Array_2d<int> band_lims_gpt;   // (nbnd, 2) first and last g-point, 0-based inclusive
     Array_4d<TF> kmajor;           // (ngpt, npres+1, neta, ntemp)
     Array_1d<int> gpt_band;        // (ngpt) band each g-point belongs to
@@ -145,6 +195,14 @@ namespace Gas_optics
             const Array_1d<const TF>& latitude,  // (ncol), may be empty
             const Array_3d<TF>& col_gas);        // (ngas+1, nlay, ncol)
 
+    // Reduce a coefficient file to the gases the host actually supplies, and build
+    // every derived index array. Reference: load / init_abs_coeffs, plus the helpers
+    // create_flavor, create_gpoint_flavor, create_idx_minor, create_idx_minor_scaling,
+    // create_key_species_reduce and reduce_minor_arrays.
+    //
+    // Everything in the result is 0-based, unlike the reference.
+    Kdist_gas load(const Kdist_file& file, const Gas_concs& available_gases);
+
     // Rayleigh scattering optical depth. Assigned, not accumulated, as in the
     // reference. Reference: compute_tau_rayleigh.
     void compute_tau_rayleigh(
@@ -175,4 +233,5 @@ namespace Gas_optics
             const Array_6d<TF>& fmajor);  // (nflav, 2, 2, 2, nlay, ncol)
 
     void init_python_bindings(py::module_& m);
+    void init_load_python_bindings(py::module_& m);
 }

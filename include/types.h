@@ -238,6 +238,9 @@ template<typename T>
 using Array_3d_h = Kokkos::View<T***, Kokkos::LayoutRight, Host_pinned_space, Kokkos::MemoryTraits<Kokkos::Restrict>>;
 
 template<typename T>
+using Array_4d_h = Kokkos::View<T****, Kokkos::LayoutRight, Host_pinned_space, Kokkos::MemoryTraits<Kokkos::Restrict>>;
+
+template<typename T>
 using Array_map_1d_h = Kokkos::View<T*, Kokkos::LayoutRight, Host_pinned_space, Kokkos::MemoryTraits<Kokkos::Unmanaged | Kokkos::Restrict>>;
 
 template<typename T>
@@ -343,6 +346,59 @@ namespace Numpy
         Array_map_4d_host<const T> host(static_cast<const T*>(info.ptr),
                                         info.shape[0], info.shape[1], info.shape[2], info.shape[3]);
         Kokkos::deep_copy(view, host);
+
+        return view;
+    }
+
+    // Copy a numpy array into a host View. Used by the k-distribution loader, whose
+    // reduction runs on the host before anything reaches the device.
+    template<typename T>
+    Array_1d_h<T> to_host_1d(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 1, name);
+
+        Array_1d_h<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing), info.shape[0]);
+        std::memcpy(view.data(), info.ptr, view.size()*sizeof(T));
+
+        return view;
+    }
+
+    template<typename T>
+    Array_2d_h<T> to_host_2d(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 2, name);
+
+        Array_2d_h<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing),
+                           info.shape[0], info.shape[1]);
+        std::memcpy(view.data(), info.ptr, view.size()*sizeof(T));
+
+        return view;
+    }
+
+    template<typename T>
+    Array_3d_h<T> to_host_3d(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 3, name);
+
+        Array_3d_h<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing),
+                           info.shape[0], info.shape[1], info.shape[2]);
+        std::memcpy(view.data(), info.ptr, view.size()*sizeof(T));
+
+        return view;
+    }
+
+    template<typename T>
+    Array_4d_h<T> to_host_4d(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 4, name);
+
+        Array_4d_h<T> view(Kokkos::view_alloc(name, Kokkos::WithoutInitializing),
+                           info.shape[0], info.shape[1], info.shape[2], info.shape[3]);
+        std::memcpy(view.data(), info.ptr, view.size()*sizeof(T));
 
         return view;
     }

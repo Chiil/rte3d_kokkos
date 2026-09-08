@@ -20,5 +20,6 @@ PYBIND11_MODULE(rte3d_python, m)
     Optical_props::init_python_bindings(m);
     Fluxes::init_python_bindings(m);
     Gas_optics::init_python_bindings(m);
+    Gas_optics::init_load_python_bindings(m);
     Gas_concs::init_python_bindings(m);
 }

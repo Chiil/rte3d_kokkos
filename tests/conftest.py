@@ -44,3 +44,20 @@ def fortran_ref():
 
     from reference import Reference
     return Reference(ctypes.CDLL(path))
+
+
+@pytest.fixture(scope='session')
+def fortran_shim():
+    """The reduction oracle. See tests/shim/rte3d_shim.F90.
+
+    Built by tests/build_reference.sh alongside the kernel library; skips when
+    RTE3D_FORTRAN_SHIM is unset.
+    """
+    path = os.environ.get('RTE3D_FORTRAN_SHIM')
+    if path is None:
+        pytest.skip('RTE3D_FORTRAN_SHIM not set; skipping the k-distribution reduction oracle.')
+
+    import ctypes
+
+    from shim import Shim
+    return Shim(ctypes.CDLL(path))

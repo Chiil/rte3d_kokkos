@@ -12,7 +12,9 @@ file(GLOB sourcefiles
     "gas_optics.cpp"
     "gas_optics_python.cpp"
     "gas_concs.cpp"
-    "gas_concs_python.cpp")
+    "gas_concs_python.cpp"
+    "gas_optics_load.cpp"
+    "gas_optics_load_python.cpp")
 
 add_library(rte3d_core STATIC ${sourcefiles})
 
