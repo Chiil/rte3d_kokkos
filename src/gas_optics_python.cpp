@@ -162,7 +162,9 @@ void Gas_optics::init_python_bindings(py::module_& m)
             // The reference accumulates into tau, so start from zero.
             Array_3d<TF> tau("tau", ngpt, nlay, ncol);
 
-            Gas_optics::compute_tau_absorption(k, state, play_d, tlay_d, col_gas_d, tau);
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Gas_optics::compute_tau_absorption(
+                        k, state, play_d, tlay_d, col_gas_d, igpt, slice_2d(tau, igpt));
             Kokkos::fence();
 
             return Numpy::from_device(tau);
@@ -213,8 +215,11 @@ void Gas_optics::init_python_bindings(py::module_& m)
             Array_3d<TF> tau(Kokkos::view_alloc("tau_rayleigh", Kokkos::WithoutInitializing),
                              ngpt, nlay, ncol);
 
-            Gas_optics::compute_tau_rayleigh(
-                    k, state, Numpy::to_device_2d<TF>(col_dry, "col_dry"), col_gas_d, tau);
+            const auto col_dry_d = Numpy::to_device_2d<TF>(col_dry, "col_dry");
+
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Gas_optics::compute_tau_rayleigh(
+                        k, state, col_dry_d, col_gas_d, igpt, slice_2d(tau, igpt));
             Kokkos::fence();
 
             return Numpy::from_device(tau);
@@ -266,19 +271,15 @@ void Gas_optics::init_python_bindings(py::module_& m)
                     play_d, Numpy::to_device_2d<TF>(tlay, "tlay"),
                     Numpy::to_device_3d<TF>(col_gas, "col_gas"), state);
 
-            const auto no_init = Kokkos::WithoutInitializing;
-            Source_func_lw_spectral sources;
-            sources.lay_source = Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol);
-            sources.lev_source = Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol);
-            sources.sfc_source = Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol);
-            sources.sfc_source_jac = Array_2d<TF>(Kokkos::view_alloc("sfc_source_jac", no_init), ngpt, ncol);
+            const auto sources = Source_func_lw_spectral::create(ngpt, nlay, ncol, true);
 
-            Gas_optics::compute_planck_source(
-                    k, state,
-                    Numpy::to_device_2d<TF>(tlay, "tlay"),
-                    Numpy::to_device_2d<TF>(tlev, "tlev"),
-                    Numpy::to_device_1d<TF>(tsfc, "tsfc"),
-                    sfc_lay, sources);
+            const auto tlay_d = Numpy::to_device_2d<TF>(tlay, "tlay");
+            const auto tlev_d = Numpy::to_device_2d<TF>(tlev, "tlev");
+            const auto tsfc_d = Numpy::to_device_1d<TF>(tsfc, "tsfc");
+
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                Gas_optics::compute_planck_source(
+                        k, state, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt, sources.gpt(igpt));
             Kokkos::fence();
 
             py::dict out;

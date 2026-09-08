@@ -28,6 +28,9 @@ Interp_state Interp_state::create(const int nflav, const int nlay, const int nco
     s.feta = Array_4d<TF>(Kokkos::view_alloc("feta", no_init), nflav, 2, nlay, ncol);
     s.col_mix = Array_4d<TF>(Kokkos::view_alloc("col_mix", no_init), nflav, 2, nlay, ncol);
 
+    s.lower_limits = Array_2d<int>(Kokkos::view_alloc("lower_limits", no_init), ncol, 2);
+    s.upper_limits = Array_2d<int>(Kokkos::view_alloc("upper_limits", no_init), ncol, 2);
+
     return s;
 }
 
@@ -121,6 +124,58 @@ void Gas_optics::interpolation(
                 feta(iflav, itemp, ilay, icol) = loceta - Kokkos::floor(loceta);
             }
         });
+
+    // Layer limits of the lower and upper atmosphere, per column, which the
+    // minor-absorber loop of compute_tau_absorption walks. The reference finds the
+    // extreme pressure among the layers on each side of the tropopause and treats
+    // everything between there and the domain edge as belonging to that side. For a
+    // monotonic pressure profile that is exactly the set of layers where tropo holds,
+    // but we reproduce the range form so non-monotonic input matches too.
+    //
+    // This has no g-point dimension, so it is built here, once, rather than inside the
+    // g-point loop that follows.
+    const auto lower_limits = state.lower_limits;
+    const auto upper_limits = state.upper_limits;
+
+    // top_at_1 is decided from the first column, as in the reference.
+    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
+    const bool top_at_1 = play_h(0, 0) < play_h(nlay - 1, 0);
+
+    parallel_for_1d("interpolation_limits", 0, ncol,
+        KOKKOS_LAMBDA(const int icol)
+        {
+            // minloc over layers where tropo holds, maxloc where it does not. Zero
+            // means no such layer, matching the reference's guard value.
+            int arg_min = 0;
+            int arg_max = 0;
+            TF p_min = TF(0.);
+            TF p_max = TF(0.);
+
+            for (int ilay=0; ilay<nlay; ++ilay)
+            {
+                const TF p = play(ilay, icol);
+
+                if (tropo(ilay, icol))
+                {
+                    if (arg_min == 0 || p < p_min) { p_min = p; arg_min = ilay + 1; }
+                }
+                else
+                {
+                    if (arg_max == 0 || p > p_max) { p_max = p; arg_max = ilay + 1; }
+                }
+            }
+
+            if (top_at_1)
+            {
+                lower_limits(icol, 0) = arg_min;  lower_limits(icol, 1) = nlay;
+                upper_limits(icol, 0) = 1;        upper_limits(icol, 1) = arg_max;
+            }
+            else
+            {
+                lower_limits(icol, 0) = 1;        lower_limits(icol, 1) = arg_min;
+                upper_limits(icol, 0) = arg_max;  upper_limits(icol, 1) = nlay;
+            }
+        });
 }
 
 
@@ -212,11 +267,11 @@ void Gas_optics::compute_tau_absorption(
         const Array_2d<const TF>& play,
         const Array_2d<const TF>& tlay,
         const Array_3d<const TF>& col_gas,
-        const Array_3d<TF>& tau)
+        const int igpt,
+        const Array_map_2d<TF>& tau)
 {
-    const int ngpt = static_cast<int>(tau.extent(0));
-    const int nlay = static_cast<int>(tau.extent(1));
-    const int ncol = static_cast<int>(tau.extent(2));
+    const int nlay = static_cast<int>(tau.extent(0));
+    const int ncol = static_cast<int>(tau.extent(1));
 
     const auto jtemp = state.jtemp;
     const auto ftemp = state.ftemp;
@@ -226,54 +281,8 @@ void Gas_optics::compute_tau_absorption(
     const auto jeta = state.jeta;
     const auto feta = state.feta;
     const auto col_mix = state.col_mix;
-
-    // Layer limits of the lower and upper atmosphere, per column. The reference finds
-    // the extreme pressure among the layers on each side of the tropopause and treats
-    // everything between there and the domain edge as belonging to that side. For a
-    // monotonic pressure profile that is exactly the set of layers where tropo holds,
-    // but we reproduce the range form so non-monotonic input matches too.
-    Array_2d<int> lower_limits(Kokkos::view_alloc("lower_limits", Kokkos::WithoutInitializing), ncol, 2);
-    Array_2d<int> upper_limits(Kokkos::view_alloc("upper_limits", Kokkos::WithoutInitializing), ncol, 2);
-
-    // top_at_1 is decided from the first column, as in the reference.
-    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
-    const bool top_at_1 = play_h(0, 0) < play_h(nlay - 1, 0);
-
-    parallel_for_1d("tau_absorption_limits", 0, ncol,
-        KOKKOS_LAMBDA(const int icol)
-        {
-            // minloc over layers where tropo holds, maxloc where it does not. Zero
-            // means no such layer, matching the reference's guard value.
-            int arg_min = 0;
-            int arg_max = 0;
-            TF p_min = TF(0.);
-            TF p_max = TF(0.);
-
-            for (int ilay=0; ilay<nlay; ++ilay)
-            {
-                const TF p = play(ilay, icol);
-
-                if (tropo(ilay, icol))
-                {
-                    if (arg_min == 0 || p < p_min) { p_min = p; arg_min = ilay + 1; }
-                }
-                else
-                {
-                    if (arg_max == 0 || p > p_max) { p_max = p; arg_max = ilay + 1; }
-                }
-            }
-
-            if (top_at_1)
-            {
-                lower_limits(icol, 0) = arg_min;  lower_limits(icol, 1) = nlay;
-                upper_limits(icol, 0) = 1;        upper_limits(icol, 1) = arg_max;
-            }
-            else
-            {
-                lower_limits(icol, 0) = 1;        lower_limits(icol, 1) = arg_min;
-                upper_limits(icol, 0) = arg_max;  upper_limits(icol, 1) = nlay;
-            }
-        });
+    const auto lower_limits = state.lower_limits;
+    const auto upper_limits = state.upper_limits;
 
     const auto gpoint_flavor = k.gpoint_flavor;
     const auto band_gpt_start = k.band_gpt_start;
@@ -284,8 +293,8 @@ void Gas_optics::compute_tau_absorption(
     const Minor_absorbers lower = k.lower;
     const Minor_absorbers upper = k.upper;
 
-    parallel_for_3d("compute_tau_absorption", {0, 0, 0}, {ngpt, nlay, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+    parallel_for_2d("compute_tau_absorption", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
         {
             const int itropo = tropo(ilay, icol) ? 0 : 1;
             const int jt = jtemp(ilay, icol);
@@ -376,7 +385,7 @@ void Gas_optics::compute_tau_absorption(
                 }
             }
 
-            tau(igpt, ilay, icol) += tau_l;
+            tau(ilay, icol) += tau_l;
         });
 }
 
@@ -386,11 +395,11 @@ void Gas_optics::compute_tau_rayleigh(
         const Interp_state& state,
         const Array_2d<const TF>& col_dry,
         const Array_3d<const TF>& col_gas,
-        const Array_3d<TF>& tau_rayleigh)
+        const int igpt,
+        const Array_map_2d<TF>& tau_rayleigh)
 {
-    const int ngpt = static_cast<int>(tau_rayleigh.extent(0));
-    const int nlay = static_cast<int>(tau_rayleigh.extent(1));
-    const int ncol = static_cast<int>(tau_rayleigh.extent(2));
+    const int nlay = static_cast<int>(tau_rayleigh.extent(0));
+    const int ncol = static_cast<int>(tau_rayleigh.extent(1));
 
     const auto jtemp = state.jtemp;
     const auto ftemp = state.ftemp;
@@ -405,8 +414,8 @@ void Gas_optics::compute_tau_rayleigh(
     const auto krayl = k.krayl;
     const int idx_h2o = k.idx_h2o;
 
-    parallel_for_3d("compute_tau_rayleigh", {0, 0, 0}, {ngpt, nlay, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+    parallel_for_2d("compute_tau_rayleigh", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
         {
             const int itropo = tropo(ilay, icol) ? 0 : 1;
             const int jt = jtemp(ilay, icol);
@@ -428,7 +437,7 @@ void Gas_optics::compute_tau_rayleigh(
                     kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
             }
 
-            tau_rayleigh(igpt, ilay, icol) =
+            tau_rayleigh(ilay, icol) =
                     kr * (col_gas(idx_h2o, ilay, icol) + col_dry(ilay, icol));
         });
 }
@@ -441,11 +450,11 @@ void Gas_optics::compute_planck_source(
         const Array_2d<const TF>& tlev,
         const Array_1d<const TF>& tsfc,
         const int sfc_lay,
-        const Source_func_lw_spectral& sources)
+        const int igpt,
+        const Source_func_lw& sources)
 {
-    const int ngpt = static_cast<int>(sources.lay_source.extent(0));
-    const int nlay = static_cast<int>(sources.lay_source.extent(1));
-    const int ncol = static_cast<int>(sources.lay_source.extent(2));
+    const int nlay = static_cast<int>(sources.lay_source.extent(0));
+    const int ncol = static_cast<int>(sources.lay_source.extent(1));
     const int nlev = nlay + 1;
     const int nplancktemp = static_cast<int>(k.totplnk.extent(1));
 
@@ -465,12 +474,12 @@ void Gas_optics::compute_planck_source(
     const TF temp_ref_min = k.temp_ref_min;
     const TF totplnk_delta = k.totplnk_delta;
 
-    // Fraction of each band's Planck irradiance belonging to each g-point. This is the
+    // Fraction of this band's Planck irradiance belonging to this g-point. This is the
     // major-species interpolation with unit column mixing.
-    Array_3d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
+    Array_2d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), nlay, ncol);
 
-    parallel_for_3d("planck_pfrac", {0, 0, 0}, {ngpt, nlay, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+    parallel_for_2d("planck_pfrac", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
         {
             const int itropo = tropo(ilay, icol) ? 0 : 1;
             const int jt = jtemp(ilay, icol);
@@ -493,28 +502,29 @@ void Gas_optics::compute_planck_source(
                               * pfracin(igpt, jp0 + ipress, je + ieta, jt + itemp);
             }
 
-            pfrac(igpt, ilay, icol) = frac;
+            pfrac(ilay, icol) = frac;
         });
 
     const auto lay_source = sources.lay_source;
     const auto lev_source = sources.lev_source;
     const auto sfc_source = sources.sfc_source;
     const auto sfc_source_jac = sources.sfc_source_jac;
+    const bool do_jacobian = sfc_source_jac.size() > 0;
 
     // The band Planck function is cheap to interpolate, so it is recomputed per
     // g-point rather than stored as (nbnd, nlev, ncol).
-    parallel_for_3d("planck_lay_source", {0, 0, 0}, {ngpt, nlay, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
+    parallel_for_2d("planck_lay_source", {0, 0}, {nlay, ncol},
+        KOKKOS_LAMBDA(const int ilay, const int icol)
         {
             const TF planck = Gas_optics_kernels::interpolate_1d(
                     tlay(ilay, icol), temp_ref_min, totplnk_delta,
                     totplnk, gpt_band(igpt), nplancktemp);
 
-            lay_source(igpt, ilay, icol) = pfrac(igpt, ilay, icol) * planck;
+            lay_source(ilay, icol) = pfrac(ilay, icol) * planck;
         });
 
-    parallel_for_3d("planck_lev_source", {0, 0, 0}, {ngpt, nlev, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilev, const int icol)
+    parallel_for_2d("planck_lev_source", {0, 0}, {nlev, ncol},
+        KOKKOS_LAMBDA(const int ilev, const int icol)
         {
             const TF planck = Gas_optics_kernels::interpolate_1d(
                     tlev(ilev, icol), temp_ref_min, totplnk_delta,
@@ -525,31 +535,34 @@ void Gas_optics::compute_planck_source(
             // positions, not physical top and surface, so this is orientation-agnostic.
             TF frac;
             if (ilev == 0)
-                frac = pfrac(igpt, 0, icol);
+                frac = pfrac(0, icol);
             else if (ilev == nlay)
-                frac = pfrac(igpt, nlay - 1, icol);
+                frac = pfrac(nlay - 1, icol);
             else
-                frac = Kokkos::sqrt(pfrac(igpt, ilev - 1, icol) * pfrac(igpt, ilev, icol));
+                frac = Kokkos::sqrt(pfrac(ilev - 1, icol) * pfrac(ilev, icol));
 
-            lev_source(igpt, ilev, icol) = frac * planck;
+            lev_source(ilev, icol) = frac * planck;
         });
 
-    parallel_for_2d("planck_sfc_source", {0, 0}, {ngpt, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int icol)
+    parallel_for_1d("planck_sfc_source", 0, ncol,
+        KOKKOS_LAMBDA(const int icol)
         {
-            const int ibnd = gpt_band(igpt);
-
             const TF planck = Gas_optics_kernels::interpolate_1d(
-                    tsfc(icol), temp_ref_min, totplnk_delta, totplnk, ibnd, nplancktemp);
+                    tsfc(icol), temp_ref_min, totplnk_delta, totplnk,
+                    gpt_band(igpt), nplancktemp);
 
-            // The Jacobian is a one-Kelvin finite difference, as in the reference.
-            const TF planck_up = Gas_optics_kernels::interpolate_1d(
-                    tsfc(icol) + TF(1.), temp_ref_min, totplnk_delta, totplnk, ibnd, nplancktemp);
+            const TF frac = pfrac(sfc_lay, icol);
+            sfc_source(icol) = frac * planck;
 
-            const TF frac = pfrac(igpt, sfc_lay, icol);
+            if (do_jacobian)
+            {
+                // The Jacobian is a one-Kelvin finite difference, as in the reference.
+                const TF planck_up = Gas_optics_kernels::interpolate_1d(
+                        tsfc(icol) + TF(1.), temp_ref_min, totplnk_delta,
+                        totplnk, gpt_band(igpt), nplancktemp);
 
-            sfc_source(igpt, icol) = frac * planck;
-            sfc_source_jac(igpt, icol) = frac * (planck_up - planck);
+                sfc_source_jac(icol) = frac * (planck_up - planck);
+            }
         });
 }
 
@@ -705,15 +718,20 @@ void Gas_optics::gas_optics_lw(
 
     const Interp_state state = interpolate_for(k, play, tlay, col_gas);
 
-    // The kernel accumulates, so start from zero.
-    Kokkos::deep_copy(tau, TF(0.));
-    compute_tau_absorption(k, state, play, tlay, col_gas, tau);
-
     // The surface is the layer at whichever end of the array is at higher pressure.
     auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
     const int sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
 
-    compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, sources);
+    // The kernels accumulate into tau, so start from zero.
+    Kokkos::deep_copy(tau, TF(0.));
+
+    const int ngpt = static_cast<int>(tau.extent(0));
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        compute_tau_absorption(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt));
+        compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt));
+    }
 }
 
 
@@ -737,10 +755,6 @@ void Gas_optics::gas_optics_sw(
     const Interp_state state = interpolate_for(k, play, tlay, col_gas);
 
     Kokkos::deep_copy(tau, TF(0.));
-    compute_tau_absorption(k, state, play, tlay, col_gas, tau);
-
-    Array_3d<TF> tau_rayleigh(Kokkos::view_alloc("tau_rayleigh", Kokkos::WithoutInitializing),
-                              ngpt, nlay, ncol);
 
     // Rayleigh scattering needs the dry air column, which compute_col_gas put at
     // index 0.
@@ -748,21 +762,32 @@ void Gas_optics::gas_optics_sw(
     Array_2d<TF> col_dry_work(Kokkos::view_alloc("col_dry", Kokkos::WithoutInitializing), nlay, ncol);
     Kokkos::deep_copy(col_dry_work, col_dry_view);
 
-    compute_tau_rayleigh(k, state, col_dry_work, col_gas, tau_rayleigh);
+    // One g-point's Rayleigh optical depth, reused every iteration.
+    Array_2d<TF> tau_rayleigh(Kokkos::view_alloc("tau_rayleigh", Kokkos::WithoutInitializing),
+                              nlay, ncol);
+    const Array_2d<const TF> tau_rayleigh_c = tau_rayleigh;
 
-    // Combine, as combine_abs_and_rayleigh does: tau is the total extinction and ssa
-    // the scattering fraction of it.
-    const Array_3d<const TF> tau_rayleigh_c = tau_rayleigh;
     constexpr TF tiny_tf = std::numeric_limits<TF>::min();
 
-    parallel_for_3d("combine_abs_and_rayleigh", {0, 0, 0}, {ngpt, nlay, ncol},
-        KOKKOS_LAMBDA(const int igpt, const int ilay, const int icol)
-        {
-            const TF t = tau(igpt, ilay, icol) + tau_rayleigh_c(igpt, ilay, icol);
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        const auto tau_g = slice_2d(tau, igpt);
+        const auto ssa_g = slice_2d(ssa, igpt);
 
-            ssa(igpt, ilay, icol) = t > TF(2.)*tiny_tf
-                    ? tau_rayleigh_c(igpt, ilay, icol) / t
-                    : TF(0.);
-            tau(igpt, ilay, icol) = t;
-        });
+        compute_tau_absorption(k, state, play, tlay, col_gas, igpt, tau_g);
+        compute_tau_rayleigh(k, state, col_dry_work, col_gas, igpt, tau_rayleigh);
+
+        // Combine, as combine_abs_and_rayleigh does: tau is the total extinction and
+        // ssa the scattering fraction of it.
+        parallel_for_2d("combine_abs_and_rayleigh", {0, 0}, {nlay, ncol},
+            KOKKOS_LAMBDA(const int ilay, const int icol)
+            {
+                const TF t = tau_g(ilay, icol) + tau_rayleigh_c(ilay, icol);
+
+                ssa_g(ilay, icol) = t > TF(2.)*tiny_tf
+                        ? tau_rayleigh_c(ilay, icol) / t
+                        : TF(0.);
+                tau_g(ilay, icol) = t;
+            });
+    }
 }

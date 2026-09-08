@@ -32,6 +32,14 @@ struct Interp_state
     Array_4d<TF> feta;      // (nflav, 2, nlay, ncol) binary species interpolation fraction
     Array_4d<TF> col_mix;   // (nflav, 2, nlay, ncol) combined major species column amount
 
+    // First and last layer, 1-based inclusive, on each side of the tropopause, per
+    // column; a zero start means the column has no layers on that side. Derived from
+    // tropo and the pressure profile, and read by the minor-absorber loop. It lives
+    // here because it has no g-point dimension and would otherwise be rebuilt for
+    // every g-point.
+    Array_2d<int> lower_limits;  // (ncol, 2)
+    Array_2d<int> upper_limits;  // (ncol, 2)
+
     // Allocate for the given problem size.
     static Interp_state create(const int nflav, const int nlay, const int ncol);
 };
@@ -175,15 +183,16 @@ namespace Gas_optics
             const Array_3d<const TF>& col_gas,      // (ngas+1, nlay, ncol)
             const Interp_state& state);
 
-    // Absorption optical depth from major and minor gases. Accumulates into tau, as
-    // the reference does. Reference: compute_tau_absorption.
+    // Absorption optical depth from major and minor gases, for one g-point.
+    // Accumulates into tau, as the reference does. Reference: compute_tau_absorption.
     void compute_tau_absorption(
             const Kdist_gas& k,
             const Interp_state& state,
             const Array_2d<const TF>& play,     // (nlay, ncol)
             const Array_2d<const TF>& tlay,     // (nlay, ncol)
             const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
-            const Array_3d<TF>& tau);           // (ngpt, nlay, ncol), accumulated into
+            const int igpt,
+            const Array_map_2d<TF>& tau);       // (nlay, ncol), accumulated into
 
     // Dry air column amount [molecules/cm2] from the water vapour mixing ratio and
     // the level pressures. Reference: get_col_dry.
@@ -245,14 +254,15 @@ namespace Gas_optics
             const Array_3d<TF>& tau,
             const Array_3d<TF>& ssa);
 
-    // Rayleigh scattering optical depth. Assigned, not accumulated, as in the
-    // reference. Reference: compute_tau_rayleigh.
+    // Rayleigh scattering optical depth for one g-point. Assigned, not accumulated, as
+    // in the reference. Reference: compute_tau_rayleigh.
     void compute_tau_rayleigh(
             const Kdist_gas& k,
             const Interp_state& state,
-            const Array_2d<const TF>& col_dry,   // (nlay, ncol)
-            const Array_3d<const TF>& col_gas,   // (ngas+1, nlay, ncol)
-            const Array_3d<TF>& tau_rayleigh);   // (ngpt, nlay, ncol)
+            const Array_2d<const TF>& col_dry,       // (nlay, ncol)
+            const Array_3d<const TF>& col_gas,       // (ngas+1, nlay, ncol)
+            const int igpt,
+            const Array_map_2d<TF>& tau_rayleigh);   // (nlay, ncol)
 
     // Planck sources at layer centres, layer edges and the surface, plus the
     // surface-temperature Jacobian. Reference: compute_Planck_source. The longwave
@@ -264,7 +274,8 @@ namespace Gas_optics
             const Array_2d<const TF>& tlev,      // (nlev, ncol)
             const Array_1d<const TF>& tsfc,      // (ncol)
             const int sfc_lay,                   // 0-based layer adjacent to the surface
-            const Source_func_lw_spectral& sources);
+            const int igpt,
+            const Source_func_lw& sources);
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via

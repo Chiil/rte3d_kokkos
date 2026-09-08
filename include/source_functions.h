@@ -9,12 +9,14 @@
 //
 // The views are unmanaged, so a slice of a spectrally resolved set can be passed
 // straight in; see Source_func_lw_spectral::gpt below.
+// The views are writable because the Planck kernel fills exactly this struct; the
+// solvers take it by const reference and read through it.
 struct Source_func_lw
 {
-    Array_map_2d<const TF> lay_source;      // (nlay, ncol) Planck source at layer average temperature
-    Array_map_2d<const TF> lev_source;      // (nlev, ncol) Planck source at layer edges
-    Array_map_1d<const TF> sfc_source;      // (ncol)       surface source function
-    Array_map_1d<const TF> sfc_source_jac;  // (ncol)       d(surface source)/d(surface temperature)
+    Array_map_2d<TF> lay_source;      // (nlay, ncol) Planck source at layer average temperature
+    Array_map_2d<TF> lev_source;      // (nlev, ncol) Planck source at layer edges
+    Array_map_1d<TF> sfc_source;      // (ncol)       surface source function
+    Array_map_1d<TF> sfc_source_jac;  // (ncol)       d(surface source)/d(surface temperature)
 };
 
 
@@ -36,5 +38,18 @@ struct Source_func_lw_spectral
                 slice_1d(sfc_source, igpt),
                 sfc_source_jac.size() > 0 ? slice_1d(sfc_source_jac, igpt)
                                           : Array_map_1d<TF>()};
+    }
+
+    static Source_func_lw_spectral create(const int ngpt, const int nlay, const int ncol,
+                                          const bool do_jacobian)
+    {
+        const auto no_init = Kokkos::WithoutInitializing;
+
+        return Source_func_lw_spectral{
+                Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol),
+                Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol),
+                Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol),
+                Array_2d<TF>(Kokkos::view_alloc("sfc_source_jac", no_init),
+                             do_jacobian ? ngpt : 0, do_jacobian ? ncol : 0)};
     }
 };

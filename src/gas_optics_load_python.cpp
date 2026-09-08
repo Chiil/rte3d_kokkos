@@ -199,11 +199,7 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
             const auto no_init = Kokkos::WithoutInitializing;
             Array_3d<TF> tau(Kokkos::view_alloc("tau", no_init), ngpt, nlay, ncol);
 
-            Source_func_lw_spectral sources;
-            sources.lay_source = Array_3d<TF>(Kokkos::view_alloc("lay_source", no_init), ngpt, nlay, ncol);
-            sources.lev_source = Array_3d<TF>(Kokkos::view_alloc("lev_source", no_init), ngpt, nlay+1, ncol);
-            sources.sfc_source = Array_2d<TF>(Kokkos::view_alloc("sfc_source", no_init), ngpt, ncol);
-            sources.sfc_source_jac = Array_2d<TF>(Kokkos::view_alloc("sfc_source_jac", no_init), ngpt, ncol);
+            const auto sources = Source_func_lw_spectral::create(ngpt, nlay, ncol, true);
 
             Gas_optics::gas_optics_lw(
                     k, gas_concs, play_d,
