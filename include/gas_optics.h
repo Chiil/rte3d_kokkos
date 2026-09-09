@@ -212,6 +212,22 @@ namespace Gas_optics
             const int igpt,
             const Array_map_2d<TF>& tau);       // (nlay, ncol), accumulated into
 
+    // Absorption and Rayleigh scattering together, for one g-point: tau comes out as
+    // the total extinction, ssa as the Rayleigh fraction of it and g as zero, which is
+    // the reference's combine_abs_and_rayleigh. One kernel rather than three, because
+    // Rayleigh takes the same flavour as the major species and so reuses the
+    // interpolation weights already in registers.
+    void compute_tau_sw(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& play,     // (nlay, ncol)
+            const Array_2d<const TF>& tlay,     // (nlay, ncol)
+            const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
+            const int igpt,
+            const Array_map_2d<TF>& tau,        // (nlay, ncol)
+            const Array_map_2d<TF>& ssa,        // (nlay, ncol)
+            const Array_map_2d<TF>& g);         // (nlay, ncol)
+
     // Dry air column amount [molecules/cm2] from the water vapour mixing ratio and
     // the level pressures. Reference: get_col_dry.
     //

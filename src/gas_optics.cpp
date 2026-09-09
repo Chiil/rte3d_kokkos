@@ -252,6 +252,206 @@ void Minor_absorbers::build_map(
 }
 
 
+namespace
+{
+    // Absorption optical depth, and for the shortwave the Rayleigh scattering that
+    // goes with it. One kernel for both because the two read the same interpolation
+    // state and, since Rayleigh takes the same flavour as the major species, the same
+    // reconstructed weights: the scattering costs one more table interpolation and no
+    // extra memory traffic at all.
+    //
+    // With do_rayleigh, tau comes out as the total extinction and ssa as the Rayleigh
+    // fraction of it, and g is zeroed -- what combine_abs_and_rayleigh does in the
+    // reference. Without it, ssa and g are unused and tau is absorption alone.
+    template<bool do_rayleigh>
+    void compute_tau_impl(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& play,
+            const Array_2d<const TF>& tlay,
+            const Array_3d<const TF>& col_gas,
+            const int igpt,
+            const Array_map_2d<TF>& tau,
+            const Array_map_2d<TF>& ssa,
+            const Array_map_2d<TF>& g)
+    {
+        const int nlay = static_cast<int>(tau.extent(0));
+        const int ncol = static_cast<int>(tau.extent(1));
+
+        const auto jtemp = state.jtemp;
+        const auto ftemp = state.ftemp;
+        const auto jpress = state.jpress;
+        const auto fpress = state.fpress;
+        const auto tropo = state.tropo;
+        const auto lower_limits = state.lower_limits;
+        const auto upper_limits = state.upper_limits;
+
+        // The binary-species interpolation is rebuilt per flavour rather than read from
+        // memory; see the note on Interp_state.
+        const auto flavor = k.flavor;
+        const auto vmr_ref = k.vmr_ref;
+        const int neta = k.neta;
+
+        const auto gpoint_flavor = k.gpoint_flavor;
+        const auto band_gpt_start = k.band_gpt_start;
+        const auto gpt_band = k.gpt_band;
+        const auto kmajor = k.kmajor;
+        const int idx_h2o = k.idx_h2o;
+
+        // Shortwave only; an empty view otherwise.
+        const auto krayl = k.krayl;
+
+        const Minor_absorbers lower = k.lower;
+        const Minor_absorbers upper = k.upper;
+
+        parallel_for_2d(do_rayleigh ? "compute_tau_sw" : "compute_tau_absorption", {0, 0}, {nlay, ncol},
+            KOKKOS_LAMBDA(const int ilay, const int icol)
+            {
+                const int itropo = tropo(ilay, icol) ? 0 : 1;
+                const int jt = jtemp(ilay, icol);
+                const TF ft = ftemp(ilay, icol);
+                const TF fp = fpress(ilay, icol);
+
+                TF tau_l = TF(0.);
+                TF tau_rayleigh_l = TF(0.);
+
+                // The binary-species interpolation for the flavour in hand. Held across
+                // the minor-absorber loop below, which mostly asks for the same flavour
+                // again, and rebuilt when it does not.
+                TF col_mix[2], feta[2];
+                int jeta[2];
+                int iflav_have = -1;
+
+                // ---- major species -------------------------------------------------
+                // The flavour comes from the first g-point of this g-point's band.
+                {
+                    const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
+
+                    Gas_optics_kernels::eta_interp(
+                            flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
+                            col_mix, jeta, feta);
+                    iflav_have = iflav;
+
+                    TF fmin[2][2], fmaj[2][2][2];
+                    Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
+
+                    // The reference indexes kmajor at jpress-1 and jpress with a 1-based
+                    // jpress+itropo; 0-based that is jpress+itropo and one beyond.
+                    const int jp0 = jpress(ilay, icol) + itropo;
+
+                    for (int itemp=0; itemp<2; ++itemp)
+                    {
+                        const int je = jeta[itemp];
+                        TF acc = TF(0.);
+
+                        for (int ipress=0; ipress<2; ++ipress)
+                            for (int ieta=0; ieta<2; ++ieta)
+                                acc += fmaj[itemp][ipress][ieta]
+                                     * kmajor(igpt, jp0 + ipress, je + ieta, jt + itemp);
+
+                        tau_l += col_mix[itemp] * acc;
+                    }
+
+                    // A plain if, not if constexpr: nvcc will not let an extended
+                    // device lambda first-capture a variable inside a constexpr-if,
+                    // and do_rayleigh is a compile-time constant either way, so the
+                    // dead branch still costs nothing.
+                    if (do_rayleigh)
+                    {
+                        TF kr = TF(0.);
+                        for (int itemp=0; itemp<2; ++itemp)
+                        {
+                            const int je = jeta[itemp];
+                            for (int ieta=0; ieta<2; ++ieta)
+                                kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
+                        }
+
+                        tau_rayleigh_l = kr * (col_gas(idx_h2o, ilay, icol)
+                                               + col_gas(0, ilay, icol));
+                    }
+                }
+
+                // ---- minor species -------------------------------------------------
+                for (int side=0; side<2; ++side)
+                {
+                    const Minor_absorbers& m = side == 0 ? lower : upper;
+                    const auto& limits = side == 0 ? lower_limits : upper_limits;
+
+                    // The reference walks a per-column layer range; a zero start means
+                    // this column has no layers on this side of the tropopause.
+                    if (limits(icol, 0) == 0)
+                        continue;
+                    if (ilay + 1 < limits(icol, 0) || ilay + 1 > limits(icol, 1))
+                        continue;
+
+                    for (int i=m.gpt_offset(igpt); i<m.gpt_offset(igpt + 1); ++i)
+                    {
+                        const int imnr = m.gpt_minor(i);
+
+                        TF scaling = col_gas(m.idx_minor(imnr), ilay, icol);
+
+                        if (m.scales_with_density(imnr))
+                        {
+                            // Pressure in hPa, as the density scaling expects.
+                            scaling *= TF(0.01) * play(ilay, icol) / tlay(ilay, icol);
+
+                            const int idx_scaling = m.idx_minor_scaling(imnr);
+                            if (idx_scaling > 0)
+                            {
+                                const TF vmr_fact = TF(1.) / col_gas(0, ilay, icol);
+                                const TF dry_fact =
+                                        TF(1.) / (TF(1.) + col_gas(idx_h2o, ilay, icol) * vmr_fact);
+
+                                const TF f = col_gas(idx_scaling, ilay, icol) * vmr_fact * dry_fact;
+                                scaling *= m.scale_by_complement(imnr) ? TF(1.) - f : f;
+                            }
+                        }
+
+                        const int iflav = m.flavor(imnr);
+                        const int ik = m.kminor_start(imnr) + (igpt - m.minor_limits_gpt(imnr, 0));
+
+                        if (iflav != iflav_have)
+                        {
+                            Gas_optics_kernels::eta_interp(
+                                    flavor, vmr_ref, col_gas, neta, iflav, itropo, jt,
+                                    ilay, icol, col_mix, jeta, feta);
+                            iflav_have = iflav;
+                        }
+
+                        TF fmin[2][2], fmaj[2][2][2];
+                        Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
+
+                        TF acc = TF(0.);
+                        for (int itemp=0; itemp<2; ++itemp)
+                        {
+                            const int je = jeta[itemp];
+                            for (int ieta=0; ieta<2; ++ieta)
+                                acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
+                        }
+
+                        tau_l += scaling * acc;
+                    }
+                }
+
+                if (do_rayleigh)
+                {
+                    // Combine, as combine_abs_and_rayleigh does: tau becomes the total
+                    // extinction and ssa the scattering fraction of it. g is zero for a
+                    // pure gas atmosphere.
+                    const TF t = tau_l + tau_rayleigh_l;
+
+                    tau(ilay, icol) = t;
+                    ssa(ilay, icol) = t > TF(2.) * Gas_optics_kernels::tiny()
+                            ? tau_rayleigh_l / t : TF(0.);
+                    g(ilay, icol) = TF(0.);
+                }
+                else
+                    tau(ilay, icol) = tau_l;
+            });
+    }
+}
+
+
 void Gas_optics::compute_tau_absorption(
         const Kdist_gas& k,
         const Interp_state& state,
@@ -261,144 +461,24 @@ void Gas_optics::compute_tau_absorption(
         const int igpt,
         const Array_map_2d<TF>& tau)
 {
-    const int nlay = static_cast<int>(tau.extent(0));
-    const int ncol = static_cast<int>(tau.extent(1));
+    compute_tau_impl<false>(
+            k, state, play, tlay, col_gas, igpt, tau,
+            Array_map_2d<TF>(), Array_map_2d<TF>());
+}
 
-    const auto jtemp = state.jtemp;
-    const auto ftemp = state.ftemp;
-    const auto jpress = state.jpress;
-    const auto fpress = state.fpress;
-    const auto tropo = state.tropo;
-    const auto lower_limits = state.lower_limits;
-    const auto upper_limits = state.upper_limits;
 
-    // The binary-species interpolation is rebuilt per flavour rather than read from
-    // memory; see the note on Interp_state.
-    const auto flavor = k.flavor;
-    const auto vmr_ref = k.vmr_ref;
-    const int neta = k.neta;
-
-    const auto gpoint_flavor = k.gpoint_flavor;
-    const auto band_gpt_start = k.band_gpt_start;
-    const auto gpt_band = k.gpt_band;
-    const auto kmajor = k.kmajor;
-    const int idx_h2o = k.idx_h2o;
-
-    const Minor_absorbers lower = k.lower;
-    const Minor_absorbers upper = k.upper;
-
-    parallel_for_2d("compute_tau_absorption", {0, 0}, {nlay, ncol},
-        KOKKOS_LAMBDA(const int ilay, const int icol)
-        {
-            const int itropo = tropo(ilay, icol) ? 0 : 1;
-            const int jt = jtemp(ilay, icol);
-            const TF ft = ftemp(ilay, icol);
-            const TF fp = fpress(ilay, icol);
-
-            TF tau_l = TF(0.);
-
-            // The binary-species interpolation for the flavour in hand. Held across
-            // the minor-absorber loop below, which mostly asks for the same flavour
-            // again, and rebuilt when it does not.
-            TF col_mix[2], feta[2];
-            int jeta[2];
-            int iflav_have = -1;
-
-            // ---- major species -------------------------------------------------
-            // The flavour comes from the first g-point of this g-point's band.
-            {
-                const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
-
-                Gas_optics_kernels::eta_interp(
-                        flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
-                        col_mix, jeta, feta);
-                iflav_have = iflav;
-
-                TF fmin[2][2], fmaj[2][2][2];
-                Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
-
-                // The reference indexes kmajor at jpress-1 and jpress with a 1-based
-                // jpress+itropo; 0-based that is jpress+itropo and one beyond.
-                const int jp0 = jpress(ilay, icol) + itropo;
-
-                for (int itemp=0; itemp<2; ++itemp)
-                {
-                    const int je = jeta[itemp];
-                    TF acc = TF(0.);
-
-                    for (int ipress=0; ipress<2; ++ipress)
-                        for (int ieta=0; ieta<2; ++ieta)
-                            acc += fmaj[itemp][ipress][ieta]
-                                 * kmajor(igpt, jp0 + ipress, je + ieta, jt + itemp);
-
-                    tau_l += col_mix[itemp] * acc;
-                }
-            }
-
-            // ---- minor species -------------------------------------------------
-            for (int side=0; side<2; ++side)
-            {
-                const Minor_absorbers& m = side == 0 ? lower : upper;
-                const auto& limits = side == 0 ? lower_limits : upper_limits;
-
-                // The reference walks a per-column layer range; a zero start means
-                // this column has no layers on this side of the tropopause.
-                if (limits(icol, 0) == 0)
-                    continue;
-                if (ilay + 1 < limits(icol, 0) || ilay + 1 > limits(icol, 1))
-                    continue;
-
-                for (int i=m.gpt_offset(igpt); i<m.gpt_offset(igpt + 1); ++i)
-                {
-                    const int imnr = m.gpt_minor(i);
-
-                    TF scaling = col_gas(m.idx_minor(imnr), ilay, icol);
-
-                    if (m.scales_with_density(imnr))
-                    {
-                        // Pressure in hPa, as the density scaling expects.
-                        scaling *= TF(0.01) * play(ilay, icol) / tlay(ilay, icol);
-
-                        const int idx_scaling = m.idx_minor_scaling(imnr);
-                        if (idx_scaling > 0)
-                        {
-                            const TF vmr_fact = TF(1.) / col_gas(0, ilay, icol);
-                            const TF dry_fact =
-                                    TF(1.) / (TF(1.) + col_gas(idx_h2o, ilay, icol) * vmr_fact);
-
-                            const TF f = col_gas(idx_scaling, ilay, icol) * vmr_fact * dry_fact;
-                            scaling *= m.scale_by_complement(imnr) ? TF(1.) - f : f;
-                        }
-                    }
-
-                    const int iflav = m.flavor(imnr);
-                    const int ik = m.kminor_start(imnr) + (igpt - m.minor_limits_gpt(imnr, 0));
-
-                    if (iflav != iflav_have)
-                    {
-                        Gas_optics_kernels::eta_interp(
-                                flavor, vmr_ref, col_gas, neta, iflav, itropo, jt,
-                                ilay, icol, col_mix, jeta, feta);
-                        iflav_have = iflav;
-                    }
-
-                    TF fmin[2][2], fmaj[2][2][2];
-                    Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
-
-                    TF acc = TF(0.);
-                    for (int itemp=0; itemp<2; ++itemp)
-                    {
-                        const int je = jeta[itemp];
-                        for (int ieta=0; ieta<2; ++ieta)
-                            acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
-                    }
-
-                    tau_l += scaling * acc;
-                }
-            }
-
-            tau(ilay, icol) = tau_l;
-        });
+void Gas_optics::compute_tau_sw(
+        const Kdist_gas& k,
+        const Interp_state& state,
+        const Array_2d<const TF>& play,
+        const Array_2d<const TF>& tlay,
+        const Array_3d<const TF>& col_gas,
+        const int igpt,
+        const Array_map_2d<TF>& tau,
+        const Array_map_2d<TF>& ssa,
+        const Array_map_2d<TF>& g)
+{
+    compute_tau_impl<true>(k, state, play, tlay, col_gas, igpt, tau, ssa, g);
 }
 
 
@@ -841,34 +921,13 @@ void Gas_optics::solve_sw_gpt(
         const Array_map_1d<const TF>& inc_flux_dif,
         const Band_props& clouds)
 {
-    const int nlay = static_cast<int>(state.tau.extent(0));
-    const int ncol = static_cast<int>(state.tau.extent(1));
-
-    compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
-
-    // Rayleigh scattering needs the dry air column, which compute_col_gas put at
-    // index 0 of col_gas. ssa is free scratch until the combine below fills it.
-    const auto col_dry = slice_2d(state.col_gas, 0);
-    compute_tau_rayleigh(k, state.interp, col_dry, state.col_gas, igpt, state.ssa);
-
-    // Combine, as combine_abs_and_rayleigh does: tau becomes the total extinction and
-    // ssa the scattering fraction of it. g is zero for a pure gas atmosphere.
-    constexpr TF tiny_tf = std::numeric_limits<TF>::min();
-
     const auto tau = state.tau;
     const auto ssa = state.ssa;
     const auto g = state.g;
 
-    parallel_for_2d("combine_abs_and_rayleigh", {0, 0}, {nlay, ncol},
-        KOKKOS_LAMBDA(const int ilay, const int icol)
-        {
-            const TF tau_rayleigh = ssa(ilay, icol);
-            const TF t = tau(ilay, icol) + tau_rayleigh;
-
-            ssa(ilay, icol) = t > TF(2.)*tiny_tf ? tau_rayleigh / t : TF(0.);
-            tau(ilay, icol) = t;
-            g(ilay, icol) = TF(0.);
-        });
+    // Absorption, Rayleigh and the combine in one pass; the dry air column Rayleigh
+    // needs is index 0 of col_gas, which the kernel reads for itself.
+    compute_tau_sw(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, tau, ssa, g);
 
     const int ibnd = k.gpt_band_h(igpt);
     const auto cloud_tau = band_slice(clouds.tau, ibnd);
