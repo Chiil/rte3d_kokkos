@@ -51,6 +51,16 @@ Flags override the settings file, so a case stays reproducible from its `.toml` 
 while a single run can still be varied. See [`user/example.toml`](user/example.toml)
 for the switches and the coefficient-file paths.
 
+The RCEMIP input that ships with rte-rrtmgp-cpp is such a case already, so it runs
+with no settings file at all -- 4096 columns of 256 layers, clear sky:
+
+```bash
+python cases/user/run_case.py rcemip -i rte-rrtmgp-cpp/rcemip/rcemip_input.nc
+```
+
+The tests solve a few of its columns and check them against `rcemip/run_rcemip.py`,
+which reads the same file its own way.
+
 ### The input file
 
 Columns are flattened as x fastest, which is what `(lay, y, x)` already is in memory.
