@@ -19,6 +19,8 @@ Rte_sw::Two_stream_scratch Rte_sw::Two_stream_scratch::make(const int nlay, cons
     s.carry = Array_2d<TF>(Kokkos::view_alloc("carry", no_init), 2, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
     s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
+    s.diffuse_up = Array_2d<TF>(Kokkos::view_alloc("diffuse_up", no_init), nlev, ncol);
+    s.diffuse_dn = Array_2d<TF>(Kokkos::view_alloc("diffuse_dn", no_init), nlev, ncol);
     s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
 
     return s;
@@ -157,22 +159,38 @@ namespace
                             : TF(0.);
             });
 
+        // The sweeps write the diffuse flux to scratch rather than adding it into the
+        // spectral totals themselves. A running total is a read-modify-write, and
+        // inside a column sweep, which has only ncol threads to hide it, that costs
+        // several times what it costs in the fully parallel kernel below: at 4096
+        // columns it made adding_dn twice the price of adding_up.
+        //
+        // It is a trade, not a free win. Accumulating in the sweep moves four passes
+        // over (nlev, ncol) out of this kernel and two into that one, so once there
+        // are enough columns for the sweep to saturate memory anyway, the two extra
+        // arrays cost more than the read-modify-write did. The crossing is at roughly
+        // 20000 columns on an A4500: 13% faster at 4096, 4% slower at 65536. Taken
+        // this way round because the small-column end is where rte3d is furthest
+        // behind a solver that carries the whole spectrum at once.
+        const Array_2d<TF> diffuse_up = scratch.diffuse_up;
+        const Array_2d<TF> diffuse_dn = scratch.diffuse_dn;
+
         adding<top_at_1>(
                 nlay, ncol,
                 sfc_alb_dif, src_sfc, inc_flux_dif,
                 Rdif, Tdif, source_dn, source_up,
-                flux_up, flux_dn,
+                Flux_sink{diffuse_up}, Flux_sink{diffuse_dn},
                 albedo, src, scratch.carry);
 
-        // adding() computes only the diffuse flux; flux_dn is the total. This is also
-        // where the direct beam reaches the spectral totals, its g-point array having
-        // held it since the sweep above.
+        // adding() computes only the diffuse flux; flux_dn is the total. This is where
+        // all three fluxes reach the spectral totals.
         parallel_for_2d("sw_2stream_total", {0, 0}, {nlev, ncol},
             KOKKOS_LAMBDA(const int ilev, const int icol)
             {
                 const TF dir_l = dir(ilev, icol);
 
-                flux_dn.put(ilev, icol, dir_l, true);
+                flux_up.put(ilev, icol, diffuse_up(ilev, icol));
+                flux_dn.put(ilev, icol, diffuse_dn(ilev, icol) + dir_l);
                 flux_dir.add(ilev, icol, dir_l);
             });
     }
