@@ -7,8 +7,11 @@ namespace
 {
     // The reference guards its divisions with eps = 3*tiny(1.0), three times the
     // smallest normal number. Note this is tiny, not epsilon: it only prevents
-    // division by zero, it is not a rounding threshold.
-    constexpr TF eps = TF(3.) * std::numeric_limits<TF>::min();
+    // division by zero, it is not a rounding threshold. A function rather than a
+    // namespace-scope constant so it is usable inside device lambdas: a host
+    // constexpr variable is ODR-used (its address taken) when passed by reference
+    // to Kokkos::max, which nvcc rejects in device code.
+    KOKKOS_INLINE_FUNCTION constexpr TF eps() { return TF(3.) * std::numeric_limits<TF>::min(); }
 }
 
 
@@ -55,8 +58,8 @@ void Optical_props::delta_scale_2str(const Optical_props_2str& props)
             const TF wf = ssa(igpt, ilay, icol) * f;
 
             tau(igpt, ilay, icol) = (TF(1.) - wf) * tau(igpt, ilay, icol);
-            ssa(igpt, ilay, icol) = (ssa(igpt, ilay, icol) - wf) / Kokkos::max(eps, TF(1.) - wf);
-            g  (igpt, ilay, icol) = (g  (igpt, ilay, icol) - f ) / Kokkos::max(eps, TF(1.) - f );
+            ssa(igpt, ilay, icol) = (ssa(igpt, ilay, icol) - wf) / Kokkos::max(eps(), TF(1.) - wf);
+            g  (igpt, ilay, icol) = (g  (igpt, ilay, icol) - f ) / Kokkos::max(eps(), TF(1.) - f );
         });
 }
 
@@ -74,8 +77,8 @@ void Optical_props::delta_scale_2str_f(const Optical_props_2str& props, const Ar
             const TF wf = ssa(igpt, ilay, icol) * f_l;
 
             tau(igpt, ilay, icol) = (TF(1.) - wf) * tau(igpt, ilay, icol);
-            ssa(igpt, ilay, icol) = (ssa(igpt, ilay, icol) - wf ) / Kokkos::max(eps, TF(1.) - wf );
-            g  (igpt, ilay, icol) = (g  (igpt, ilay, icol) - f_l) / Kokkos::max(eps, TF(1.) - f_l);
+            ssa(igpt, ilay, icol) = (ssa(igpt, ilay, icol) - wf ) / Kokkos::max(eps(), TF(1.) - wf );
+            g  (igpt, ilay, icol) = (g  (igpt, ilay, icol) - f_l) / Kokkos::max(eps(), TF(1.) - f_l);
         });
 }
 
@@ -121,7 +124,7 @@ void Optical_props::increment_2stream_by_1scalar(
             const TF tau12 = tau1(igpt, ilay, icol) + tau2(gpt2set(igpt), ilay, icol);
 
             ssa1(igpt, ilay, icol) = tau1(igpt, ilay, icol) * ssa1(igpt, ilay, icol)
-                                   / Kokkos::max(eps, tau12);
+                                   / Kokkos::max(eps(), tau12);
             tau1(igpt, ilay, icol) = tau12;
         });
 }
@@ -145,9 +148,9 @@ void Optical_props::increment_2stream_by_2stream(
             g1(igpt, ilay, icol) =
                     (tau1(igpt, ilay, icol) * ssa1(igpt, ilay, icol) * g1(igpt, ilay, icol)
                      + tau2(i2, ilay, icol) * ssa2(i2, ilay, icol) * g2(i2, ilay, icol))
-                    / Kokkos::max(eps, tauscat12);
+                    / Kokkos::max(eps(), tauscat12);
 
-            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps(), tau12);
             tau1(igpt, ilay, icol) = tau12;
         });
 }
@@ -183,9 +186,9 @@ void Optical_props::increment_2stream_by_2stream(
             g1(ilay, icol) =
                     (tau1(ilay, icol) * ssa1(ilay, icol) * g1(ilay, icol)
                      + tau2(ilay, icol) * ssa2(ilay, icol) * g2(ilay, icol))
-                    / Kokkos::max(eps, tauscat12);
+                    / Kokkos::max(eps(), tauscat12);
 
-            ssa1(ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            ssa1(ilay, icol) = tauscat12 / Kokkos::max(eps(), tau12);
             tau1(ilay, icol) = tau12;
         });
 }
@@ -210,9 +213,9 @@ void Optical_props::increment_2stream_by_nstream(
             g1(igpt, ilay, icol) =
                     (tau1(igpt, ilay, icol) * ssa1(igpt, ilay, icol) * g1(igpt, ilay, icol)
                      + tau2(i2, ilay, icol) * ssa2(i2, ilay, icol) * p2(i2, ilay, icol, 0))
-                    / Kokkos::max(eps, tauscat12);
+                    / Kokkos::max(eps(), tauscat12);
 
-            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps(), tau12);
             tau1(igpt, ilay, icol) = tau12;
         });
 }
@@ -245,10 +248,10 @@ void Optical_props::increment_nstream_by_2stream(
                 p1(igpt, ilay, icol, imom) =
                         (tau1(igpt, ilay, icol) * ssa1(igpt, ilay, icol) * p1(igpt, ilay, icol, imom)
                          + tau2(i2, ilay, icol) * ssa2(i2, ilay, icol) * moment)
-                        / Kokkos::max(eps, tauscat12);
+                        / Kokkos::max(eps(), tauscat12);
             }
 
-            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps(), tau12);
             tau1(igpt, ilay, icol) = tau12;
         });
 }
@@ -277,9 +280,9 @@ void Optical_props::increment_nstream_by_nstream(
                 p1(igpt, ilay, icol, imom) =
                         (tau1(igpt, ilay, icol) * ssa1(igpt, ilay, icol) * p1(igpt, ilay, icol, imom)
                          + tau2(i2, ilay, icol) * ssa2(i2, ilay, icol) * p2(i2, ilay, icol, imom))
-                        / Kokkos::max(eps, tauscat12);
+                        / Kokkos::max(eps(), tauscat12);
 
-            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps, tau12);
+            ssa1(igpt, ilay, icol) = tauscat12 / Kokkos::max(eps(), tau12);
             tau1(igpt, ilay, icol) = tau12;
         });
 }

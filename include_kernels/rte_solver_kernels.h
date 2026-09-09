@@ -7,12 +7,15 @@
 
 namespace Rte_kernels
 {
-    inline constexpr TF eps = std::numeric_limits<TF>::epsilon();
+    // Functions rather than namespace-scope constants so they are usable inside
+    // device lambdas: a host constexpr variable is ODR-used (its address taken) when
+    // passed by reference to Kokkos::max etc., which nvcc rejects in device code.
+    KOKKOS_INLINE_FUNCTION constexpr TF eps() { return std::numeric_limits<TF>::epsilon(); }
 
     // Lower limit on k, suggested by Chiel van Heerwaarden: k = 0 for isotropic,
     // conservative scattering, and this limit keeps the relative error in Rdif below
     // 0.1% down to tau = 1e-9 while avoiding the division by zero.
-    inline constexpr TF min_k = TF(1.e4) * eps;
+    KOKKOS_INLINE_FUNCTION constexpr TF min_k() { return TF(1.e4) * eps(); }
 
 
     // Vertical orientation of the arrays. The reference writes every loop out twice,
@@ -59,7 +62,7 @@ namespace Rte_kernels
         const TF gamma2 = (TF(3.) * (w0 * (TF(1.) - g))) * TF(0.25);
 
         // Eq 18; k = sqrt(gamma1^2 - gamma2^2), limited below to avoid dividing by 0.
-        const TF k = Kokkos::sqrt(Kokkos::max((gamma1 - gamma2) * (gamma1 + gamma2), min_k));
+        const TF k = Kokkos::sqrt(Kokkos::max((gamma1 - gamma2) * (gamma1 + gamma2), min_k()));
         const TF exp_minusktau = Kokkos::exp(-tau*k);
         const TF exp_minus2ktau = exp_minusktau * exp_minusktau;
 
@@ -73,13 +76,13 @@ namespace Rte_kernels
         // On a round earth mu0 can increase with depth, so levels with mu0 <= 0 have no
         // direct beam. Compute with a nominal value here and mask the result at the
         // call site.
-        const TF mu0_s = Kokkos::max(Kokkos::sqrt(eps), mu0);
+        const TF mu0_s = Kokkos::max(Kokkos::sqrt(eps()), mu0);
         const TF k_mu = k * mu0_s;
 
         // Eq 14, top and bottom multiplied by exp(-k*tau) and rearranged to avoid a
         // division by zero.
         const TF one_minus_kmu2 = TF(1.) - k_mu*k_mu;
-        RT_term = w0 * RT_term / (Kokkos::abs(one_minus_kmu2) >= eps ? one_minus_kmu2 : eps);
+        RT_term = w0 * RT_term / (Kokkos::abs(one_minus_kmu2) >= eps() ? one_minus_kmu2 : eps());
 
         const TF gamma3 = (TF(2.) - TF(3.) * mu0_s * g) * TF(0.25);
         const TF gamma4 = TF(1.) - gamma3;
@@ -129,7 +132,7 @@ namespace Rte_kernels
         // (~tau^2) is of order epsilon, so use a 3rd order series expansion instead.
         // Thanks to Peter Blossey (UW) for the idea and Dmitry Alexeev (Nvidia) for
         // suggesting 3rd order.
-        const TF tau_thresh = Kokkos::sqrt(Kokkos::sqrt(eps));
+        const TF tau_thresh = Kokkos::sqrt(Kokkos::sqrt(eps()));
 
         const TF fact = tau_loc > tau_thresh
                 ? (TF(1.) - trans)/tau_loc - trans
