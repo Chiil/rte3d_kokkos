@@ -51,15 +51,30 @@ Flags override the settings file, so a case stays reproducible from its `.toml` 
 while a single run can still be varied. See [`user/example.toml`](user/example.toml)
 for the switches and the coefficient-file paths.
 
-The RCEMIP input that ships with rte-rrtmgp-cpp is such a case already, so it runs
-with no settings file at all -- 4096 columns of 256 layers, clear sky:
+### Making an input file
+
+[`user/make_input.py`](user/make_input.py) writes one, so there is something to run
+before you have written your own reader:
 
 ```bash
-python cases/user/run_case.py rcemip -i rte-rrtmgp-cpp/rcemip/rcemip_input.nc
+python cases/user/make_input.py mycase --nx 64 --ny 64 --clouds
+python cases/user/run_case.py mycase
 ```
 
-The tests solve a few of its columns and check them against `rcemip/run_rcemip.py`,
-which reads the same file its own way.
+The atmosphere is the RCEMIP radiative-convective-equilibrium sounding of Wing et al.
+(2018) for a 300 K sea surface, which is analytic, so the script needs no input data of
+its own; `--clouds` adds a liquid and an ice cloud layer and switches cloud optics on in
+the settings it writes. Every column holds the same profile. It is meant as a worked
+example of the layout below -- the shortest way to see what your own writer has to
+produce -- and the tests use it to build the case they solve.
+
+| flag | default | meaning |
+|---|---|---|
+| `--nx N`, `--ny N` | `64` | horizontal size; the columns are `nx*ny` |
+| `--nlay N` | `256` | layers, equally spaced up to 70 km |
+| `--sst K` | `300` | sea surface temperature, which sets the whole sounding |
+| `--clouds` | off | add the two cloud layers |
+| `--no-settings` | off | write only the input file, no `CASE.toml` |
 
 ### The input file
 

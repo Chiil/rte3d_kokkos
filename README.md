@@ -86,7 +86,9 @@ python cases/user/run_case.py mycase         # your own case, from NetCDF
 
 The last is the general one: it reads a case you supply as `mycase_input.nc`, with the
 switches in `mycase.toml`, and writes `mycase_output.nc`. The file layout is the one
-rte-rrtmgp-cpp's test executable reads, so cases written for that run here unchanged.
+rte-rrtmgp-cpp's test executable reads, so cases written for that run here unchanged;
+`cases/user/make_input.py` writes an example one, an analytic RCEMIP sounding, so there
+is something to run before you have written your own.
 
 Agreement with the reference fluxes shipped in `extern/rrtmgp-data`, which RRTMGP
 itself produced:

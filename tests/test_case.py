@@ -5,10 +5,11 @@ re-emitted in that layout here and solved through the generic path, which has to
 reproduce what rte3d.allsky computes from the same numbers: same gases, same clouds,
 same boundary conditions, only a different way in.
 
-The RCEMIP case goes the other way round: its input file is the one that ships with
-rte-rrtmgp-cpp, unmodified, so it tests the reader against a file written by something
-other than this repository. Its oracle is cases/rcemip/run_rcemip.py, which reads the
-same file its own way.
+The generated case goes the other way round: cases/user/make_input.py writes the file
+and run_case.py reads it back and solves it, which is the path a user of this repository
+actually walks. That case has what the all-sky one does not -- well-mixed gases stored
+as scalars, surface conditions resolved by band, an absolute solar irradiance per
+column -- and its fluxes are checked against what the boundary conditions dictate.
 """
 import os
 
@@ -23,21 +24,27 @@ REFERENCE = os.path.join(DATA, 'examples', 'all-sky', 'reference')
 LW_REF = os.path.join(REFERENCE, 'rrtmgp-allsky-lw-no-aerosols.nc')
 SW_REF = os.path.join(REFERENCE, 'rrtmgp-allsky-sw-no-aerosols.nc')
 
-# The RCEMIP input as it ships with rte-rrtmgp-cpp: 64x64 columns of one profile,
-# 256 layers, clear sky, surface at index 0, with an absolute tsi per column.
-RCEMIP = os.path.join(os.path.dirname(__file__), '..', 'rte-rrtmgp-cpp', 'rcemip',
-                      'rcemip_input.nc')
-
-# All 4096 columns hold the same profile, so a handful of them is the whole case at a
-# fraction of the cost.
-RCEMIP_NCOL = 4
+# The generated case is the same profile in every column, so a few of them say
+# everything a full domain would, on a coarse grid.
+NX, NY, NLAY = 3, 2, 48
 
 requires_data = pytest.mark.skipif(
     not os.path.exists(LW_REF), reason='rrtmgp-data submodule not checked out')
 
-requires_rcemip = pytest.mark.skipif(
-    not os.path.exists(RCEMIP),
-    reason='rte-rrtmgp-cpp is not checked out; no RCEMIP input to read')
+# The Stefan-Boltzmann constant, for what the surface has to emit.
+SIGMA = 5.670374419e-8
+
+
+def case_scripts():
+    """cases/user on the path: the scripts a user runs, imported as modules."""
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'cases', 'user'))
+
+    import make_input
+    import run_case
+
+    return make_input, run_case
 
 # The two paths run the same kernels on the same inputs, so they agree bit for bit.
 TOLERANCE = 0.0
@@ -190,98 +197,126 @@ def test_case_gas_ranks(rte3d, tmp_path):
     expanded = gas_concs.get_vmr('n2o', nlay, ncol)
     assert np.allclose(expanded, np.broadcast_to(profile[:, None], (nlay, ncol)))
 
+def generated_case(tmp_path, name='mycase', clouds=False):
+    """Write a case with cases/user/make_input.py and read it back with rte3d.case."""
+    from rte3d.case import read_case
 
-def first_columns(atm, ncol):
-    """The first ncol columns of a case, as a case in their own right."""
-    def cut(value):
-        keep = (isinstance(value, np.ndarray) and value.ndim > 0
-                and value.shape[-1] == atm['ncol'])
-        return np.ascontiguousarray(value[..., :ncol]) if keep else value
+    make_input, _ = case_scripts()
+    path = make_input.make_input(str(tmp_path/f'{name}_input.nc'),
+                                 nx=NX, ny=NY, nlay=NLAY, clouds=clouds)
 
-    out = {name: cut(value) for name, value in atm.items()}
-    out['gases'] = {name: cut(value) for name, value in atm['gases'].items()}
-    out.update(ncol=ncol, nx=ncol, ny=1, shape=(1, ncol))
-
-    return out
-
-
-def rcemip_case(rte3d, gas_file):
-    """The RCEMIP input read both ways: generically, and by the RCEMIP case script."""
-    import sys
-
-    from rte3d.case import gpoint_bands, make_gas_concs, read_case
-    from rte3d.kdist import read_kdist
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'cases', 'rcemip'))
-    import run_rcemip
-
-    atm = first_columns(read_case(RCEMIP), RCEMIP_NCOL)
-
-    f = read_kdist(os.path.join(DATA, gas_file))
-    gas_concs = make_gas_concs(rte3d, atm, f['gas_names'])
-    kdist = rte3d.load_kdist(f, gas_concs)
-
-    reference = run_rcemip.read_rcemip(RCEMIP, RCEMIP_NCOL)
-
-    return kdist, gas_concs, atm, gpoint_bands(f), run_rcemip, reference
+    return make_input, read_case(path)
 
 
 @requires_data
-@requires_rcemip
-def test_rcemip_read(rte3d):
-    """What the generic reader makes of a file it did not write.
+def test_generated_case_reads_back(rte3d, tmp_path):
+    """What the reader makes of a file the generator wrote.
 
-    RCEMIP has what the all-sky file above does not: well-mixed gases stored as
-    scalars, surface conditions resolved by band, and an absolute solar irradiance
-    per column rather than the k-distribution's own.
+    Between them these are the parts of the layout the all-sky case above does not
+    have: scalar gases, band-resolved surface conditions, and an absolute irradiance.
     """
-    from rte3d.case import read_case
+    make_input, atm = generated_case(tmp_path)
 
-    atm = read_case(RCEMIP)
+    assert (atm['nx'], atm['ny'], atm['nlay'], atm['nlev']) == (NX, NY, NLAY, NLAY + 1)
+    assert atm['ncol'] == NX*NY
 
-    assert (atm['nx'], atm['ny'], atm['nlay'], atm['nlev']) == (64, 64, 256, 257)
+    # The profile is written surface-first, and the orientation is read from it.
     assert atm['top_at_1'] is False
 
     assert isinstance(atm['gases']['co2'], float)
-    assert atm['gases']['h2o'].shape == (256, 4096)
-    assert atm['sfc_emis'].shape == (16, 4096)
-    assert atm['sfc_alb_dir'].shape == (14, 4096)
-    assert atm['tsi'].shape == (4096,)
+    assert atm['gases']['h2o'].shape == (NLAY, NX*NY)
+    assert atm['sfc_emis'].shape == (make_input.NBND_LW, NX*NY)
+    assert atm['sfc_alb_dir'].shape == (make_input.NBND_SW, NX*NY)
+    assert np.all(atm['tsi'] == make_input.TSI)
 
-    # Clear sky: there are no cloud fields in the file and none are invented.
+    # Clear sky by default: the file has no cloud fields and none are invented.
     assert 'lwp' not in atm
 
 
 @requires_data
-@requires_rcemip
-def test_rcemip_longwave(rte3d):
-    from rte3d.case import solve_lw
+def test_generated_case_solves(rte3d, tmp_path):
+    """The fluxes the boundary conditions dictate, at the two ends of the column."""
+    from rte3d.case import gpoint_bands, make_gas_concs, solve_lw, solve_sw
+    from rte3d.kdist import read_kdist
 
-    kdist, gas_concs, atm, gpt_band, run_rcemip, reference = rcemip_case(
-        rte3d, 'rrtmgp-gas-lw-g256.nc')
+    make_input, atm = generated_case(tmp_path)
+    toa, sfc = -1, 0      # the profile is surface-first
 
-    out = solve_lw(rte3d, kdist, gas_concs, atm, gpt_band)
+    for band, gas_file in (('lw', 'rrtmgp-gas-lw-g256.nc'),
+                           ('sw', 'rrtmgp-gas-sw-g224.nc')):
+        f = read_kdist(os.path.join(DATA, gas_file))
+        gas_concs = make_gas_concs(rte3d, atm, f['gas_names'])
+        kdist = rte3d.load_kdist(f, gas_concs)
 
-    # The case script takes its quadrature as (nmus, ngpt, ncol) and slices it.
-    secants = np.full((1, 1, RCEMIP_NCOL), 1.0/0.6096748751)
-    up, dn = run_rcemip.rte3d_lw(kdist, gas_concs, reference, secants, np.array([1.0]))
+        solve = solve_lw if band == 'lw' else solve_sw
+        out = solve(rte3d, kdist, gas_concs, atm, gpoint_bands(f))
 
-    assert_close(out['flux_up'], up, err_msg='flux_up')
-    assert_close(out['flux_dn'], dn, err_msg='flux_dn')
+        # Every column holds the same profile, so every column gets the same flux.
+        for flux in out.values():
+            assert_close(flux, np.broadcast_to(flux[:, :1], flux.shape),
+                         err_msg=f'{band} columns differ')
+
+        if band == 'lw':
+            # A black surface at the sea surface temperature, to within what the
+            # 16 bands cover of the Planck integral.
+            emitted = SIGMA*make_input.SST**4
+            assert out['flux_up'][sfc] == pytest.approx(emitted, rel=1e-3)
+
+            # Nothing comes down from space, and the outgoing longwave is less than
+            # what the surface sent up.
+            assert np.all(out['flux_dn'][toa] == 0.0)
+            assert np.all(out['flux_up'][toa] < out['flux_up'][sfc])
+        else:
+            # The direct beam at the top of the atmosphere is the irradiance the case
+            # asks for, projected onto the horizontal.
+            incoming = make_input.TSI*np.cos(np.deg2rad(make_input.SOLAR_ZENITH_ANGLE))
+            assert_close(out['flux_dir'][toa], np.full(atm['ncol'], incoming),
+                         err_msg='incoming solar')
+            assert_close(out['flux_dn'][toa], out['flux_dir'][toa],
+                         err_msg='no diffuse light at the top')
+
+            # The surface reflects the albedo it was given.
+            assert_close(out['flux_up'][sfc],
+                         make_input.SFC_ALBEDO*out['flux_dn'][sfc],
+                         err_msg='surface reflection')
 
 
 @requires_data
-@requires_rcemip
-def test_rcemip_shortwave(rte3d):
-    from rte3d.case import solve_sw
+def test_run_case_end_to_end(rte3d, tmp_path, monkeypatch):
+    """make_input.py, then run_case.py, as a user runs them.
 
-    kdist, gas_concs, atm, gpt_band, run_rcemip, reference = rcemip_case(
-        rte3d, 'rrtmgp-gas-sw-g224.nc')
+    The output file is the deliverable, so this checks what lands in it: the input's
+    own layout, the net flux, and band fluxes that add up to the broadband ones.
+    """
+    import sys
 
-    out = solve_sw(rte3d, kdist, gas_concs, atm, gpt_band)
-    up, dn = run_rcemip.rte3d_sw(kdist, gas_concs, reference)
+    import xarray as xr
 
-    # Not bit for bit: both scale the k-distribution's solar source to the case's own
-    # irradiance, in a different order of operations.
-    assert_close(out['flux_up'], up, err_msg='flux_up')
-    assert_close(out['flux_dn'], dn, err_msg='flux_dn')
+    make_input, run_case = case_scripts()
+
+    monkeypatch.chdir(tmp_path)
+    make_input.make_input('mycase_input.nc', nx=NX, ny=NY, nlay=NLAY, clouds=True)
+    make_input.make_settings('mycase.toml', clouds=True)
+
+    monkeypatch.setattr(sys, 'argv', ['run_case.py', 'mycase', '--output-bnd-fluxes'])
+    assert run_case.main() == 0
+
+    out = xr.open_dataset(tmp_path/'mycase_output.nc')
+
+    for band in ('lw', 'sw'):
+        up, dn = out[f'{band}_flux_up'], out[f'{band}_flux_dn']
+        assert up.dims == ('lev', 'y', 'x')
+        assert up.shape == (NLAY + 1, NY, NX)
+
+        assert_close(out[f'{band}_flux_net'].values, (dn - up).values,
+                     err_msg=f'{band} net flux')
+
+        # The bands partition the spectrum, so they add up to the broadband flux.
+        byband = out[f'{band}_bnd_flux_up']
+        assert byband.dims == (f'band_{band}', 'lev', 'y', 'x')
+        assert_close(byband.sum(f'band_{band}').values, up.values,
+                     err_msg=f'{band} bands do not add up')
+
+    # The clouds were actually used: an overcast column reflects far more sunlight
+    # than the clear-sky reflection of a 0.07 albedo.
+    assert np.all(out['sw_flux_up'][-1] > 0.2*out['sw_flux_dn'][-1])
