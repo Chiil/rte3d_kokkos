@@ -14,9 +14,6 @@ Rte_sw::Two_stream_scratch Rte_sw::Two_stream_scratch::make(const int nlay, cons
 
     s.Rdif = Array_2d<TF>(Kokkos::view_alloc("Rdif", no_init), nlay, ncol);
     s.Tdif = Array_2d<TF>(Kokkos::view_alloc("Tdif", no_init), nlay, ncol);
-    s.Rdir = Array_2d<TF>(Kokkos::view_alloc("Rdir", no_init), nlay, ncol);
-    s.Tdir = Array_2d<TF>(Kokkos::view_alloc("Tdir", no_init), nlay, ncol);
-    s.Tnoscat = Array_2d<TF>(Kokkos::view_alloc("Tnoscat", no_init), nlay, ncol);
     s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
@@ -87,9 +84,6 @@ namespace
         // resolution, which is what makes the solver fit on a GPU.
         const Array_2d<TF> Rdif = scratch.Rdif;
         const Array_2d<TF> Tdif = scratch.Tdif;
-        const Array_2d<TF> Rdir = scratch.Rdir;
-        const Array_2d<TF> Tdir = scratch.Tdir;
-        const Array_2d<TF> Tnoscat = scratch.Tnoscat;
         const Array_2d<TF> source_up = scratch.source_up;
         const Array_2d<TF> source_dn = scratch.source_dn;
         const Array_2d<TF> albedo = scratch.albedo;
@@ -97,31 +91,21 @@ namespace
         const Array_2d<TF> denom = scratch.denom;
         const Array_1d<TF> src_sfc = scratch.src_sfc;
 
-        // Cell properties. Layers are independent, so this is parallel over
-        // (layer, column); only the direct beam below needs a sweep.
-        parallel_for_2d("sw_2stream_cell", {0, 0}, {nlay, ncol},
-            KOKKOS_LAMBDA(const int ilay, const int icol)
-            {
-                TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
-                Rte_kernels::sw_two_stream(
-                        tau(ilay, icol), ssa(ilay, icol), g(ilay, icol), mu0(ilay, icol),
-                        Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l);
-
-                Rdif(ilay, icol) = Rdif_l;
-                Tdif(ilay, icol) = Tdif_l;
-                Rdir(ilay, icol) = Rdir_l;
-                Tdir(ilay, icol) = Tdir_l;
-                Tnoscat(ilay, icol) = Tnoscat_l;
-            });
-
         const int lev_toa = V::lev_toa(nlay);
         const int lay_toa = V::lay_from_toa(0, nlay);
         const int lev_sfc = V::lev_sfc(nlay);
         const int lay_sfc = V::lay_from_sfc(0, nlay);
 
-        // The direct beam attenuating downward, and the diffuse sources it feeds. The
-        // beam's boundary condition at the top and the surface source it leaves behind
-        // ride along at the ends of the sweep, saving two parallel regions.
+        // The layer's two-stream coefficients and the direct beam attenuating downward
+        // through them, in one pass. The cell properties have no vertical dependence,
+        // so they could be a parallel region of their own -- but only Rdif and Tdif
+        // outlive the layer, and computing them here keeps Rdir, Tdir and Tnoscat in
+        // registers instead of writing and reading back three (nlay, ncol) arrays. The
+        // sweep is bound by memory latency, not arithmetic, so the extra work hides in
+        // the stalls. Taken from rte-rrtmgp-cpp's sw_source_2stream_kernel.
+        //
+        // The beam's boundary condition at the top and the surface source it leaves
+        // behind ride along at the ends of the sweep, saving two parallel regions.
         parallel_for_column_sweep("sw_2stream_direct", nlay, ncol,
             KOKKOS_LAMBDA(const int j, const int icol)
             {
@@ -131,13 +115,21 @@ namespace
                 const int ilay = V::lay_from_toa(j, nlay);
                 const TF dir_inc = flux_dir(ilay + V::lev_up(), icol);
 
+                TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
+                Rte_kernels::sw_two_stream(
+                        tau(ilay, icol), ssa(ilay, icol), g(ilay, icol), mu0(ilay, icol),
+                        Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l);
+
+                Rdif(ilay, icol) = Rdif_l;
+                Tdif(ilay, icol) = Tdif_l;
+
                 // T and R for the direct beam were computed with a nominal mu0 even
                 // where the sun is below the horizon; zero those out again.
                 const bool sunlit = mu0(ilay, icol) > TF(0.);
-                source_up(ilay, icol) = sunlit ? Rdir(ilay, icol) * dir_inc : TF(0.);
-                source_dn(ilay, icol) = sunlit ? Tdir(ilay, icol) * dir_inc : TF(0.);
+                source_up(ilay, icol) = sunlit ? Rdir_l * dir_inc : TF(0.);
+                source_dn(ilay, icol) = sunlit ? Tdir_l * dir_inc : TF(0.);
 
-                flux_dir(ilay + V::lev_dn(), icol) = Tnoscat(ilay, icol) * dir_inc;
+                flux_dir(ilay + V::lev_dn(), icol) = Tnoscat_l * dir_inc;
 
                 // Source for upward radiation at the surface, now that the beam has
                 // reached it.

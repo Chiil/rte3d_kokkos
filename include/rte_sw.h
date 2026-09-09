@@ -17,7 +17,6 @@ namespace Rte_sw
     struct Two_stream_scratch
     {
         Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
-        Array_2d<TF> Rdir, Tdir, Tnoscat;   // (nlay, ncol)
         Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
         Array_2d<TF> albedo, src;           // (nlev, ncol)
         Array_2d<TF> denom;                 // (nlay, ncol)
