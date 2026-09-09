@@ -76,7 +76,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
                         slice_2d(secants_g, igpt), weights_d, slice_2d(tau_d, igpt),
                         sources.gpt(igpt),
                         slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
-                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt),
+                        Flux_sink{slice_2d(flux_up, igpt)}, Flux_sink{slice_2d(flux_dn, igpt)},
                         flux_up_jac, scratch);
             Kokkos::fence();
 
@@ -137,7 +137,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
                         slice_2d(tau_d, igpt), slice_2d(ssa_d, igpt), slice_2d(g_d, igpt),
                         sources.gpt(igpt),
                         slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
-                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt), scratch);
+                        Flux_sink{slice_2d(flux_up, igpt)}, Flux_sink{slice_2d(flux_dn, igpt)}, scratch);
             Kokkos::fence();
 
             return py::make_tuple(Numpy::from_device(flux_up), Numpy::from_device(flux_dn));

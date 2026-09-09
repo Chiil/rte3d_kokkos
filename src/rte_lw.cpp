@@ -70,8 +70,8 @@ namespace
             const Source_func_lw& sources,
             const Array_map_1d<const TF>& sfc_emis,
             const Array_map_1d<const TF>& inc_flux,
-            const Array_map_2d<TF>& flux_up,
-            const Array_map_2d<TF>& flux_dn,
+            const Flux_sink& flux_up,
+            const Flux_sink& flux_dn,
             const Array_2d<TF>& flux_up_jac,
             const Rte_lw::Noscat_scratch& scratch)
     {
@@ -173,24 +173,22 @@ namespace
                                 trans_l * rad_up_jac(ilay + V::lev_dn(), icol);
                 });
 
-            // Convert intensity back to flux, assuming azimuthal isotropy, and
-            // accumulate this angle's contribution. The Jacobian is spectrally
-            // integrated, so it accumulates over g-points as well and the caller
-            // zeroes it.
-            // The first angle assigns rather than accumulates, which is what zeroing
-            // flux_up and flux_dn up front would have bought -- two full-size memsets
-            // per g-point. The Jacobian is spectrally integrated and so keeps
+            // Convert intensity back to flux, assuming azimuthal isotropy, and hand
+            // this angle's contribution to the sink -- a g-point flux for a caller
+            // that wants one, the running spectral totals for a whole-spectrum solve,
+            // which is a full write and read back saved per g-point.
+            //
+            // The first angle assigns to a g-point flux rather than accumulating,
+            // which is what zeroing it up front would have bought -- two full-size
+            // memsets per g-point. The Jacobian is spectrally integrated and so keeps
             // accumulating; the caller zeroes that one.
-            const bool first_mu = imu == 0;
+            const bool later_mu = imu > 0;
 
             parallel_for_2d("lw_noscat_accumulate", {0, 0}, {nlev, ncol},
                 KOKKOS_LAMBDA(const int ilev, const int icol)
                 {
-                    const TF up = scaling * rad_up(ilev, icol);
-                    const TF dn = scaling * rad_dn(ilev, icol);
-
-                    flux_up(ilev, icol) = first_mu ? up : flux_up(ilev, icol) + up;
-                    flux_dn(ilev, icol) = first_mu ? dn : flux_dn(ilev, icol) + dn;
+                    flux_up.put(ilev, icol, scaling * rad_up(ilev, icol), later_mu);
+                    flux_dn.put(ilev, icol, scaling * rad_dn(ilev, icol), later_mu);
 
                     if (do_jacobians)
                         flux_up_jac(ilev, icol) += scaling * rad_up_jac(ilev, icol);
@@ -208,8 +206,8 @@ void Rte_lw::solver_noscat(
         const Source_func_lw& sources,
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
-        const Array_map_2d<TF>& flux_up,
-        const Array_map_2d<TF>& flux_dn,
+        const Flux_sink& flux_up,
+        const Flux_sink& flux_dn,
         const Array_2d<TF>& flux_up_jac,
         const Noscat_scratch& scratch)
 {
@@ -234,8 +232,8 @@ namespace
             const Source_func_lw& sources,
             const Array_map_1d<const TF>& sfc_emis,
             const Array_map_1d<const TF>& inc_flux,
-            const Array_map_2d<TF>& flux_up,
-            const Array_map_2d<TF>& flux_dn,
+            const Flux_sink& flux_up,
+            const Flux_sink& flux_dn,
             const Rte_lw::Two_stream_scratch& scratch)
     {
         using V = Vert<top_at_1>;
@@ -309,8 +307,8 @@ void Rte_lw::solver_2stream(
         const Source_func_lw& sources,
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
-        const Array_map_2d<TF>& flux_up,
-        const Array_map_2d<TF>& flux_dn,
+        const Flux_sink& flux_up,
+        const Flux_sink& flux_dn,
         const Two_stream_scratch& scratch)
 {
     if (top_at_1)

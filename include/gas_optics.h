@@ -360,8 +360,10 @@ namespace Gas_optics
     };
 
     // One g-point, end to end: absorption optical depth, Planck sources, the cloud
-    // increment, and transport. The fluxes land in state.flux_up / flux_dn, and
-    // fluxes.up_jac is accumulated into if it is not empty.
+    // increment, and transport. The fluxes go wherever the sinks say: a caller after a
+    // single g-point points them at state.flux_up / flux_dn, while solve_lw below
+    // points them straight at the spectral totals, so that no per-g-point flux is ever
+    // written and read back. flux_up_jac is accumulated into if it is not empty.
     //
     // secants is (nmus, ncol) and shared by every g-point, as the reference's
     // rte_lw fills it. sfc_emis and inc_flux are (ngpt, ncol); this takes their
@@ -377,8 +379,12 @@ namespace Gas_optics
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
             const Array_map_1d<const TF>& inc_flux,  // (ncol), may be empty
             const Band_props& clouds,
+            const Flux_sink& flux_up,
+            const Flux_sink& flux_dn,
             const Array_2d<TF>& flux_up_jac);        // (nlev, ncol), may be empty
 
+    // As above for the shortwave. flux_dn and flux_dir need their g-point arrays: the
+    // adding sweep and the direct beam both read back what they wrote a level before.
     void solve_sw_gpt(
             const Kdist_gas& k,
             const Solve_state& state,
@@ -390,7 +396,10 @@ namespace Gas_optics
             const Array_map_1d<const TF>& sfc_alb_dif,   // (ncol)
             const Array_map_1d<const TF>& inc_flux_dir,  // (ncol)
             const Array_map_1d<const TF>& inc_flux_dif,  // (ncol), may be empty
-            const Band_props& clouds);
+            const Band_props& clouds,
+            const Flux_sink& flux_up,
+            const Flux_sink& flux_dn,
+            const Flux_sink& flux_dir);
 
     // The whole spectrum: prepare, then loop the above and accumulate.
     void solve_lw(

@@ -911,6 +911,8 @@ void Gas_optics::solve_lw_gpt(
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
         const Band_props& clouds,
+        const Flux_sink& flux_up,
+        const Flux_sink& flux_dn,
         const Array_2d<TF>& flux_up_jac)
 {
     // The Planck fraction comes out of the same interpolation as the optical depth.
@@ -932,7 +934,7 @@ void Gas_optics::solve_lw_gpt(
 
     Rte_lw::solver_noscat(
             top_at_1, secants, weights, state.tau, state.sources(), sfc_emis, inc_flux,
-            state.flux_up, state.flux_dn, flux_up_jac, state.lw_noscat);
+            flux_up, flux_dn, flux_up_jac, state.lw_noscat);
 }
 
 
@@ -947,7 +949,10 @@ void Gas_optics::solve_sw_gpt(
         const Array_map_1d<const TF>& sfc_alb_dif,
         const Array_map_1d<const TF>& inc_flux_dir,
         const Array_map_1d<const TF>& inc_flux_dif,
-        const Band_props& clouds)
+        const Band_props& clouds,
+        const Flux_sink& flux_up,
+        const Flux_sink& flux_dn,
+        const Flux_sink& flux_dir)
 {
     const auto tau = state.tau;
     const auto ssa = state.ssa;
@@ -968,24 +973,24 @@ void Gas_optics::solve_sw_gpt(
     Rte_sw::solver_2stream(
             top_at_1, tau, ssa, g, mu0,
             sfc_alb_dir, sfc_alb_dif, inc_flux_dir, inc_flux_dif,
-            state.flux_up, state.flux_dn, state.flux_dir, state.sw_2stream);
+            flux_up, flux_dn, flux_dir, state.sw_2stream);
 }
 
 
 namespace
 {
-    // Add this g-point's flux to the broadband total, and to its band's total when one
-    // was asked for.
-    void accumulate(
+    // Where this g-point's flux is to land: the running broadband total, its band's
+    // total when one was asked for, and -- only where a solver reads back what it
+    // wrote -- a g-point array of its own.
+    Flux_sink sink(
             const int ibnd,
-            const Array_map_2d<const TF>& gpt_flux,
             const Array_2d<TF>& broadband,
-            const Array_3d<TF>& byband)
+            const Array_3d<TF>& byband,
+            const Array_map_2d<TF>& gpt = Array_map_2d<TF>())
     {
-        Fluxes::accumulate_broadband(gpt_flux, broadband);
-
-        if (byband.size() > 0)
-            Fluxes::accumulate_byband(ibnd, gpt_flux, byband);
+        return Flux_sink{
+                gpt, broadband,
+                byband.size() > 0 ? slice_2d(byband, ibnd) : Array_map_2d<TF>()};
     }
 
     void zero(const Array_2d<TF>& a)
@@ -1024,15 +1029,18 @@ void Gas_optics::solve_lw(
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
+        // The solver adds into the totals itself; no g-point flux is written, since
+        // the no-scattering solver never reads one back.
+        const int ibnd = k.gpt_band_h(igpt);
+
         solve_lw_gpt(
                 k, state, atm, top_at_1, igpt, secants, weights,
                 slice_1d(sfc_emis, igpt),
                 inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
-                clouds, fluxes.up_jac);
-
-        const int ibnd = k.gpt_band_h(igpt);
-        accumulate(ibnd, state.flux_up, fluxes.up, fluxes.up_byband);
-        accumulate(ibnd, state.flux_dn, fluxes.dn, fluxes.dn_byband);
+                clouds,
+                sink(ibnd, fluxes.up, fluxes.up_byband),
+                sink(ibnd, fluxes.dn, fluxes.dn_byband),
+                fluxes.up_jac);
     }
 }
 
@@ -1059,18 +1067,21 @@ void Gas_optics::solve_sw(
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
+        // The downward and direct fluxes keep their g-point arrays, which the two
+        // sweeps read back; the upward one is only ever written, so it goes straight
+        // into the totals.
+        const int ibnd = k.gpt_band_h(igpt);
+
         solve_sw_gpt(
                 k, state, atm, top_at_1, igpt, mu0,
                 slice_1d(sfc_alb_dir, igpt), slice_1d(sfc_alb_dif, igpt),
                 slice_1d(inc_flux_dir, igpt),
                 inc_flux_dif.size() > 0 ? slice_1d(inc_flux_dif, igpt)
                                         : Array_map_1d<const TF>(),
-                clouds);
-
-        const int ibnd = k.gpt_band_h(igpt);
-        accumulate(ibnd, state.flux_up, fluxes.up, fluxes.up_byband);
-        accumulate(ibnd, state.flux_dn, fluxes.dn, fluxes.dn_byband);
-        accumulate(ibnd, state.flux_dir, fluxes.dir, fluxes.dir_byband);
+                clouds,
+                sink(ibnd, fluxes.up, fluxes.up_byband),
+                sink(ibnd, fluxes.dn, fluxes.dn_byband, state.flux_dn),
+                sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
     }
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "fluxes.h"
 #include "types.h"
 
 
@@ -48,9 +49,9 @@ namespace Rte_sw
             const Array_map_1d<const TF>& sfc_alb_dif,  // (ncol)
             const Array_map_1d<const TF>& inc_flux_dir, // (ncol)
             const Array_map_1d<const TF>& inc_flux_dif, // (ncol), may be empty
-            const Array_map_2d<TF>& flux_up,            // (nlev, ncol)
-            const Array_map_2d<TF>& flux_dn,            // (nlev, ncol)
-            const Array_map_2d<TF>& flux_dir,           // (nlev, ncol)
+            const Flux_sink& flux_up,                   // (nlev, ncol)
+            const Flux_sink& flux_dn,                   // (nlev, ncol), gpt required
+            const Flux_sink& flux_dir,                  // (nlev, ncol), gpt required
             const Two_stream_scratch& scratch);
 
     void init_python_bindings(py::module_& m);

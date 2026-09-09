@@ -105,7 +105,7 @@ void Rte_sw::init_python_bindings(py::module_& m)
                         slice_2d(tau_d, igpt), slice_2d(ssa_d, igpt), slice_2d(g_d, igpt), mu0_d,
                         slice_1d(alb_dir_d, igpt), slice_1d(alb_dif_d, igpt),
                         slice_1d(inc_dir_d, igpt), optional_slice(inc_dif_d, igpt),
-                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt), slice_2d(flux_dir, igpt),
+                        Flux_sink{slice_2d(flux_up, igpt)}, Flux_sink{slice_2d(flux_dn, igpt)}, Flux_sink{slice_2d(flux_dir, igpt)},
                         scratch);
             Kokkos::fence();
 

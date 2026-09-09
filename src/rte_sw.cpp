@@ -69,9 +69,9 @@ namespace
             const Array_map_1d<const TF>& sfc_alb_dif,
             const Array_map_1d<const TF>& inc_flux_dir,
             const Array_map_1d<const TF>& inc_flux_dif,
-            const Array_map_2d<TF>& flux_up,
-            const Array_map_2d<TF>& flux_dn,
-            const Array_map_2d<TF>& flux_dir,
+            const Flux_sink& flux_up,
+            const Flux_sink& flux_dn,
+            const Flux_sink& flux_dir,
             const Rte_sw::Two_stream_scratch& scratch)
     {
         using V = Vert<top_at_1>;
@@ -96,6 +96,10 @@ namespace
         const int lev_sfc = V::lev_sfc(nlay);
         const int lay_sfc = V::lay_from_sfc(0, nlay);
 
+        // The direct beam attenuates level by level, so its g-point array is where the
+        // sweep keeps its state; the spectral totals take it at the end.
+        const Array_map_2d<TF> dir = flux_dir.gpt;
+
         // The layer's two-stream coefficients and the direct beam attenuating downward
         // through them, in one pass. The cell properties have no vertical dependence,
         // so they could be a parallel region of their own -- but only Rdif and Tdif
@@ -110,10 +114,10 @@ namespace
             KOKKOS_LAMBDA(const int j, const int icol)
             {
                 if (j == 0)
-                    flux_dir(lev_toa, icol) = inc_flux_dir(icol) * mu0(lay_toa, icol);
+                    dir(lev_toa, icol) = inc_flux_dir(icol) * mu0(lay_toa, icol);
 
                 const int ilay = V::lay_from_toa(j, nlay);
-                const TF dir_inc = flux_dir(ilay + V::lev_up(), icol);
+                const TF dir_inc = dir(ilay + V::lev_up(), icol);
 
                 TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
                 Rte_kernels::sw_two_stream(
@@ -129,13 +133,13 @@ namespace
                 source_up(ilay, icol) = sunlit ? Rdir_l * dir_inc : TF(0.);
                 source_dn(ilay, icol) = sunlit ? Tdir_l * dir_inc : TF(0.);
 
-                flux_dir(ilay + V::lev_dn(), icol) = Tnoscat_l * dir_inc;
+                dir(ilay + V::lev_dn(), icol) = Tnoscat_l * dir_inc;
 
                 // Source for upward radiation at the surface, now that the beam has
                 // reached it.
                 if (j == nlay-1)
                     src_sfc(icol) = mu0(lay_sfc, icol) > TF(0.)
-                            ? flux_dir(lev_sfc, icol) * sfc_alb_dir(icol)
+                            ? dir(lev_sfc, icol) * sfc_alb_dir(icol)
                             : TF(0.);
             });
 
@@ -146,11 +150,16 @@ namespace
                 flux_up, flux_dn,
                 albedo, src, denom);
 
-        // adding() computes only the diffuse flux; flux_dn is the total.
+        // adding() computes only the diffuse flux; flux_dn is the total. This is also
+        // where the direct beam reaches the spectral totals, its g-point array having
+        // held it since the sweep above.
         parallel_for_2d("sw_2stream_total", {0, 0}, {nlev, ncol},
             KOKKOS_LAMBDA(const int ilev, const int icol)
             {
-                flux_dn(ilev, icol) += flux_dir(ilev, icol);
+                const TF dir_l = dir(ilev, icol);
+
+                flux_dn.put(ilev, icol, dir_l, true);
+                flux_dir.add(ilev, icol, dir_l);
             });
     }
 }
@@ -180,9 +189,9 @@ void Rte_sw::solver_2stream(
         const Array_map_1d<const TF>& sfc_alb_dif,
         const Array_map_1d<const TF>& inc_flux_dir,
         const Array_map_1d<const TF>& inc_flux_dif,
-        const Array_map_2d<TF>& flux_up,
-        const Array_map_2d<TF>& flux_dn,
-        const Array_map_2d<TF>& flux_dir,
+        const Flux_sink& flux_up,
+        const Flux_sink& flux_dn,
+        const Flux_sink& flux_dir,
         const Two_stream_scratch& scratch)
 {
     if (top_at_1)

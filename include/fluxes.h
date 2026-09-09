@@ -3,6 +3,45 @@
 #include "types.h"
 
 
+// Where one g-point's flux, as a solver produces it, is to go.
+//
+// A single-g-point solve keeps the flux: gpt is the (nlev, ncol) array the caller
+// reads afterwards. A whole-spectrum solve never looks at it -- it only wants the
+// totals -- so it hands the solver those instead and the solver's last kernel adds
+// into them, which saves writing a per-g-point flux and reading it straight back once
+// per g-point. Both at once is legal, and is what the shortwave needs: its adding
+// sweep reads the downward flux it wrote at the level before.
+struct Flux_sink
+{
+    Array_map_2d<TF> gpt;       // (nlev, ncol), written when not empty
+    Array_map_2d<TF> broadband; // (nlev, ncol), added into when not empty
+    Array_map_2d<TF> byband;    // (nlev, ncol), this g-point's band, added into when not empty
+
+    // One g-point's flux at (ilev, icol). accumulate adds to the g-point array rather
+    // than overwriting it, which the longwave's quadrature angles need; the totals are
+    // always added to, since the caller zeroed them before the g-point loop.
+    KOKKOS_INLINE_FUNCTION
+    void put(const int ilev, const int icol, const TF value, const bool accumulate = false) const
+    {
+        if (gpt.size() > 0)
+            gpt(ilev, icol) = accumulate ? gpt(ilev, icol) + value : value;
+
+        add(ilev, icol, value);
+    }
+
+    // The totals alone, for a value the g-point array already holds.
+    KOKKOS_INLINE_FUNCTION
+    void add(const int ilev, const int icol, const TF value) const
+    {
+        if (broadband.size() > 0)
+            broadband(ilev, icol) += value;
+
+        if (byband.size() > 0)
+            byband(ilev, icol) += value;
+    }
+};
+
+
 // Spectral reduction of fluxes. Arrays are (ngpt, nlev, ncol) going in and
 // (nlev, ncol) or (nbnd, nlev, ncol) coming out.
 namespace Fluxes

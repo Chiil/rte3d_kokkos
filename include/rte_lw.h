@@ -1,6 +1,7 @@
 #pragma once
 
 #include "source_functions.h"
+#include "fluxes.h"
 #include "types.h"
 
 
@@ -68,8 +69,8 @@ namespace Rte_lw
             const Source_func_lw& sources,
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
             const Array_map_1d<const TF>& inc_flux,  // (ncol) incident diffuse flux, may be empty
-            const Array_map_2d<TF>& flux_up,         // (nlev, ncol)
-            const Array_map_2d<TF>& flux_dn,         // (nlev, ncol)
+            const Flux_sink& flux_up,                // (nlev, ncol)
+            const Flux_sink& flux_dn,                // (nlev, ncol)
             const Array_2d<TF>& flux_up_jac,         // (nlev, ncol), may be empty
             const Noscat_scratch& scratch);
 
@@ -82,8 +83,8 @@ namespace Rte_lw
             const Source_func_lw& sources,
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
             const Array_map_1d<const TF>& inc_flux,  // (ncol)
-            const Array_map_2d<TF>& flux_up,         // (nlev, ncol)
-            const Array_map_2d<TF>& flux_dn,         // (nlev, ncol)
+            const Flux_sink& flux_up,                // (nlev, ncol)
+            const Flux_sink& flux_dn,         // (nlev, ncol)
             const Two_stream_scratch& scratch);
 
     void init_python_bindings(py::module_& m);

@@ -2,6 +2,7 @@
 
 #include <limits>
 
+#include "fluxes.h"
 #include "types.h"
 
 
@@ -155,6 +156,10 @@ namespace Rte_kernels
     // albedo, src and denom carry state between the sweeps and are (nlev, ncol) or
     // (nlay, ncol) scratch. flux_dn_toa is the incident diffuse flux, and may be empty
     // for a zero boundary condition.
+    //
+    // The downward sweep reads back the flux it wrote at the level before, so
+    // flux_dn's g-point array has to be there; flux_up is only ever written, so a
+    // caller that wants nothing but the spectral totals can leave that one out.
     template<bool top_at_1>
     inline void adding(
             const int nlay, const int ncol,
@@ -163,9 +168,12 @@ namespace Rte_kernels
             const Array_map_1d<const TF>& flux_dn_toa,  // (ncol), may be empty
             const Array_map_2d<const TF>& rdif, const Array_map_2d<const TF>& tdif,
             const Array_map_2d<const TF>& src_dn, const Array_map_2d<const TF>& src_up,
-            const Array_map_2d<TF>& flux_up, const Array_map_2d<TF>& flux_dn,
+            const Flux_sink& flux_up, const Flux_sink& flux_dn,
             const Array_2d<TF>& albedo, const Array_2d<TF>& src, const Array_2d<TF>& denom)
     {
+        // The one place the downward sweep reads itself.
+        const Array_map_2d<TF> flux_dn_gpt = flux_dn.gpt;
+
         using V = Vert<top_at_1>;
 
         const int lev_sfc = V::lev_sfc(nlay);
@@ -215,9 +223,10 @@ namespace Rte_kernels
                     // diffuse flux plus emission from below.
                     const TF flux_dn_l = has_dif_bc ? flux_dn_toa(icol) : TF(0.);
 
-                    flux_dn(lev_toa, icol) = flux_dn_l;
-                    flux_up(lev_toa, icol) = flux_dn_l * albedo(lev_toa, icol)
-                                           + src(lev_toa, icol);
+                    flux_dn_gpt(lev_toa, icol) = flux_dn_l;
+                    flux_dn.add(lev_toa, icol, flux_dn_l);
+                    flux_up.put(lev_toa, icol,
+                                flux_dn_l * albedo(lev_toa, icol) + src(lev_toa, icol));
                 }
 
                 const int ilay = V::lay_from_toa(j, nlay);
@@ -225,13 +234,14 @@ namespace Rte_kernels
                 const int lev_dst  = ilay + V::lev_dn();
 
                 const TF flux_dn_l =                                          // Eq 13
-                        (tdif(ilay, icol) * flux_dn(lev_prev, icol)
+                        (tdif(ilay, icol) * flux_dn_gpt(lev_prev, icol)
                          + rdif(ilay, icol) * src(lev_dst, icol)
                          + src_dn(ilay, icol)) * denom(ilay, icol);
 
-                flux_dn(lev_dst, icol) = flux_dn_l;
-                flux_up(lev_dst, icol) = flux_dn_l * albedo(lev_dst, icol)     // Eq 12
-                                       + src(lev_dst, icol);
+                flux_dn_gpt(lev_dst, icol) = flux_dn_l;
+                flux_dn.add(lev_dst, icol, flux_dn_l);
+                flux_up.put(lev_dst, icol,                                    // Eq 12
+                            flux_dn_l * albedo(lev_dst, icol) + src(lev_dst, icol));
             });
     }
 
