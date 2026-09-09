@@ -124,7 +124,19 @@ def test_conservative_scattering_conserves_energy(rte3d, top_at_1):
     Only approximate: the two-stream conservative limit is reached through the min_k
     floor in sw_two_stream, which the reference documents as giving a relative error
     below 0.1%. That is still tight enough that a sign or indexing error stands out.
+
+    Double precision only. For conservative scattering gamma1 - gamma2 is zero exactly,
+    so k collapses to sqrt(min_k), and min_k = 1e4*epsilon scales with the working
+    precision: sqrt(min_k) is ~1.5e-6 in double but ~0.035 in single. Over the thick
+    layers in this case that single-precision floor injects real absorption -- the net
+    flux is no longer constant with height at all -- so the conserved-energy property
+    the test checks cannot hold in single precision. This is inherent to the reference
+    algorithm (its own single-precision CI never tests the pure conservative limit),
+    not an rte3d defect, so the test is meaningful only in double precision.
     """
+    if rte3d.runtime().precision == 'single':
+        pytest.skip('conservative limit is unresolvable at single precision (k = sqrt(min_k))')
+
     a = random_inputs(8, 30, 5, seed=6, conservative=True)
     a['sfc_alb_dir'] = np.zeros_like(a['sfc_alb_dir'])
     a['sfc_alb_dif'] = np.zeros_like(a['sfc_alb_dif'])

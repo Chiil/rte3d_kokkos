@@ -49,8 +49,11 @@ def test_gas_concs_scalar_profile_and_field(rte3d):
     assert not g.contains('ch4')
     assert g.names() == ['co2', 'h2o', 'o3']
 
-    np.testing.assert_allclose(g.get_vmr('co2', nlay, ncol), 348e-6)
-    np.testing.assert_array_equal(g.get_vmr('h2o', nlay, ncol), field)
+    np.testing.assert_allclose(g.get_vmr('co2', nlay, ncol), 348e-6, rtol=tolerance(rte3d))
+    # The field is stored at the module's precision, so compare against it cast down:
+    # set_vmr/get_vmr is a plain round-trip, exact once the dtype matches.
+    h2o = g.get_vmr('h2o', nlay, ncol)
+    np.testing.assert_array_equal(h2o, field.astype(h2o.dtype))
 
     # A profile broadcasts across columns.
     o3 = g.get_vmr('o3', nlay, ncol)
@@ -93,7 +96,7 @@ def test_col_dry_integrates_to_hydrostatic_mass(rte3d):
     total_mass = (plev[0] - plev[-1]) / GRAV
     water_mass = (col_dry*vmr_h2o).sum(axis=0) * 1e4 * M_H2O / AVOGAD
 
-    np.testing.assert_allclose(dry_mass, total_mass - water_mass, rtol=1e-12)
+    np.testing.assert_allclose(dry_mass, total_mass - water_mass, rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('supply_col_dry', [False, True])

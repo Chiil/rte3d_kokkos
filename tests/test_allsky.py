@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pytest
 
-from compare import assert_close
+from compare import assert_close, assert_flux_close, FLUX_THRESHOLD_SP
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 REFERENCE = os.path.join(DATA, 'examples', 'all-sky', 'reference')
@@ -59,8 +59,8 @@ def test_allsky_longwave(rte3d):
 
     up, dn = solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm)
 
-    assert_close(up, atm['lw_flux_up'], rtol=TOLERANCE)
-    assert_close(dn, atm['lw_flux_dn'], rtol=TOLERANCE)
+    assert_flux_close(up, atm['lw_flux_up'], rte3d, rtol=TOLERANCE)
+    assert_flux_close(dn, atm['lw_flux_dn'], rte3d, rtol=TOLERANCE)
 
     # Layer 0 is the surface here, so the outgoing flux is the last level.
     assert 100.0 < up[-1].mean() < 300.0
@@ -75,12 +75,12 @@ def test_allsky_shortwave(rte3d):
 
     up, dn, direct = solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm)
 
-    assert_close(up, atm['sw_flux_up'], rtol=TOLERANCE)
-    assert_close(dn, atm['sw_flux_dn'], rtol=TOLERANCE)
-    assert_close(direct, atm['sw_flux_dir'], rtol=TOLERANCE)
+    assert_flux_close(up, atm['sw_flux_up'], rte3d, rtol=TOLERANCE)
+    assert_flux_close(dn, atm['sw_flux_dn'], rte3d, rtol=TOLERANCE)
+    assert_flux_close(direct, atm['sw_flux_dir'], rte3d, rtol=TOLERANCE)
 
     # Incoming solar at the top is the total solar irradiance times the zenith cosine.
-    np.testing.assert_allclose(dn[-1], kdist.solar_source.sum()*MU0, rtol=1e-12)
+    assert_flux_close(dn[-1], kdist.solar_source.sum()*MU0, rte3d, rtol=1e-12)
 
 
 @requires_data
@@ -123,6 +123,9 @@ def test_ice_roughness_matters(rte3d):
         errors.append(np.abs(dn - atm['sw_flux_dn']).max())
 
     scale = np.abs(atm['sw_flux_dn']).max()
-    assert errors[ICERGH] < TOLERANCE*scale
+    # errors[] is already a residual in W/m2; single precision cannot reach the
+    # round-off agreement, so accept it against the reference's absolute W/m2 threshold.
+    matched = FLUX_THRESHOLD_SP if rte3d.runtime().precision == 'single' else TOLERANCE*scale
+    assert errors[ICERGH] < matched
     for icergh in (0, 2):
         assert errors[icergh] > 1.0, f'roughness {icergh} should differ visibly'

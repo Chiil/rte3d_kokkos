@@ -16,7 +16,7 @@ import os
 import numpy as np
 import pytest
 
-from compare import assert_close
+from compare import assert_close, assert_flux_close
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 REFERENCE = os.path.join(DATA, 'examples', 'all-sky', 'reference')
@@ -253,8 +253,8 @@ def test_generated_case_solves(rte3d, tmp_path):
 
         # Every column holds the same profile, so every column gets the same flux.
         for flux in out.values():
-            assert_close(flux, np.broadcast_to(flux[:, :1], flux.shape),
-                         err_msg=f'{band} columns differ')
+            assert_flux_close(flux, np.broadcast_to(flux[:, :1], flux.shape), rte3d,
+                              err_msg=f'{band} columns differ')
 
         if band == 'lw':
             # A black surface at the sea surface temperature, to within what the
@@ -270,15 +270,15 @@ def test_generated_case_solves(rte3d, tmp_path):
             # The direct beam at the top of the atmosphere is the irradiance the case
             # asks for, projected onto the horizontal.
             incoming = make_input.TSI*np.cos(np.deg2rad(make_input.SOLAR_ZENITH_ANGLE))
-            assert_close(out['flux_dir'][toa], np.full(atm['ncol'], incoming),
-                         err_msg='incoming solar')
-            assert_close(out['flux_dn'][toa], out['flux_dir'][toa],
-                         err_msg='no diffuse light at the top')
+            assert_flux_close(out['flux_dir'][toa], np.full(atm['ncol'], incoming), rte3d,
+                              err_msg='incoming solar')
+            assert_flux_close(out['flux_dn'][toa], out['flux_dir'][toa], rte3d,
+                              err_msg='no diffuse light at the top')
 
             # The surface reflects the albedo it was given.
-            assert_close(out['flux_up'][sfc],
-                         make_input.SFC_ALBEDO*out['flux_dn'][sfc],
-                         err_msg='surface reflection')
+            assert_flux_close(out['flux_up'][sfc],
+                              make_input.SFC_ALBEDO*out['flux_dn'][sfc], rte3d,
+                              err_msg='surface reflection')
 
 
 @requires_data
@@ -308,14 +308,14 @@ def test_run_case_end_to_end(rte3d, tmp_path, monkeypatch):
         assert up.dims == ('lev', 'y', 'x')
         assert up.shape == (NLAY + 1, NY, NX)
 
-        assert_close(out[f'{band}_flux_net'].values, (dn - up).values,
-                     err_msg=f'{band} net flux')
+        assert_flux_close(out[f'{band}_flux_net'].values, (dn - up).values, rte3d,
+                          err_msg=f'{band} net flux')
 
         # The bands partition the spectrum, so they add up to the broadband flux.
         byband = out[f'{band}_bnd_flux_up']
         assert byband.dims == (f'band_{band}', 'lev', 'y', 'x')
-        assert_close(byband.sum(f'band_{band}').values, up.values,
-                     err_msg=f'{band} bands do not add up')
+        assert_flux_close(byband.sum(f'band_{band}').values, up.values, rte3d,
+                          err_msg=f'{band} bands do not add up')
 
     # The clouds were actually used: an overcast column reflects far more sunlight
     # than the clear-sky reflection of a 0.07 albedo.

@@ -156,8 +156,12 @@ def test_extract_subset(rte3d):
     rng = np.random.default_rng(24)
     a = props(rng, 5, 4, 10, nmom=3)
 
-    np.testing.assert_array_equal(rte3d.extract_subset(a['tau'], 2, 7), a['tau'][:, :, 2:7])
-    np.testing.assert_array_equal(rte3d.extract_subset_4d(a['p'], 2, 7), a['p'][:, :, 2:7, :])
+    # extract_subset is a plain slice, so it is exact once the expected values are cast
+    # to the precision the module stored the input at.
+    tau = rte3d.extract_subset(a['tau'], 2, 7)
+    np.testing.assert_array_equal(tau, a['tau'][:, :, 2:7].astype(tau.dtype))
+    p = rte3d.extract_subset_4d(a['p'], 2, 7)
+    np.testing.assert_array_equal(p, a['p'][:, :, 2:7, :].astype(p.dtype))
     assert_close(
         rte3d.extract_subset_absorption_tau(a['tau'], a['ssa'], 2, 7),
         (a['tau']*(1.0 - a['ssa']))[:, :, 2:7],

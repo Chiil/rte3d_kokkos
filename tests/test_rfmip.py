@@ -15,13 +15,12 @@ import os
 import numpy as np
 import pytest
 
+from compare import assert_flux_close, flux_threshold
+
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 RFMIP = os.path.join(DATA, 'examples', 'rfmip-clear-sky')
 INPUT = os.path.join(
     RFMIP, 'inputs', 'multiple_input4MIPs_radiation_RFMIP_UColorado-RFMIP-1-2_none.nc')
-
-# The threshold compare-to-reference.py applies to the RFMIP fluxes, in W/m2.
-THRESHOLD = 5.8e-2
 
 
 def _reference(name):
@@ -59,8 +58,8 @@ def test_rfmip_longwave(rte3d):
     err_up = np.abs(up - ref_up).max()
     err_dn = np.abs(dn - ref_dn).max()
 
-    assert err_up < THRESHOLD, f'upward flux differs by {err_up} W/m2'
-    assert err_dn < THRESHOLD, f'downward flux differs by {err_dn} W/m2'
+    assert err_up < flux_threshold(rte3d), f'upward flux differs by {err_up} W/m2'
+    assert err_dn < flux_threshold(rte3d), f'downward flux differs by {err_dn} W/m2'
 
     # Outgoing longwave for the 100 RFMIP sites, as a guard against a result that is
     # numerically close but physically absurd.
@@ -81,15 +80,15 @@ def test_rfmip_shortwave(rte3d):
     err_up = np.abs(up[:, daytime] - ref_up[:, daytime]).max()
     err_dn = np.abs(dn[:, daytime] - ref_dn[:, daytime]).max()
 
-    assert err_up < THRESHOLD, f'upward flux differs by {err_up} W/m2'
-    assert err_dn < THRESHOLD, f'downward flux differs by {err_dn} W/m2'
+    assert err_up < flux_threshold(rte3d), f'upward flux differs by {err_up} W/m2'
+    assert err_dn < flux_threshold(rte3d), f'downward flux differs by {err_dn} W/m2'
 
     assert daytime.sum() == 51
     # Incoming solar at the top of the atmosphere must equal the prescribed TSI
     # times the cosine of the zenith angle.
     expected_toa = (atm['total_solar_irradiance'][daytime]
                     * np.cos(np.radians(atm['solar_zenith_angle'][daytime])))
-    np.testing.assert_allclose(dn[0, daytime], expected_toa, rtol=1e-12)
+    assert_flux_close(dn[0, daytime], expected_toa, rte3d, rtol=1e-12)
 
 
 @requires_data
@@ -113,7 +112,7 @@ def test_rfmip_longwave_across_experiments(rte3d):
         olr[expt] = up[0].mean()
 
         expected = read_reference(_reference('rlu'), 'rlu', expt=expt)
-        assert np.abs(up - expected).max() < THRESHOLD
+        assert np.abs(up - expected).max() < flux_threshold(rte3d)
 
     # Experiment 1 is pre-industrial, so it must emit more than present-day.
     assert olr[1] > olr[0]

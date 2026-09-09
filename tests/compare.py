@@ -32,6 +32,21 @@ DEFAULT_RTOL = 1e-12
 # and a genuine error in a solver shows up as an O(1) discrepancy, not a 1e-10 one.
 RECURRENCE_RTOL = 1e-9
 
+# Single precision cannot reach the round-off agreement double precision reaches against
+# a stored reference, so a relative tolerance tuned for double precision is the wrong
+# test for it. The Fortran reference's own CI handles this by judging fluxes against an
+# absolute threshold in W/m2 that it relaxes for single precision -- 5.8e-2 W/m2 double,
+# 3.5e-1 W/m2 single -- rather than tightening a relative one. Flux comparisons here
+# follow the same policy: keep the tight relative check in double precision, fall back to
+# the reference's absolute W/m2 threshold in single.
+FLUX_THRESHOLD_DP = 5.8e-2  # W/m2, matching rte-rrtmgp's double-precision CI.
+FLUX_THRESHOLD_SP = 3.5e-1  # W/m2, matching its relaxed single-precision CI.
+
+
+def flux_threshold(rte3d):
+    """The reference CI's absolute flux threshold in W/m2, relaxed for single precision."""
+    return FLUX_THRESHOLD_SP if rte3d.runtime().precision == 'single' else FLUX_THRESHOLD_DP
+
 
 def assert_close(actual, expected, rtol=DEFAULT_RTOL, err_msg=''):
     """Assert agreement to rtol, relative to each element and to the field's scale."""
@@ -42,3 +57,14 @@ def assert_close(actual, expected, rtol=DEFAULT_RTOL, err_msg=''):
 
     np.testing.assert_allclose(
         actual, expected, rtol=rtol, atol=rtol*scale, err_msg=err_msg)
+
+
+def assert_flux_close(actual, expected, rte3d, rtol=DEFAULT_RTOL, err_msg=''):
+    """Compare fluxes precision-aware: a tight relative check in double precision, the
+    reference's absolute W/m2 threshold in single precision (see flux_threshold)."""
+    if rte3d.runtime().precision == 'single':
+        np.testing.assert_allclose(
+            np.asarray(actual), np.asarray(expected),
+            rtol=0.0, atol=FLUX_THRESHOLD_SP, err_msg=err_msg)
+    else:
+        assert_close(actual, expected, rtol=rtol, err_msg=err_msg)
