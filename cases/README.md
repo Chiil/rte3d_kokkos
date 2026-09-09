@@ -225,3 +225,28 @@ lives in C++ rather than in the caller. It has not been done.
 
 Both builds agree with the reference to 1e-13 W/m2, so none of this is bought with
 accuracy.
+
+### On a GPU
+
+RCEMIP at 65536 columns x 256 layers, single precision, on an RTX A4500:
+
+| | longwave | shortwave |
+|---|---|---|
+| before | 1879 ms | 2167 ms |
+| now | **1356 ms** | **1496 ms** |
+
+Every one of those milliseconds was memory traffic, not arithmetic and not
+parallelism: the kernels were already running at 400-650 GB/s, against a card that
+peaks near 640. So the work was to move less --- the binary-species interpolation
+recomputed rather than stored (4.0 GB, and 24 bytes per cell per g-point), the Planck
+fraction and the Rayleigh scattering taken from the interpolation the optical depth was
+already doing, and the fluxes added into the spectral totals where they are produced
+instead of being written per g-point and read straight back. `git log` has the
+measurement for each.
+
+What is left is the column sweeps, 44% of the shortwave. They run at `ncol` threads,
+because one g-point at a time leaves nothing else to parallelise over, and at 65536
+columns that is enough to reach about 70% of peak bandwidth --- but they still move
+five `(nlay, ncol)` arrays between the direct-beam sweep and the two adding sweeps.
+Fusing those is the next thing to try; a g-point block dimension in the transport
+arrays is the other, at the cost of the property this design is built around.

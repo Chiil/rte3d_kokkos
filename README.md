@@ -105,7 +105,9 @@ all-sky reference was generated with the data that ships beside it, which is why
 one reaches round-off.
 
 On performance, rte3d is within about 20% of the reference Fortran per thread, and the
-remaining gap is entirely gas optics; see
+remaining gap is entirely gas optics. On a GPU, RCEMIP at 65536 columns x 256 layers
+runs in 1356 ms longwave and 1496 ms shortwave on an RTX A4500, single precision, and
+is bound by memory bandwidth throughout. See
 [`cases/README.md`](cases/README.md#where-things-stand).
 
 ## Design notes
@@ -124,19 +126,43 @@ each. rte3d parallelises over (g-point, layer, column) instead, which needs the 
 mapping — for each g-point, which minor absorbers contribute. `Minor_absorbers` holds
 that as a CSR list built once by `build_map`.
 
-### Interpolation weights are recomputed, not stored
+### The interpolation is recomputed, not stored
 
 The reference materialises `fmajor(2,2,2,ncol,nlay,nflav)` and
 `fminor(2,2,ncol,nlay,nflav)`. Both are pure functions of `ftemp`, `fpress` and `feta`,
-which the same kernel already computes, so rte3d stores those instead and rebuilds the
-weights where they are used (`Gas_optics_kernels::interp_weights`). That trades twelve
-stored values per (flavour, layer, column) for four multiplies: at `ncol = 1e5`,
-`nlay = 60`, `nflav = 10` it is roughly 2.4 GB instead of 7 GB.
+so rte3d rebuilds them where they are used (`Gas_optics_kernels::interp_weights`)
+rather than storing twelve values per (flavour, layer, column).
 
-rte3d also keeps the column as the fastest-varying dimension in these arrays, where the
+The g-point loop pushed the same argument one step further. `jeta`, `feta` and
+`col_mix` were stored too, `(nflav, 2, nlay, ncol)` each — 4.0 GB at
+`ncol = 65536`, `nlay = 256` — of which every g-point kernel read one flavour, 24 of
+the 240 bytes per cell, once per g-point. `Gas_optics_kernels::eta_interp` rebuilds
+that one flavour from two `col_gas` values and a `vmr_ref` lookup small enough to stay
+in cache, for two divides. `Interp_state` still has the arrays, but only the
+kernel-by-kernel tests, which compare them against the reference, ask for them.
+
+What is left in `Interp_state` is `(nlay, ncol)`: seventeen bytes a cell, read by every
+kernel in the g-point loop.
+
+rte3d keeps the column as the fastest-varying dimension in these arrays, where the
 reference puts `ncol` in the middle. This is the one place where a straight dimension
 reversal would not have matched, so the gas-optics tests transpose before calling the
 reference. The library itself never transposes.
+
+### One kernel per interpolation, not per quantity
+
+Three quantities come out of the same major-species interpolation, and the kernel that
+does it is the most expensive one in the solve. So each rides along with it rather than
+re-reading the whole interpolation state to redo the work: the Planck fraction is
+`pfracin` interpolated with the weights `kmajor` just used (`compute_tau_lw`), and
+Rayleigh scattering is `krayl` with the same weights and the same flavour, combined
+with the absorption on the spot (`compute_tau_sw`). `Gas_optics_kernels::interp_major`
+is the shared 2x2x2 sum.
+
+The fluxes go the same way. A whole-spectrum solve never looks at a per-g-point flux,
+so the solvers do not write one: `Flux_sink` says where a flux is to go, and their last
+kernel adds it straight into the running spectral totals. The only g-point flux left is
+the shortwave's direct beam, which the sweep that computes it also reads back.
 
 ### One source for both vertical orientations
 
@@ -172,6 +198,19 @@ choice stays in the one file allowed to know which backend is in use.
 Boundary conditions ride along at the ends of the sweeps rather than in launches of
 their own: the `j == 0` test is invariant in the vectorized column loop, and parallel
 regions are the scarcer resource.
+
+Every one of these recurrences reads back, at each step, a value it wrote at the step
+before. `parallel_for_column_sweep_carry` hands those to the kernel as
+`f(j, icol, TF carried[2])` — registers on GPU, an `(2, ncol)` scratch on CPU — so that
+no sweep reads an array it has written. What that buys is not the read, which came out
+of cache anyway, but the array: the shortwave's downward flux needs none, and goes
+straight into the spectral totals.
+
+`Rte_kernels::adding` is `static`, and has to stay that way. nvcc identifies an extended
+device lambda's closure type by its enclosing function, so the sweeps in that template
+get the same mangled type in `rte_lw.cpp` and `rte_sw.cpp`, which both instantiate it;
+the linker merges them and the launch calls a closure that was never registered. It
+segfaults on the host, with nothing for `compute-sanitizer` to report.
 
 ### Known defects in the Fortran reference
 
