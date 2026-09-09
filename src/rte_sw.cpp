@@ -16,6 +16,7 @@ Rte_sw::Two_stream_scratch Rte_sw::Two_stream_scratch::make(const int nlay, cons
     s.Tdif = Array_2d<TF>(Kokkos::view_alloc("Tdif", no_init), nlay, ncol);
     s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
+    s.carry = Array_2d<TF>(Kokkos::view_alloc("carry", no_init), 2, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
     s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
     s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
@@ -100,28 +101,33 @@ namespace
         // bound by exactly that.
         const bool has_g = g.size() > 0;
 
-        // The direct beam attenuates level by level, so its g-point array is where the
-        // sweep keeps its state; the spectral totals take it at the end.
+        // The direct beam attenuates level by level; the sweep keeps that in its
+        // carry, and the array is what the spectral totals are read from at the end.
         const Array_map_2d<TF> dir = flux_dir.gpt;
 
         // The layer's two-stream coefficients and the direct beam attenuating downward
         // through them, in one pass. The cell properties have no vertical dependence,
         // so they could be a parallel region of their own -- but only Rdif and Tdif
         // outlive the layer, and computing them here keeps Rdir, Tdir and Tnoscat in
-        // registers instead of writing and reading back three (nlay, ncol) arrays. The
-        // sweep is bound by memory latency, not arithmetic, so the extra work hides in
-        // the stalls. Taken from rte-rrtmgp-cpp's sw_source_2stream_kernel.
+        // registers instead of writing and reading back three (nlay, ncol) arrays.
+        // The sweep is bound by bandwidth, not arithmetic, so the extra work is free.
+        // Taken from rte-rrtmgp-cpp's sw_source_2stream_kernel.
         //
         // The beam's boundary condition at the top and the surface source it leaves
         // behind ride along at the ends of the sweep, saving two parallel regions.
-        parallel_for_column_sweep("sw_2stream_direct", nlay, ncol,
-            KOKKOS_LAMBDA(const int j, const int icol)
+        parallel_for_column_sweep_carry("sw_2stream_direct", nlay, ncol, scratch.carry,
+            KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
             {
                 if (j == 0)
-                    dir(lev_toa, icol) = inc_flux_dir(icol) * mu0(lay_toa, icol);
+                {
+                    const TF dir_toa = inc_flux_dir(icol) * mu0(lay_toa, icol);
+
+                    dir(lev_toa, icol) = dir_toa;
+                    carried[0] = dir_toa;
+                }
 
                 const int ilay = V::lay_from_toa(j, nlay);
-                const TF dir_inc = dir(ilay + V::lev_up(), icol);
+                const TF dir_inc = carried[0];
 
                 TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
                 Rte_kernels::sw_two_stream(
@@ -138,13 +144,16 @@ namespace
                 source_up(ilay, icol) = sunlit ? Rdir_l * dir_inc : TF(0.);
                 source_dn(ilay, icol) = sunlit ? Tdir_l * dir_inc : TF(0.);
 
-                dir(ilay + V::lev_dn(), icol) = Tnoscat_l * dir_inc;
+                const TF dir_out = Tnoscat_l * dir_inc;
+
+                dir(ilay + V::lev_dn(), icol) = dir_out;
+                carried[0] = dir_out;
 
                 // Source for upward radiation at the surface, now that the beam has
                 // reached it.
                 if (j == nlay-1)
                     src_sfc(icol) = mu0(lay_sfc, icol) > TF(0.)
-                            ? dir(lev_sfc, icol) * sfc_alb_dir(icol)
+                            ? dir_out * sfc_alb_dir(icol)
                             : TF(0.);
             });
 
@@ -153,7 +162,7 @@ namespace
                 sfc_alb_dif, src_sfc, inc_flux_dif,
                 Rdif, Tdif, source_dn, source_up,
                 flux_up, flux_dn,
-                albedo, src);
+                albedo, src, scratch.carry);
 
         // adding() computes only the diffuse flux; flux_dn is the total. This is also
         // where the direct beam reaches the spectral totals, its g-point array having

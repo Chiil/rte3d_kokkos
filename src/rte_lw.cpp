@@ -21,6 +21,7 @@ Rte_lw::Noscat_scratch Rte_lw::Noscat_scratch::make(
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
     s.rad_up = Array_2d<TF>(Kokkos::view_alloc("rad_up", no_init), nlev, ncol);
     s.rad_dn = Array_2d<TF>(Kokkos::view_alloc("rad_dn", no_init), nlev, ncol);
+    s.carry = Array_2d<TF>(Kokkos::view_alloc("carry", no_init), 2, ncol);
     s.rad_up_jac = Array_2d<TF>(
             Kokkos::view_alloc("rad_up_jac", no_init), do_jacobians ? nlev : 0, do_jacobians ? ncol : 0);
 
@@ -43,6 +44,7 @@ Rte_lw::Two_stream_scratch Rte_lw::Two_stream_scratch::make(const int nlay, cons
     s.Tdif = Array_2d<TF>(Kokkos::view_alloc("Tdif", no_init), nlay, ncol);
     s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
+    s.carry = Array_2d<TF>(Kokkos::view_alloc("carry", no_init), 2, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
     s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
     s.albedo_sfc = Array_1d<TF>(Kokkos::view_alloc("albedo_sfc", no_init), ncol);
@@ -96,6 +98,7 @@ namespace
         const Array_2d<TF> rad_up = scratch.rad_up;
         const Array_2d<TF> rad_dn = scratch.rad_dn;
         const Array_2d<TF> rad_up_jac = scratch.rad_up_jac;
+        const Array_2d<TF> carry = scratch.carry;
 
         // The weights are needed on the host to scale each angle's contribution; the
         // caller copied them there once when it built the scratch.
@@ -134,42 +137,63 @@ namespace
             // intensity, so the incident flux is converted assuming azimuthal
             // isotropy; that boundary condition rides along at j == 0 rather than
             // costing a parallel region of its own.
-            parallel_for_column_sweep("lw_noscat_transport_dn", nlay, ncol,
-                KOKKOS_LAMBDA(const int j, const int icol)
+            parallel_for_column_sweep_carry("lw_noscat_transport_dn", nlay, ncol, carry,
+                KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
                 {
                     if (j == 0)
-                        rad_dn(lev_toa, icol) = has_inc_flux ? inc_flux(icol) / scaling : TF(0.);
+                    {
+                        const TF rad_toa = has_inc_flux ? inc_flux(icol) / scaling : TF(0.);
+
+                        rad_dn(lev_toa, icol) = rad_toa;
+                        carried[0] = rad_toa;
+                    }
 
                     const int ilay = V::lay_from_toa(j, nlay);
-                    rad_dn(ilay + V::lev_dn(), icol) =
-                            trans(ilay, icol) * rad_dn(ilay + V::lev_up(), icol)
-                            + source_dn(ilay, icol);
+                    const TF rad = trans(ilay, icol) * carried[0] + source_dn(ilay, icol);
+
+                    rad_dn(ilay + V::lev_dn(), icol) = rad;
+                    carried[0] = rad;
                 });
 
             // Transport up, starting from surface reflection and emission.
-            parallel_for_column_sweep("lw_noscat_transport_up", nlay, ncol,
-                KOKKOS_LAMBDA(const int j, const int icol)
+            parallel_for_column_sweep_carry("lw_noscat_transport_up", nlay, ncol, carry,
+                KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
                 {
                     if (j == 0)
                     {
                         const TF emis = sfc_emis(icol);
 
-                        rad_up(lev_sfc, icol) = rad_dn(lev_sfc, icol) * (TF(1.) - emis)
-                                              + emis * sfc_source(icol);
+                        const TF rad_sfc = rad_dn(lev_sfc, icol) * (TF(1.) - emis)
+                                         + emis * sfc_source(icol);
+
+                        rad_up(lev_sfc, icol) = rad_sfc;
+                        carried[0] = rad_sfc;
+
                         if (do_jacobians)
-                            rad_up_jac(lev_sfc, icol) = emis * sfc_source_jac(icol);
+                        {
+                            const TF jac_sfc = emis * sfc_source_jac(icol);
+
+                            rad_up_jac(lev_sfc, icol) = jac_sfc;
+                            carried[1] = jac_sfc;
+                        }
                     }
 
                     const int ilay = V::lay_from_sfc(j, nlay);
+                    const int lev_up = ilay + V::lev_up();
                     const TF trans_l = trans(ilay, icol);
 
-                    rad_up(ilay + V::lev_up(), icol) =
-                            trans_l * rad_up(ilay + V::lev_dn(), icol)
-                            + source_up(ilay, icol);
+                    const TF rad = trans_l * carried[0] + source_up(ilay, icol);
+
+                    rad_up(lev_up, icol) = rad;
+                    carried[0] = rad;
 
                     if (do_jacobians)
-                        rad_up_jac(ilay + V::lev_up(), icol) =
-                                trans_l * rad_up_jac(ilay + V::lev_dn(), icol);
+                    {
+                        const TF jac = trans_l * carried[1];
+
+                        rad_up_jac(lev_up, icol) = jac;
+                        carried[1] = jac;
+                    }
                 });
 
             // Convert intensity back to flux, assuming azimuthal isotropy, and hand
@@ -292,7 +316,7 @@ namespace
                 albedo_sfc, src_sfc, inc_flux,
                 Rdif, Tdif, source_dn, source_up,
                 flux_up, flux_dn,
-                albedo, src);
+                albedo, src, scratch.carry);
     }
 }
 

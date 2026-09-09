@@ -170,6 +170,77 @@ inline void parallel_for_4d(
 }
 
 
+// As above, for a recurrence that carries values from each step to the next.
+//
+// Every one of these sweeps reads back, at step j, something it wrote at step j-1: the
+// downward flux one level up, the albedo one level below. Read from the array it was
+// written to, that is a whole (nlev, ncol) pass per sweep, which at these sizes is
+// what the sweeps are bound by. Here the kernel gets those values as
+// f(j, icol, TF carried[ncarry]) instead, to read and then overwrite for the next step.
+//
+// On GPU the sweep is a loop inside one thread, so the carried values are registers.
+// On CPU the sweep is the outer loop and the columns underneath it have to stay
+// vectorizable, so they live in an (ncarry, ncol) scratch array -- the caller's, since
+// a solver holds it across the whole g-point loop -- small enough to stay in cache.
+// The kernel is written once for both.
+//
+// The carried values are zero at j == 0, where the kernel sets the starting condition.
+// There are always two of them, which is as many as any of these recurrences needs; a
+// sweep that carries one leaves the other alone. The scratch is a template parameter
+// only because the array aliases are declared further down this file; it is always an
+// Array_2d<TF> of (2, ncol).
+template<typename Carry, typename Kernel>
+inline void parallel_for_column_sweep_carry(
+        const std::string& name,
+        const int nsweep,
+        const int ncol,
+        const Carry& carry,          // (2, ncol) scratch, used on CPU only
+        const Kernel& kernel)
+{
+    #ifdef USEGPU
+    Kokkos::parallel_for(name,
+        Kokkos::RangePolicy<Default_exec>(0, ncol),
+        KOKKOS_LAMBDA(const int icol)
+        {
+            TF carried[2] = {TF(0.), TF(0.)};
+
+            for (int j=0; j<nsweep; ++j)
+                kernel(j, icol, carried);
+        });
+    #else
+    constexpr int min_block = 16;
+    const int nthread = Default_exec().concurrency();
+    const int block = std::max(min_block, (ncol + nthread - 1)/nthread);
+    const int nblock = (ncol + block - 1)/block;
+
+    Kokkos::parallel_for(name,
+        Kokkos::RangePolicy<Default_exec>(0, nblock),
+        KOKKOS_LAMBDA(const int iblock)
+        {
+            const int cstart = iblock*block;
+            const int cend = (cstart + block < ncol) ? cstart + block : ncol;
+
+            for (int i=0; i<2; ++i)
+                RTE3D_IVDEP
+                for (int icol=cstart; icol<cend; ++icol)
+                    carry(i, icol) = TF(0.);
+
+            for (int j=0; j<nsweep; ++j)
+                RTE3D_IVDEP
+                for (int icol=cstart; icol<cend; ++icol)
+                {
+                    TF carried[2] = {carry(0, icol), carry(1, icol)};
+
+                    kernel(j, icol, carried);
+
+                    carry(0, icol) = carried[0];
+                    carry(1, icol) = carried[1];
+                }
+        });
+    #endif
+}
+
+
 // A sequential sweep over one dimension, independent across columns: the vertical
 // recurrences of the RTE solvers. The kernel is called as f(j, icol), with j running
 // 0..nsweep-1 in order for every column and no ordering implied between columns.

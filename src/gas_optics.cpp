@@ -1079,9 +1079,8 @@ void Gas_optics::solve_sw(
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
-        // The downward and direct fluxes keep their g-point arrays, which the two
-        // sweeps read back; the upward one is only ever written, so it goes straight
-        // into the totals.
+        // Only the direct beam keeps a g-point array, which the last kernel reads to
+        // put it in the totals; the two diffuse fluxes go straight there.
         const int ibnd = k.gpt_band_h(igpt);
 
         solve_sw_gpt(
@@ -1092,7 +1091,7 @@ void Gas_optics::solve_sw(
                                         : Array_map_1d<const TF>(),
                 clouds,
                 sink(ibnd, fluxes.up, fluxes.up_byband),
-                sink(ibnd, fluxes.dn, fluxes.dn_byband, state.flux_dn),
+                sink(ibnd, fluxes.dn, fluxes.dn_byband),
                 sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
     }
 }

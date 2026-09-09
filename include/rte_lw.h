@@ -26,6 +26,7 @@ namespace Rte_lw
         Array_2d<TF> rad_up;     // (nlev, ncol)
         Array_2d<TF> rad_dn;     // (nlev, ncol)
         Array_2d<TF> rad_up_jac; // (nlev, ncol), empty unless Jacobians are wanted
+        Array_2d<TF> carry;      // (2, ncol) for the transport sweeps' recurrences
 
         // The quadrature weights on the host: they scale each angle's contribution
         // from host code, so keeping a mirror here saves a blocking device-to-host
@@ -44,6 +45,7 @@ namespace Rte_lw
         Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
         Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
         Array_2d<TF> albedo, src;           // (nlev, ncol)
+        Array_2d<TF> carry;                 // (2, ncol) for the sweeps' recurrences
         Array_1d<TF> albedo_sfc, src_sfc;   // (ncol)
 
         static Two_stream_scratch make(const int nlay, const int ncol);

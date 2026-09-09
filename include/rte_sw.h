@@ -20,6 +20,7 @@ namespace Rte_sw
         Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
         Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
         Array_2d<TF> albedo, src;           // (nlev, ncol)
+        Array_2d<TF> carry;                 // (2, ncol) for the sweeps' recurrences
         Array_1d<TF> src_sfc;               // (ncol)
 
         static Two_stream_scratch make(const int nlay, const int ncol);

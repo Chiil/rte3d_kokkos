@@ -163,11 +163,18 @@ namespace Rte_kernels
     // saves writing and reading a whole (nlay, ncol) array -- which at these sizes the
     // sweeps are entirely bound by.
     //
-    // The downward sweep reads back the flux it wrote at the level before, so
-    // flux_dn's g-point array has to be there; flux_up is only ever written, so a
-    // caller that wants nothing but the spectral totals can leave that one out.
+    // Neither sweep reads an array it has written: the three values that cross from
+    // one layer to the next ride the carry instead. So neither flux needs a g-point
+    // array, and a caller after nothing but the spectral totals can leave both out.
+    // static, and so a copy per translation unit, deliberately: nvcc identifies the
+    // closure type of an extended device lambda by its enclosing function, so the two
+    // sweeps below get the same mangled type in rte_lw.cpp and rte_sw.cpp, which both
+    // instantiate this template. The linker then merges the two, and the host-side
+    // launch calls into a closure that was never registered -- a segmentation fault in
+    // the shortwave two-stream solver, with no CUDA error to show for it. Internal
+    // linkage keeps the two apart. Do not make this inline again.
     template<bool top_at_1>
-    inline void adding(
+    static void adding(
             const int nlay, const int ncol,
             const Array_map_1d<const TF>& albedo_sfc,   // (ncol)
             const Array_map_1d<const TF>& src_sfc,      // (ncol)
@@ -175,10 +182,9 @@ namespace Rte_kernels
             const Array_map_2d<const TF>& rdif, const Array_map_2d<const TF>& tdif,
             const Array_map_2d<const TF>& src_dn, const Array_map_2d<const TF>& src_up,
             const Flux_sink& flux_up, const Flux_sink& flux_dn,
-            const Array_2d<TF>& albedo, const Array_2d<TF>& src)
+            const Array_2d<TF>& albedo, const Array_2d<TF>& src,
+            const Array_2d<TF>& carry)   // (2, ncol) scratch for the sweeps
     {
-        // The one place the downward sweep reads itself.
-        const Array_map_2d<TF> flux_dn_gpt = flux_dn.gpt;
 
         using V = Vert<top_at_1>;
 
@@ -189,38 +195,49 @@ namespace Rte_kernels
         // From the surface upward, accumulate the reflectivity to diffuse radiation
         // below each level (alpha in SH08) and the source of diffuse upwelling
         // radiation (G in SH08), both of which start at the surface.
-        parallel_for_column_sweep("adding_up", nlay, ncol,
-            KOKKOS_LAMBDA(const int j, const int icol)
+        // Two values cross from one layer to the next: the albedo and the source below
+        // the level in hand.
+        parallel_for_column_sweep_carry("adding_up", nlay, ncol, carry,
+            KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
             {
                 if (j == 0)
                 {
                     albedo(lev_sfc, icol) = albedo_sfc(icol);
                     src   (lev_sfc, icol) = src_sfc(icol);
+
+                    carried[0] = albedo_sfc(icol);
+                    carried[1] = src_sfc(icol);
                 }
 
                 const int ilay = V::lay_from_sfc(j, nlay);
                 const int lev_above = ilay + V::lev_up();
-                const int lev_below = ilay + V::lev_dn();
 
                 const TF rdif_l = rdif(ilay, icol);
                 const TF tdif_l = tdif(ilay, icol);
-                const TF albedo_below = albedo(lev_below, icol);
+                const TF albedo_below = carried[0];
 
                 const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_below);  // Eq 10
 
-                albedo(lev_above, icol) = rdif_l + tdif_l*tdif_l * albedo_below * denom_l;  // Eq 9
+                const TF albedo_l =                                           // Eq 9
+                        rdif_l + tdif_l*tdif_l * albedo_below * denom_l;
 
                 // Eq 11: upward emission at the top of the layer, plus radiation emitted
                 // at the bottom, transmitted through and reflected from the layers below.
-                src(lev_above, icol) =
+                const TF src_l =
                         src_up(ilay, icol)
-                        + tdif_l * denom_l * (src(lev_below, icol)
+                        + tdif_l * denom_l * (carried[1]
                                               + albedo_below * src_dn(ilay, icol));
+
+                albedo(lev_above, icol) = albedo_l;
+                src(lev_above, icol) = src_l;
+
+                carried[0] = albedo_l;
+                carried[1] = src_l;
             });
 
         // From the top of the atmosphere downward, compute the fluxes.
-        parallel_for_column_sweep("adding_dn", nlay, ncol,
-            KOKKOS_LAMBDA(const int j, const int icol)
+        parallel_for_column_sweep_carry("adding_dn", nlay, ncol, carry,
+            KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
             {
                 if (j == 0)
                 {
@@ -228,15 +245,15 @@ namespace Rte_kernels
                     // diffuse flux plus emission from below.
                     const TF flux_dn_l = has_dif_bc ? flux_dn_toa(icol) : TF(0.);
 
-                    flux_dn_gpt(lev_toa, icol) = flux_dn_l;
-                    flux_dn.add(lev_toa, icol, flux_dn_l);
+                    flux_dn.put(lev_toa, icol, flux_dn_l);
                     flux_up.put(lev_toa, icol,
                                 flux_dn_l * albedo(lev_toa, icol) + src(lev_toa, icol));
+
+                    carried[0] = flux_dn_l;
                 }
 
                 const int ilay = V::lay_from_toa(j, nlay);
-                const int lev_prev = ilay + V::lev_up();
-                const int lev_dst  = ilay + V::lev_dn();
+                const int lev_dst = ilay + V::lev_dn();
 
                 const TF rdif_l = rdif(ilay, icol);
                 const TF albedo_l = albedo(lev_dst, icol);
@@ -246,13 +263,14 @@ namespace Rte_kernels
                 const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_l);
 
                 const TF flux_dn_l =                                          // Eq 13
-                        (tdif(ilay, icol) * flux_dn_gpt(lev_prev, icol)
+                        (tdif(ilay, icol) * carried[0]
                          + rdif_l * src_l
                          + src_dn(ilay, icol)) * denom_l;
 
-                flux_dn_gpt(lev_dst, icol) = flux_dn_l;
-                flux_dn.add(lev_dst, icol, flux_dn_l);
+                flux_dn.put(lev_dst, icol, flux_dn_l);
                 flux_up.put(lev_dst, icol, flux_dn_l * albedo_l + src_l);     // Eq 12
+
+                carried[0] = flux_dn_l;
             });
     }
 
