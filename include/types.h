@@ -97,7 +97,14 @@ inline void parallel_for_2d(
         const Kernel& kernel)
 {
     #ifdef USEGPU
-    Kokkos::parallel_for(name, Range_2d(begin, end), kernel);
+    // One layer's worth of columns per tile. The last dimension is the column, so a
+    // tile that spans only columns is a contiguous run of memory, where a tile two or
+    // four layers deep is that many separate runs; Kokkos' default picks the latter
+    // because its heuristic knows the occupancy but not the layout. Measured over the
+    // whole RCEMIP solve at 65536 columns, longwave 1366 -> 1318 ms and shortwave
+    // 1563 -> 1533 ms, with 96 and 128 the flat part of the curve and 256 already
+    // worse than the default.
+    Kokkos::parallel_for(name, Range_2d(begin, end, {1, 128}), kernel);
     #else
     const int istart = begin[1];
     const int iend = end[1];
