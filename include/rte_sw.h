@@ -11,6 +11,21 @@
 // g-points and accumulates; nothing here carries a g-point dimension.
 namespace Rte_sw
 {
+    // Scratch for solver_2stream, sized for one g-point. Owned by the caller and
+    // built once, before the g-point loop: on a GPU, allocating it per call is a
+    // cudaMalloc/cudaFree pair per g-point, and cudaFree synchronizes the device.
+    struct Two_stream_scratch
+    {
+        Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
+        Array_2d<TF> Rdir, Tdir, Tnoscat;   // (nlay, ncol)
+        Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
+        Array_2d<TF> albedo, src;           // (nlev, ncol)
+        Array_2d<TF> denom;                 // (nlay, ncol)
+        Array_1d<TF> src_sfc;               // (ncol)
+
+        static Two_stream_scratch make(const int nlay, const int ncol);
+    };
+
     // Direct beam only, no scattering. Reference: sw_solver_noscat.
     void solver_noscat(
             const bool top_at_1,
@@ -36,7 +51,8 @@ namespace Rte_sw
             const Array_map_1d<const TF>& inc_flux_dif, // (ncol), may be empty
             const Array_map_2d<TF>& flux_up,            // (nlev, ncol)
             const Array_map_2d<TF>& flux_dn,            // (nlev, ncol)
-            const Array_map_2d<TF>& flux_dir);          // (nlev, ncol)
+            const Array_map_2d<TF>& flux_dir,           // (nlev, ncol)
+            const Two_stream_scratch& scratch);
 
     void init_python_bindings(py::module_& m);
 }

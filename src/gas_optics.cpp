@@ -389,7 +389,7 @@ void Gas_optics::compute_tau_absorption(
                 }
             }
 
-            tau(ilay, icol) += tau_l;
+            tau(ilay, icol) = tau_l;
         });
 }
 
@@ -455,7 +455,8 @@ void Gas_optics::compute_planck_source(
         const Array_1d<const TF>& tsfc,
         const int sfc_lay,
         const int igpt,
-        const Source_func_lw& sources)
+        const Source_func_lw& sources,
+        const Array_map_2d<TF>& pfrac)
 {
     const int nlay = static_cast<int>(sources.lay_source.extent(0));
     const int ncol = static_cast<int>(sources.lay_source.extent(1));
@@ -478,9 +479,9 @@ void Gas_optics::compute_planck_source(
     const TF temp_ref_min = k.temp_ref_min;
     const TF totplnk_delta = k.totplnk_delta;
 
-    // Fraction of this band's Planck irradiance belonging to this g-point. This is the
-    // major-species interpolation with unit column mixing.
-    Array_2d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), nlay, ncol);
+    // pfrac is the fraction of this band's Planck irradiance belonging to this
+    // g-point: the major-species interpolation with unit column mixing. It comes from
+    // the caller so that a g-point loop allocates it once.
 
     parallel_for_2d("planck_pfrac", {0, 0}, {nlay, ncol},
         KOKKOS_LAMBDA(const int ilay, const int icol)
@@ -707,7 +708,8 @@ Gas_optics::Solve_state Gas_optics::prepare(
         const Gas_concs& gas_concs,
         const Atmosphere& atm,
         const bool do_lw,
-        const bool do_jacobian)
+        const bool do_jacobian,
+        const Array_1d<const TF>& weights)
 {
     const auto no_init = Kokkos::WithoutInitializing;
 
@@ -734,6 +736,7 @@ Gas_optics::Solve_state Gas_optics::prepare(
     if (do_lw)
     {
         s.lay_source = Array_2d<TF>(Kokkos::view_alloc("lay_source", no_init), nlay, ncol);
+        s.pfrac = Array_2d<TF>(Kokkos::view_alloc("pfrac", no_init), nlay, ncol);
         s.lev_source = Array_2d<TF>(Kokkos::view_alloc("lev_source", no_init), nlev, ncol);
         s.sfc_source = Array_1d<TF>(Kokkos::view_alloc("sfc_source", no_init), ncol);
         s.sfc_source_jac = Array_1d<TF>(
@@ -744,6 +747,12 @@ Gas_optics::Solve_state Gas_optics::prepare(
     s.flux_dn = Array_2d<TF>(Kokkos::view_alloc("flux_dn_gpt", no_init), nlev, ncol);
     s.flux_dir = Array_2d<TF>(
             Kokkos::view_alloc("flux_dir_gpt", no_init), do_lw ? 0 : nlev, do_lw ? 0 : ncol);
+
+    // The solver's scratch, allocated here so the g-point loop never allocates.
+    if (do_lw)
+        s.lw_noscat = Rte_lw::Noscat_scratch::make(nlay, ncol, weights, do_jacobian);
+    else
+        s.sw_2stream = Rte_sw::Two_stream_scratch::make(nlay, ncol);
 
     return s;
 }
@@ -776,12 +785,11 @@ void Gas_optics::solve_lw_gpt(
         const Band_props& clouds,
         const Array_2d<TF>& flux_up_jac)
 {
-    // The absorption kernel accumulates, so start this g-point from zero.
-    Kokkos::deep_copy(state.tau, TF(0.));
     compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
 
     compute_planck_source(
-            k, state.interp, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt, state.sources());
+            k, state.interp, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
+            state.sources(), state.pfrac);
 
     // Clouds are absorption-only in the longwave here, matching the all-sky driver:
     // the solver is the no-scattering one, so they enter as an optical depth.
@@ -793,7 +801,7 @@ void Gas_optics::solve_lw_gpt(
 
     Rte_lw::solver_noscat(
             top_at_1, secants, weights, state.tau, state.sources(), sfc_emis, inc_flux,
-            state.flux_up, state.flux_dn, flux_up_jac);
+            state.flux_up, state.flux_dn, flux_up_jac, state.lw_noscat);
 }
 
 
@@ -813,7 +821,6 @@ void Gas_optics::solve_sw_gpt(
     const int nlay = static_cast<int>(state.tau.extent(0));
     const int ncol = static_cast<int>(state.tau.extent(1));
 
-    Kokkos::deep_copy(state.tau, TF(0.));
     compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
 
     // Rayleigh scattering needs the dry air column, which compute_col_gas put at
@@ -851,7 +858,7 @@ void Gas_optics::solve_sw_gpt(
     Rte_sw::solver_2stream(
             top_at_1, tau, ssa, g, mu0,
             sfc_alb_dir, sfc_alb_dif, inc_flux_dir, inc_flux_dif,
-            state.flux_up, state.flux_dn, state.flux_dir);
+            state.flux_up, state.flux_dn, state.flux_dir, state.sw_2stream);
 }
 
 
@@ -899,7 +906,8 @@ void Gas_optics::solve_lw(
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
 
-    const Solve_state state = prepare(k, gas_concs, atm, true, fluxes.up_jac.size() > 0);
+    const Solve_state state = prepare(
+            k, gas_concs, atm, true, fluxes.up_jac.size() > 0, weights);
 
     zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
     zero(fluxes.up_byband); zero(fluxes.dn_byband);
@@ -981,15 +989,15 @@ void Gas_optics::gas_optics_lw(
     auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
     const int sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
 
-    // The kernels accumulate into tau, so start from zero.
-    Kokkos::deep_copy(tau, TF(0.));
-
     const int ngpt = static_cast<int>(tau.extent(0));
+
+    // Allocated once, not per g-point.
+    Array_2d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), nlay, ncol);
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
         compute_tau_absorption(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt));
-        compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt));
+        compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
     }
 }
 
@@ -1012,8 +1020,6 @@ void Gas_optics::gas_optics_sw(
     compute_col_gas(gas_concs, k.gas_names, plev, col_dry, Array_1d<TF>(), col_gas);
 
     const Interp_state state = interpolate_for(k, play, tlay, col_gas);
-
-    Kokkos::deep_copy(tau, TF(0.));
 
     // Rayleigh scattering needs the dry air column, which compute_col_gas put at
     // index 0.

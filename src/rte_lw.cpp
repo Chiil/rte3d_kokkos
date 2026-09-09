@@ -6,6 +6,53 @@ using Rte_kernels::pi;
 using Rte_kernels::adding;
 
 
+Rte_lw::Noscat_scratch Rte_lw::Noscat_scratch::make(
+        const int nlay, const int ncol,
+        const Array_1d<const TF>& weights,
+        const bool do_jacobians)
+{
+    const auto no_init = Kokkos::WithoutInitializing;
+    const int nlev = nlay + 1;
+
+    Noscat_scratch s;
+
+    s.trans = Array_2d<TF>(Kokkos::view_alloc("trans", no_init), nlay, ncol);
+    s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
+    s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
+    s.rad_up = Array_2d<TF>(Kokkos::view_alloc("rad_up", no_init), nlev, ncol);
+    s.rad_dn = Array_2d<TF>(Kokkos::view_alloc("rad_dn", no_init), nlev, ncol);
+    s.rad_up_jac = Array_2d<TF>(
+            Kokkos::view_alloc("rad_up_jac", no_init), do_jacobians ? nlev : 0, do_jacobians ? ncol : 0);
+
+    s.weights_h = decltype(s.weights_h)(
+            Kokkos::view_alloc("weights_h", no_init), weights.extent(0));
+    Kokkos::deep_copy(s.weights_h, weights);
+
+    return s;
+}
+
+
+Rte_lw::Two_stream_scratch Rte_lw::Two_stream_scratch::make(const int nlay, const int ncol)
+{
+    const auto no_init = Kokkos::WithoutInitializing;
+    const int nlev = nlay + 1;
+
+    Two_stream_scratch s;
+
+    s.Rdif = Array_2d<TF>(Kokkos::view_alloc("Rdif", no_init), nlay, ncol);
+    s.Tdif = Array_2d<TF>(Kokkos::view_alloc("Tdif", no_init), nlay, ncol);
+    s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
+    s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
+    s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
+    s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
+    s.denom = Array_2d<TF>(Kokkos::view_alloc("denom", no_init), nlay, ncol);
+    s.albedo_sfc = Array_1d<TF>(Kokkos::view_alloc("albedo_sfc", no_init), ncol);
+    s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
+
+    return s;
+}
+
+
 // The reference's lw_solver_noscat also offers do_rescaling, the approximate treatment
 // of scattering of Tang et al. 2018 (10.1175/JAS-D-18-0014.1), through
 // lw_transport_1rescl. That is not implemented here. Its two orientation branches read
@@ -25,7 +72,8 @@ namespace
             const Array_map_1d<const TF>& inc_flux,
             const Array_map_2d<TF>& flux_up,
             const Array_map_2d<TF>& flux_dn,
-            const Array_2d<TF>& flux_up_jac)
+            const Array_2d<TF>& flux_up_jac,
+            const Rte_lw::Noscat_scratch& scratch)
     {
         using V = Vert<top_at_1>;
 
@@ -43,18 +91,16 @@ namespace
         const Array_map_1d<const TF> sfc_source_jac = sources.sfc_source_jac;
 
         // Per-column scratch, the same shapes the reference keeps.
-        Array_2d<TF> trans(Kokkos::view_alloc("trans", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_up(Kokkos::view_alloc("source_up", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_dn(Kokkos::view_alloc("source_dn", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> rad_up(Kokkos::view_alloc("rad_up", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> rad_dn(Kokkos::view_alloc("rad_dn", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> rad_up_jac("rad_up_jac", do_jacobians ? nlev : 0, do_jacobians ? ncol : 0);
+        const Array_2d<TF> trans = scratch.trans;
+        const Array_2d<TF> source_up = scratch.source_up;
+        const Array_2d<TF> source_dn = scratch.source_dn;
+        const Array_2d<TF> rad_up = scratch.rad_up;
+        const Array_2d<TF> rad_dn = scratch.rad_dn;
+        const Array_2d<TF> rad_up_jac = scratch.rad_up_jac;
 
-        Kokkos::deep_copy(flux_up, TF(0.));
-        Kokkos::deep_copy(flux_dn, TF(0.));
-
-        // The weights are needed on the host to scale each angle's contribution.
-        const auto weights_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, weights);
+        // The weights are needed on the host to scale each angle's contribution; the
+        // caller copied them there once when it built the scratch.
+        const auto weights_h = scratch.weights_h;
 
         const int lev_toa = V::lev_toa(nlay);
         const int lev_sfc = V::lev_sfc(nlay);
@@ -131,11 +177,20 @@ namespace
             // accumulate this angle's contribution. The Jacobian is spectrally
             // integrated, so it accumulates over g-points as well and the caller
             // zeroes it.
+            // The first angle assigns rather than accumulates, which is what zeroing
+            // flux_up and flux_dn up front would have bought -- two full-size memsets
+            // per g-point. The Jacobian is spectrally integrated and so keeps
+            // accumulating; the caller zeroes that one.
+            const bool first_mu = imu == 0;
+
             parallel_for_2d("lw_noscat_accumulate", {0, 0}, {nlev, ncol},
                 KOKKOS_LAMBDA(const int ilev, const int icol)
                 {
-                    flux_up(ilev, icol) += scaling * rad_up(ilev, icol);
-                    flux_dn(ilev, icol) += scaling * rad_dn(ilev, icol);
+                    const TF up = scaling * rad_up(ilev, icol);
+                    const TF dn = scaling * rad_dn(ilev, icol);
+
+                    flux_up(ilev, icol) = first_mu ? up : flux_up(ilev, icol) + up;
+                    flux_dn(ilev, icol) = first_mu ? dn : flux_dn(ilev, icol) + dn;
 
                     if (do_jacobians)
                         flux_up_jac(ilev, icol) += scaling * rad_up_jac(ilev, icol);
@@ -155,14 +210,17 @@ void Rte_lw::solver_noscat(
         const Array_map_1d<const TF>& inc_flux,
         const Array_map_2d<TF>& flux_up,
         const Array_map_2d<TF>& flux_dn,
-        const Array_2d<TF>& flux_up_jac)
+        const Array_2d<TF>& flux_up_jac,
+        const Noscat_scratch& scratch)
 {
     if (top_at_1)
         solver_noscat_impl<true>(
-                secants, weights, tau, sources, sfc_emis, inc_flux, flux_up, flux_dn, flux_up_jac);
+                secants, weights, tau, sources, sfc_emis, inc_flux,
+                flux_up, flux_dn, flux_up_jac, scratch);
     else
         solver_noscat_impl<false>(
-                secants, weights, tau, sources, sfc_emis, inc_flux, flux_up, flux_dn, flux_up_jac);
+                secants, weights, tau, sources, sfc_emis, inc_flux,
+                flux_up, flux_dn, flux_up_jac, scratch);
 }
 
 
@@ -177,26 +235,26 @@ namespace
             const Array_map_1d<const TF>& sfc_emis,
             const Array_map_1d<const TF>& inc_flux,
             const Array_map_2d<TF>& flux_up,
-            const Array_map_2d<TF>& flux_dn)
+            const Array_map_2d<TF>& flux_dn,
+            const Rte_lw::Two_stream_scratch& scratch)
     {
         using V = Vert<top_at_1>;
 
         const int nlay = static_cast<int>(tau.extent(0));
         const int ncol = static_cast<int>(tau.extent(1));
-        const int nlev = nlay + 1;
 
         const Array_map_2d<const TF> lev_source = sources.lev_source;
         const Array_map_1d<const TF> sfc_source = sources.sfc_source;
 
-        Array_2d<TF> Rdif(Kokkos::view_alloc("Rdif", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> Tdif(Kokkos::view_alloc("Tdif", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_up(Kokkos::view_alloc("source_up", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_dn(Kokkos::view_alloc("source_dn", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> albedo(Kokkos::view_alloc("albedo", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> src(Kokkos::view_alloc("src", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> denom(Kokkos::view_alloc("denom", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_1d<TF> albedo_sfc(Kokkos::view_alloc("albedo_sfc", Kokkos::WithoutInitializing), ncol);
-        Array_1d<TF> src_sfc(Kokkos::view_alloc("src_sfc", Kokkos::WithoutInitializing), ncol);
+        const Array_2d<TF> Rdif = scratch.Rdif;
+        const Array_2d<TF> Tdif = scratch.Tdif;
+        const Array_2d<TF> source_up = scratch.source_up;
+        const Array_2d<TF> source_dn = scratch.source_dn;
+        const Array_2d<TF> albedo = scratch.albedo;
+        const Array_2d<TF> src = scratch.src;
+        const Array_2d<TF> denom = scratch.denom;
+        const Array_1d<TF> albedo_sfc = scratch.albedo_sfc;
+        const Array_1d<TF> src_sfc = scratch.src_sfc;
 
         // Cell properties, and the source function for diffuse radiation. Layers are
         // independent here, so this whole part is parallel over (layer, column).
@@ -252,10 +310,13 @@ void Rte_lw::solver_2stream(
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
         const Array_map_2d<TF>& flux_up,
-        const Array_map_2d<TF>& flux_dn)
+        const Array_map_2d<TF>& flux_dn,
+        const Two_stream_scratch& scratch)
 {
     if (top_at_1)
-        solver_2stream_impl<true>(tau, ssa, g, sources, sfc_emis, inc_flux, flux_up, flux_dn);
+        solver_2stream_impl<true>(
+                tau, ssa, g, sources, sfc_emis, inc_flux, flux_up, flux_dn, scratch);
     else
-        solver_2stream_impl<false>(tau, ssa, g, sources, sfc_emis, inc_flux, flux_up, flux_dn);
+        solver_2stream_impl<false>(
+                tau, ssa, g, sources, sfc_emis, inc_flux, flux_up, flux_dn, scratch);
 }

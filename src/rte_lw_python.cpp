@@ -66,6 +66,10 @@ void Rte_lw::init_python_bindings(py::module_& m)
             Array_2d<TF> flux_up_jac(
                     "flux_up_jac", do_jacobians ? nlay+1 : 0, do_jacobians ? ncol : 0);
 
+            // Built once: the solver's scratch does not depend on the g-point, and
+            // allocating it per call would be a cudaMalloc/cudaFree pair per g-point.
+            const auto scratch = Rte_lw::Noscat_scratch::make(nlay, ncol, weights_d, do_jacobians);
+
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Rte_lw::solver_noscat(
                         top_at_1,
@@ -73,7 +77,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
                         sources.gpt(igpt),
                         slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
                         slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt),
-                        flux_up_jac);
+                        flux_up_jac, scratch);
             Kokkos::fence();
 
             if (!do_jacobians)
@@ -125,13 +129,15 @@ void Rte_lw::init_python_bindings(py::module_& m)
             Array_3d<TF> flux_dn(
                     Kokkos::view_alloc("flux_dn", Kokkos::WithoutInitializing), ngpt, nlay+1, ncol);
 
+            const auto scratch = Rte_lw::Two_stream_scratch::make(nlay, ncol);
+
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Rte_lw::solver_2stream(
                         top_at_1,
                         slice_2d(tau_d, igpt), slice_2d(ssa_d, igpt), slice_2d(g_d, igpt),
                         sources.gpt(igpt),
                         slice_1d(sfc_emis_d, igpt), slice_1d(inc_flux_d, igpt),
-                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt));
+                        slice_2d(flux_up, igpt), slice_2d(flux_dn, igpt), scratch);
             Kokkos::fence();
 
             return py::make_tuple(Numpy::from_device(flux_up), Numpy::from_device(flux_dn));

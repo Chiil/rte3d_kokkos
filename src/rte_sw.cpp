@@ -5,6 +5,29 @@ using Rte_kernels::Vert;
 using Rte_kernels::adding;
 
 
+Rte_sw::Two_stream_scratch Rte_sw::Two_stream_scratch::make(const int nlay, const int ncol)
+{
+    const auto no_init = Kokkos::WithoutInitializing;
+    const int nlev = nlay + 1;
+
+    Two_stream_scratch s;
+
+    s.Rdif = Array_2d<TF>(Kokkos::view_alloc("Rdif", no_init), nlay, ncol);
+    s.Tdif = Array_2d<TF>(Kokkos::view_alloc("Tdif", no_init), nlay, ncol);
+    s.Rdir = Array_2d<TF>(Kokkos::view_alloc("Rdir", no_init), nlay, ncol);
+    s.Tdir = Array_2d<TF>(Kokkos::view_alloc("Tdir", no_init), nlay, ncol);
+    s.Tnoscat = Array_2d<TF>(Kokkos::view_alloc("Tnoscat", no_init), nlay, ncol);
+    s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
+    s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
+    s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
+    s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
+    s.denom = Array_2d<TF>(Kokkos::view_alloc("denom", no_init), nlay, ncol);
+    s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
+
+    return s;
+}
+
+
 namespace
 {
     template<bool top_at_1>
@@ -51,7 +74,8 @@ namespace
             const Array_map_1d<const TF>& inc_flux_dif,
             const Array_map_2d<TF>& flux_up,
             const Array_map_2d<TF>& flux_dn,
-            const Array_map_2d<TF>& flux_dir)
+            const Array_map_2d<TF>& flux_dir,
+            const Rte_sw::Two_stream_scratch& scratch)
     {
         using V = Vert<top_at_1>;
 
@@ -61,17 +85,17 @@ namespace
 
         // One g-point's worth of scratch: (nlay, ncol) whatever the spectral
         // resolution, which is what makes the solver fit on a GPU.
-        Array_2d<TF> Rdif(Kokkos::view_alloc("Rdif", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> Tdif(Kokkos::view_alloc("Tdif", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> Rdir(Kokkos::view_alloc("Rdir", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> Tdir(Kokkos::view_alloc("Tdir", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> Tnoscat(Kokkos::view_alloc("Tnoscat", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_up(Kokkos::view_alloc("source_up", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> source_dn(Kokkos::view_alloc("source_dn", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_2d<TF> albedo(Kokkos::view_alloc("albedo", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> src(Kokkos::view_alloc("src", Kokkos::WithoutInitializing), nlev, ncol);
-        Array_2d<TF> denom(Kokkos::view_alloc("denom", Kokkos::WithoutInitializing), nlay, ncol);
-        Array_1d<TF> src_sfc(Kokkos::view_alloc("src_sfc", Kokkos::WithoutInitializing), ncol);
+        const Array_2d<TF> Rdif = scratch.Rdif;
+        const Array_2d<TF> Tdif = scratch.Tdif;
+        const Array_2d<TF> Rdir = scratch.Rdir;
+        const Array_2d<TF> Tdir = scratch.Tdir;
+        const Array_2d<TF> Tnoscat = scratch.Tnoscat;
+        const Array_2d<TF> source_up = scratch.source_up;
+        const Array_2d<TF> source_dn = scratch.source_dn;
+        const Array_2d<TF> albedo = scratch.albedo;
+        const Array_2d<TF> src = scratch.src;
+        const Array_2d<TF> denom = scratch.denom;
+        const Array_1d<TF> src_sfc = scratch.src_sfc;
 
         // Cell properties. Layers are independent, so this is parallel over
         // (layer, column); only the direct beam below needs a sweep.
@@ -166,14 +190,15 @@ void Rte_sw::solver_2stream(
         const Array_map_1d<const TF>& inc_flux_dif,
         const Array_map_2d<TF>& flux_up,
         const Array_map_2d<TF>& flux_dn,
-        const Array_map_2d<TF>& flux_dir)
+        const Array_map_2d<TF>& flux_dir,
+        const Two_stream_scratch& scratch)
 {
     if (top_at_1)
         solver_2stream_impl<true>(
                 tau, ssa, g, mu0, sfc_alb_dir, sfc_alb_dif, inc_flux_dir, inc_flux_dif,
-                flux_up, flux_dn, flux_dir);
+                flux_up, flux_dn, flux_dir, scratch);
     else
         solver_2stream_impl<false>(
                 tau, ssa, g, mu0, sfc_alb_dir, sfc_alb_dif, inc_flux_dir, inc_flux_dif,
-                flux_up, flux_dn, flux_dir);
+                flux_up, flux_dn, flux_dir, scratch);
 }

@@ -159,8 +159,8 @@ void Gas_optics::init_python_bindings(py::module_& m)
                     Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref"),
                     play_d, tlay_d, col_gas_d, state);
 
-            // The reference accumulates into tau, so start from zero.
-            Array_3d<TF> tau("tau", ngpt, nlay, ncol);
+            // Each g-point writes its own slice, so nothing here needs zeroing.
+            Array_3d<TF> tau(Kokkos::view_alloc("tau", Kokkos::WithoutInitializing), ngpt, nlay, ncol);
 
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Gas_optics::compute_tau_absorption(
@@ -277,9 +277,14 @@ void Gas_optics::init_python_bindings(py::module_& m)
             const auto tlev_d = Numpy::to_device_2d<TF>(tlev, "tlev");
             const auto tsfc_d = Numpy::to_device_1d<TF>(tsfc, "tsfc");
 
+            Array_2d<TF> pfrac(
+                    Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing),
+                    tlay_d.extent(0), tlay_d.extent(1));
+
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Gas_optics::compute_planck_source(
-                        k, state, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt, sources.gpt(igpt));
+                        k, state, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt,
+                        sources.gpt(igpt), pfrac);
             Kokkos::fence();
 
             py::dict out;

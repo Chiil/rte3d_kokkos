@@ -4,6 +4,8 @@
 #include <vector>
 
 #include "gas_concs.h"
+#include "rte_lw.h"
+#include "rte_sw.h"
 #include "source_functions.h"
 #include "types.h"
 
@@ -189,7 +191,9 @@ namespace Gas_optics
             const Interp_state& state);
 
     // Absorption optical depth from major and minor gases, for one g-point.
-    // Accumulates into tau, as the reference does. Reference: compute_tau_absorption.
+    // Overwrites tau. The reference accumulates into it, but every caller here gives
+    // the kernel a g-point slice of its own, so the accumulation only ever bought a
+    // full-size zeroing per g-point. Reference: compute_tau_absorption.
     void compute_tau_absorption(
             const Kdist_gas& k,
             const Interp_state& state,
@@ -275,24 +279,32 @@ namespace Gas_optics
         // One g-point's optical properties and Planck sources, overwritten each
         // iteration. This is the whole point: (nlay, ncol), never (ngpt, nlay, ncol).
         Array_2d<TF> tau, ssa, g;
-        Array_2d<TF> lay_source, lev_source;
+        Array_2d<TF> lay_source, lev_source, pfrac;
         Array_1d<TF> sfc_source, sfc_source_jac;
 
         // This g-point's fluxes, before they are accumulated.
         Array_2d<TF> flux_up, flux_dn, flux_dir;
 
+        // The transport solvers' own working set, likewise reused every iteration.
+        // Only the one the band in question uses is allocated.
+        Rte_lw::Noscat_scratch lw_noscat;
+        Rte_sw::Two_stream_scratch sw_2stream;
+
         Source_func_lw sources() const
         { return Source_func_lw{lay_source, lev_source, sfc_source, sfc_source_jac}; }
     };
 
-    // Column gas amounts and the table interpolation, once for the whole spectrum.
-    // do_lw allocates the Planck sources and finds the surface layer.
+    // Column gas amounts and the table interpolation, once for the whole spectrum,
+    // plus every array the per-g-point loop reuses. do_lw allocates the Planck
+    // sources and finds the surface layer; weights is the longwave quadrature, whose
+    // host mirror the no-scattering solver needs, and is ignored otherwise.
     Solve_state prepare(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
             const Atmosphere& atm,
             const bool do_lw,
-            const bool do_jacobian = false);
+            const bool do_jacobian = false,
+            const Array_1d<const TF>& weights = Array_1d<const TF>());
 
     // Where the accumulated fluxes go. The broadband views are required; the by-band
     // ones may be empty, in which case no by-band reduction is done. dir is shortwave
@@ -417,7 +429,8 @@ namespace Gas_optics
             const Array_1d<const TF>& tsfc,      // (ncol)
             const int sfc_lay,                   // 0-based layer adjacent to the surface
             const int igpt,
-            const Source_func_lw& sources);
+            const Source_func_lw& sources,
+            const Array_map_2d<TF>& pfrac);      // (nlay, ncol) scratch, owned by the caller
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via
