@@ -92,7 +92,7 @@ def write_input(path, atm, nbnd, band_dim, gridded=True, **extra):
     return path
 
 
-def setup(rte3d, tmp_path, band, gas_file, cloud_file, ref_file, **kwargs):
+def _setup(rte3d, tmp_path, band, gas_file, cloud_file, ref_file, **kwargs):
     """Both paths, from the same all-sky reference file."""
     from rte3d.allsky import ICERGH, read_allsky
     from rte3d.case import gpoint_bands, make_gas_concs, read_case
@@ -121,7 +121,7 @@ def test_case_longwave(rte3d, tmp_path):
     from rte3d.allsky import solve_lw as allsky_lw
     from rte3d.case import solve_lw
 
-    kdist, cloud_optics, gas_concs, atm, gpt_band, reference = setup(
+    kdist, cloud_optics, gas_concs, atm, gpt_band, reference = _setup(
         rte3d, tmp_path, 'lw', 'rrtmgp-gas-lw-g256.nc', 'rrtmgp-clouds-lw-bnd.nc', LW_REF)
 
     assert atm['top_at_1'] is False
@@ -141,7 +141,7 @@ def test_case_shortwave(rte3d, tmp_path):
     from rte3d.allsky import solve_sw as allsky_sw
     from rte3d.case import solve_sw
 
-    kdist, cloud_optics, gas_concs, atm, gpt_band, reference = setup(
+    kdist, cloud_optics, gas_concs, atm, gpt_band, reference = _setup(
         rte3d, tmp_path, 'sw', 'rrtmgp-gas-sw-g224.nc', 'rrtmgp-clouds-sw-bnd.nc', SW_REF)
 
     out = solve_sw(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics)
