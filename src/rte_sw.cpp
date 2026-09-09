@@ -18,7 +18,6 @@ Rte_sw::Two_stream_scratch Rte_sw::Two_stream_scratch::make(const int nlay, cons
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
     s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
-    s.denom = Array_2d<TF>(Kokkos::view_alloc("denom", no_init), nlay, ncol);
     s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
 
     return s;
@@ -88,13 +87,18 @@ namespace
         const Array_2d<TF> source_dn = scratch.source_dn;
         const Array_2d<TF> albedo = scratch.albedo;
         const Array_2d<TF> src = scratch.src;
-        const Array_2d<TF> denom = scratch.denom;
         const Array_1d<TF> src_sfc = scratch.src_sfc;
 
         const int lev_toa = V::lev_toa(nlay);
         const int lay_toa = V::lay_from_toa(0, nlay);
         const int lev_sfc = V::lev_sfc(nlay);
         const int lay_sfc = V::lay_from_sfc(0, nlay);
+
+        // An empty g is an isotropic phase function -- a clear-sky solve, where the
+        // asymmetry parameter is zero everywhere. Writing that array and reading it
+        // back is two full passes over (nlay, ncol) per g-point, and the sweeps are
+        // bound by exactly that.
+        const bool has_g = g.size() > 0;
 
         // The direct beam attenuates level by level, so its g-point array is where the
         // sweep keeps its state; the spectral totals take it at the end.
@@ -121,7 +125,8 @@ namespace
 
                 TF Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l;
                 Rte_kernels::sw_two_stream(
-                        tau(ilay, icol), ssa(ilay, icol), g(ilay, icol), mu0(ilay, icol),
+                        tau(ilay, icol), ssa(ilay, icol),
+                        has_g ? g(ilay, icol) : TF(0.), mu0(ilay, icol),
                         Rdif_l, Tdif_l, Rdir_l, Tdir_l, Tnoscat_l);
 
                 Rdif(ilay, icol) = Rdif_l;
@@ -148,7 +153,7 @@ namespace
                 sfc_alb_dif, src_sfc, inc_flux_dif,
                 Rdif, Tdif, source_dn, source_up,
                 flux_up, flux_dn,
-                albedo, src, denom);
+                albedo, src);
 
         // adding() computes only the diffuse flux; flux_dn is the total. This is also
         // where the direct beam reaches the spectral totals, its g-point array having

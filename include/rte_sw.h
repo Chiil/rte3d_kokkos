@@ -20,7 +20,6 @@ namespace Rte_sw
         Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
         Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
         Array_2d<TF> albedo, src;           // (nlev, ncol)
-        Array_2d<TF> denom;                 // (nlay, ncol)
         Array_1d<TF> src_sfc;               // (ncol)
 
         static Two_stream_scratch make(const int nlay, const int ncol);
@@ -43,7 +42,7 @@ namespace Rte_sw
             const bool top_at_1,
             const Array_map_2d<const TF>& tau,          // (nlay, ncol)
             const Array_map_2d<const TF>& ssa,          // (nlay, ncol)
-            const Array_map_2d<const TF>& g,            // (nlay, ncol)
+            const Array_map_2d<const TF>& g,            // (nlay, ncol), empty for g = 0
             const Array_map_2d<const TF>& mu0,          // (nlay, ncol)
             const Array_map_1d<const TF>& sfc_alb_dir,  // (ncol)
             const Array_map_1d<const TF>& sfc_alb_dif,  // (ncol)

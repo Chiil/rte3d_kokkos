@@ -44,7 +44,6 @@ namespace Rte_lw
         Array_2d<TF> Rdif, Tdif;            // (nlay, ncol)
         Array_2d<TF> source_up, source_dn;  // (nlay, ncol)
         Array_2d<TF> albedo, src;           // (nlev, ncol)
-        Array_2d<TF> denom;                 // (nlay, ncol)
         Array_1d<TF> albedo_sfc, src_sfc;   // (ncol)
 
         static Two_stream_scratch make(const int nlay, const int ncol);

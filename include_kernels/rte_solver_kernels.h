@@ -153,9 +153,15 @@ namespace Rte_kernels
     // its own: the branch is invariant in the vectorized column loop, and at modest
     // column counts the saved parallel regions are worth more than the branch costs.
     //
-    // albedo, src and denom carry state between the sweeps and are (nlev, ncol) or
-    // (nlay, ncol) scratch. flux_dn_toa is the incident diffuse flux, and may be empty
-    // for a zero boundary condition.
+    // albedo and src carry state between the sweeps and are (nlev, ncol) scratch.
+    // flux_dn_toa is the incident diffuse flux, and may be empty for a zero boundary
+    // condition.
+    //
+    // The reference also carries denom, SH08's 1/(1 - rdif*albedo_below), from the
+    // first sweep to the second. It is not kept here: the second sweep reads rdif and
+    // that same albedo anyway, so rebuilding it costs one multiply and one divide and
+    // saves writing and reading a whole (nlay, ncol) array -- which at these sizes the
+    // sweeps are entirely bound by.
     //
     // The downward sweep reads back the flux it wrote at the level before, so
     // flux_dn's g-point array has to be there; flux_up is only ever written, so a
@@ -169,7 +175,7 @@ namespace Rte_kernels
             const Array_map_2d<const TF>& rdif, const Array_map_2d<const TF>& tdif,
             const Array_map_2d<const TF>& src_dn, const Array_map_2d<const TF>& src_up,
             const Flux_sink& flux_up, const Flux_sink& flux_dn,
-            const Array_2d<TF>& albedo, const Array_2d<TF>& src, const Array_2d<TF>& denom)
+            const Array_2d<TF>& albedo, const Array_2d<TF>& src)
     {
         // The one place the downward sweep reads itself.
         const Array_map_2d<TF> flux_dn_gpt = flux_dn.gpt;
@@ -201,7 +207,6 @@ namespace Rte_kernels
                 const TF albedo_below = albedo(lev_below, icol);
 
                 const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_below);  // Eq 10
-                denom(ilay, icol) = denom_l;
 
                 albedo(lev_above, icol) = rdif_l + tdif_l*tdif_l * albedo_below * denom_l;  // Eq 9
 
@@ -233,15 +238,21 @@ namespace Rte_kernels
                 const int lev_prev = ilay + V::lev_up();
                 const int lev_dst  = ilay + V::lev_dn();
 
+                const TF rdif_l = rdif(ilay, icol);
+                const TF albedo_l = albedo(lev_dst, icol);
+                const TF src_l = src(lev_dst, icol);
+
+                // Eq 10 again, from the two values this sweep was reading anyway.
+                const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_l);
+
                 const TF flux_dn_l =                                          // Eq 13
                         (tdif(ilay, icol) * flux_dn_gpt(lev_prev, icol)
-                         + rdif(ilay, icol) * src(lev_dst, icol)
-                         + src_dn(ilay, icol)) * denom(ilay, icol);
+                         + rdif_l * src_l
+                         + src_dn(ilay, icol)) * denom_l;
 
                 flux_dn_gpt(lev_dst, icol) = flux_dn_l;
                 flux_dn.add(lev_dst, icol, flux_dn_l);
-                flux_up.put(lev_dst, icol,                                    // Eq 12
-                            flux_dn_l * albedo(lev_dst, icol) + src(lev_dst, icol));
+                flux_up.put(lev_dst, icol, flux_dn_l * albedo_l + src_l);     // Eq 12
             });
     }
 

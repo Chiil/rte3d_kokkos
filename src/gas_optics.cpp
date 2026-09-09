@@ -276,6 +276,8 @@ namespace
             const Array_map_2d<TF>& g,
             const Array_map_2d<TF>& pfrac)
     {
+        const bool write_g = g.size() > 0;
+
         const int nlay = static_cast<int>(tau.extent(0));
         const int ncol = static_cast<int>(tau.extent(1));
 
@@ -449,7 +451,11 @@ namespace
                     tau(ilay, icol) = t;
                     ssa(ilay, icol) = t > TF(2.) * Gas_optics_kernels::tiny()
                             ? tau_rayleigh_l / t : TF(0.);
-                    g(ilay, icol) = TF(0.);
+
+                    // Zero for a pure gas atmosphere, and left empty when nothing
+                    // downstream is going to add to it.
+                    if (write_g)
+                        g(ilay, icol) = TF(0.);
                 }
                 else
                     tau(ilay, icol) = tau_l;
@@ -954,16 +960,22 @@ void Gas_optics::solve_sw_gpt(
         const Flux_sink& flux_dn,
         const Flux_sink& flux_dir)
 {
+    const int ibnd = k.gpt_band_h(igpt);
+    const auto cloud_tau = band_slice(clouds.tau, ibnd);
+
     const auto tau = state.tau;
     const auto ssa = state.ssa;
-    const auto g = state.g;
+
+    // The asymmetry parameter is zero for a pure gas atmosphere, so it is only worth
+    // an array when clouds are going to make it something else; the solver reads an
+    // empty g as isotropic. That saves writing and reading a whole (nlay, ncol) array
+    // per g-point in the clear-sky case.
+    const Array_map_2d<TF> g = cloud_tau.size() > 0
+            ? Array_map_2d<TF>(state.g) : Array_map_2d<TF>();
 
     // Absorption, Rayleigh and the combine in one pass; the dry air column Rayleigh
     // needs is index 0 of col_gas, which the kernel reads for itself.
     compute_tau_sw(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, tau, ssa, g);
-
-    const int ibnd = k.gpt_band_h(igpt);
-    const auto cloud_tau = band_slice(clouds.tau, ibnd);
 
     if (cloud_tau.size() > 0)
         Optical_props::increment_2stream_by_2stream(

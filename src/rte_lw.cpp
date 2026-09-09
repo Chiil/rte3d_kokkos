@@ -45,7 +45,6 @@ Rte_lw::Two_stream_scratch Rte_lw::Two_stream_scratch::make(const int nlay, cons
     s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
     s.albedo = Array_2d<TF>(Kokkos::view_alloc("albedo", no_init), nlev, ncol);
     s.src = Array_2d<TF>(Kokkos::view_alloc("src", no_init), nlev, ncol);
-    s.denom = Array_2d<TF>(Kokkos::view_alloc("denom", no_init), nlay, ncol);
     s.albedo_sfc = Array_1d<TF>(Kokkos::view_alloc("albedo_sfc", no_init), ncol);
     s.src_sfc = Array_1d<TF>(Kokkos::view_alloc("src_sfc", no_init), ncol);
 
@@ -250,7 +249,6 @@ namespace
         const Array_2d<TF> source_dn = scratch.source_dn;
         const Array_2d<TF> albedo = scratch.albedo;
         const Array_2d<TF> src = scratch.src;
-        const Array_2d<TF> denom = scratch.denom;
         const Array_1d<TF> albedo_sfc = scratch.albedo_sfc;
         const Array_1d<TF> src_sfc = scratch.src_sfc;
 
@@ -294,7 +292,7 @@ namespace
                 albedo_sfc, src_sfc, inc_flux,
                 Rdif, Tdif, source_dn, source_up,
                 flux_up, flux_dn,
-                albedo, src, denom);
+                albedo, src);
     }
 }
 
