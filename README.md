@@ -106,7 +106,7 @@ one reaches round-off.
 
 On performance, rte3d is within about 20% of the reference Fortran per thread, and the
 remaining gap is entirely gas optics. On a GPU, RCEMIP at 65536 columns x 256 layers
-runs in 1356 ms longwave and 1556 ms shortwave on an RTX A4500, single precision, and
+runs in 1314 ms longwave and 1531 ms shortwave on an RTX A4500, single precision, and
 is bound by memory bandwidth throughout. Against rte-rrtmgp-cpp's CUDA solver, gas
 optics is at parity and the transport sweeps are not. See
 [`cases/README.md`](cases/README.md#where-things-stand).

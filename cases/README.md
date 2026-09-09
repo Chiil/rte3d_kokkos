@@ -233,7 +233,7 @@ RCEMIP at 65536 columns x 256 layers, single precision, on an RTX A4500:
 | | longwave | shortwave |
 |---|---|---|
 | before | 1879 ms | 2167 ms |
-| now | **1356 ms** | **1556 ms** |
+| now | **1314 ms** | **1531 ms** |
 
 Every one of those milliseconds was memory traffic, not arithmetic and not
 parallelism: the kernels were already running at 400-650 GB/s, against a card that
@@ -250,19 +250,27 @@ now the whole of the gap:
 
 | stage | rte3d | rte-rrtmgp-cpp |
 |---|---|---|
-| longwave, optical depth + Planck | 36.4 ms | 33.3 ms |
-| longwave, transport | **69.0 ms** | **38.3 ms** |
-| shortwave, optical depth + Rayleigh | 23.9 ms | 19.0 ms |
-| shortwave, transport | **175 ms** | **40.5 ms** |
-| total, longwave / shortwave | 121 / 200 ms | 74 / 75 ms |
+| longwave, optical depth + Planck | 35.3 ms | 33.3 ms |
+| longwave, transport | **70.1 ms** | **38.3 ms** |
+| shortwave, optical depth + Rayleigh | 22.5 ms | 19.0 ms |
+| shortwave, transport | **156 ms** | **40.5 ms** |
+| total, longwave / shortwave | 120 / 198 ms | 74 / 75 ms |
 
 Gas optics is at parity. The sweeps are not, and the launch geometry says why: it
 solves four column blocks with every g-point resolved, so its `sw_adding` runs 229376
 threads and its `lw_solver_noscat_step_2` 262144, where ours run `ncol` --- 4096. Same
 work, 64x the parallelism, and at 4096 columns ours reach about 15% of peak bandwidth
-where at 65536 they reach 70%. The gap is a small-problem gap: 55.7 us/column at 4096
-against 22.8 at 65536, while a chunked full-spectrum solver is flat in problem size and
-pays for it in memory --- 4 column blocks here, 64 for the case above.
+and 8% occupancy where at 65536 they reach 70%. The gap is a small-problem gap: 48.3
+us/column at 4096 against 23.4 at 65536, while a chunked full-spectrum solver is flat
+in problem size and pays for it in memory --- 4 column blocks here, 64 for the case
+above.
+
+Block size is not the lever it looks like. Pinning the sweeps' CUDA block to 32 instead
+of the 128 Kokkos picks spreads them over all 56 SMs rather than leaving 24 idle, and
+changes the time by nothing: a block moves warps between SMs but does not create any,
+and a sweep has ncol/32 of them whatever the block. The 2-D launches did respond to
+tiling, which is a layout question rather than an occupancy one; see the note in
+`include/types.h`.
 
 Two ways out, neither taken: fuse the direct-beam sweep with the adding sweeps, which
 move five `(nlay, ncol)` arrays between them, or give the transport arrays a g-point
