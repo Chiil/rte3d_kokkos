@@ -98,6 +98,36 @@ namespace Gas_optics_kernels
     }
 
 
+    // The 2x2x2 major-species interpolation of a (gpt, press, eta, temp) table at one
+    // g-point: the innermost loop of both the absorption optical depth and the Planck
+    // fraction, which differ only in the table and in what scales each of the two
+    // bracketing temperatures -- the column mixing for kmajor, unity for pfracin.
+    template<typename Table>
+    KOKKOS_INLINE_FUNCTION
+    TF interp_major(
+            const Table& table,
+            const int igpt, const int jpress, const int jtemp,
+            const int jeta[2], const TF fmajor[2][2][2], const TF weight[2])
+    {
+        TF sum = TF(0.);
+
+        for (int itemp=0; itemp<2; ++itemp)
+        {
+            const int je = jeta[itemp];
+            TF acc = TF(0.);
+
+            for (int ipress=0; ipress<2; ++ipress)
+                for (int ieta=0; ieta<2; ++ieta)
+                    acc += fmajor[itemp][ipress][ieta]
+                         * table(igpt, jpress + ipress, je + ieta, jtemp + itemp);
+
+            sum += weight[itemp] * acc;
+        }
+
+        return sum;
+    }
+
+
     // Linear interpolation along the last axis of a two-dimensional table, for one
     // entry of the first. Reference: interpolate1D.
     //

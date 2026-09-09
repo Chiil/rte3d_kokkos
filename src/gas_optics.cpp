@@ -263,7 +263,7 @@ namespace
     // With do_rayleigh, tau comes out as the total extinction and ssa as the Rayleigh
     // fraction of it, and g is zeroed -- what combine_abs_and_rayleigh does in the
     // reference. Without it, ssa and g are unused and tau is absorption alone.
-    template<bool do_rayleigh>
+    template<bool do_rayleigh, bool do_pfrac>
     void compute_tau_impl(
             const Kdist_gas& k,
             const Interp_state& state,
@@ -273,7 +273,8 @@ namespace
             const int igpt,
             const Array_map_2d<TF>& tau,
             const Array_map_2d<TF>& ssa,
-            const Array_map_2d<TF>& g)
+            const Array_map_2d<TF>& g,
+            const Array_map_2d<TF>& pfrac)
     {
         const int nlay = static_cast<int>(tau.extent(0));
         const int ncol = static_cast<int>(tau.extent(1));
@@ -298,13 +299,17 @@ namespace
         const auto kmajor = k.kmajor;
         const int idx_h2o = k.idx_h2o;
 
-        // Shortwave only; an empty view otherwise.
+        // One of these is empty: krayl in the longwave, pfracin in the shortwave.
         const auto krayl = k.krayl;
+        const auto pfracin = k.pfracin;
 
         const Minor_absorbers lower = k.lower;
         const Minor_absorbers upper = k.upper;
 
-        parallel_for_2d(do_rayleigh ? "compute_tau_sw" : "compute_tau_absorption", {0, 0}, {nlay, ncol},
+        const char* name = do_rayleigh ? "compute_tau_sw"
+                         : do_pfrac ? "compute_tau_lw" : "compute_tau_absorption";
+
+        parallel_for_2d(name, {0, 0}, {nlay, ncol},
             KOKKOS_LAMBDA(const int ilay, const int icol)
             {
                 const int itropo = tropo(ilay, icol) ? 0 : 1;
@@ -312,7 +317,7 @@ namespace
                 const TF ft = ftemp(ilay, icol);
                 const TF fp = fpress(ilay, icol);
 
-                TF tau_l = TF(0.);
+                TF tau_l;
                 TF tau_rayleigh_l = TF(0.);
 
                 // The binary-species interpolation for the flavour in hand. Held across
@@ -339,17 +344,18 @@ namespace
                     // jpress+itropo; 0-based that is jpress+itropo and one beyond.
                     const int jp0 = jpress(ilay, icol) + itropo;
 
-                    for (int itemp=0; itemp<2; ++itemp)
+                    tau_l = Gas_optics_kernels::interp_major(
+                            kmajor, igpt, jp0, jt, jeta, fmaj, col_mix);
+
+                    // The Planck fraction is that same interpolation of another table,
+                    // with unit column mixing: this g-point's share of its band's
+                    // Planck irradiance.
+                    if (do_pfrac)
                     {
-                        const int je = jeta[itemp];
-                        TF acc = TF(0.);
+                        const TF unit_weight[2] = {TF(1.), TF(1.)};
 
-                        for (int ipress=0; ipress<2; ++ipress)
-                            for (int ieta=0; ieta<2; ++ieta)
-                                acc += fmaj[itemp][ipress][ieta]
-                                     * kmajor(igpt, jp0 + ipress, je + ieta, jt + itemp);
-
-                        tau_l += col_mix[itemp] * acc;
+                        pfrac(ilay, icol) = Gas_optics_kernels::interp_major(
+                                pfracin, igpt, jp0, jt, jeta, fmaj, unit_weight);
                     }
 
                     // A plain if, not if constexpr: nvcc will not let an extended
@@ -461,9 +467,25 @@ void Gas_optics::compute_tau_absorption(
         const int igpt,
         const Array_map_2d<TF>& tau)
 {
-    compute_tau_impl<false>(
+    compute_tau_impl<false, false>(
             k, state, play, tlay, col_gas, igpt, tau,
-            Array_map_2d<TF>(), Array_map_2d<TF>());
+            Array_map_2d<TF>(), Array_map_2d<TF>(), Array_map_2d<TF>());
+}
+
+
+void Gas_optics::compute_tau_lw(
+        const Kdist_gas& k,
+        const Interp_state& state,
+        const Array_2d<const TF>& play,
+        const Array_2d<const TF>& tlay,
+        const Array_3d<const TF>& col_gas,
+        const int igpt,
+        const Array_map_2d<TF>& tau,
+        const Array_map_2d<TF>& pfrac)
+{
+    compute_tau_impl<false, true>(
+            k, state, play, tlay, col_gas, igpt, tau,
+            Array_map_2d<TF>(), Array_map_2d<TF>(), pfrac);
 }
 
 
@@ -478,7 +500,8 @@ void Gas_optics::compute_tau_sw(
         const Array_map_2d<TF>& ssa,
         const Array_map_2d<TF>& g)
 {
-    compute_tau_impl<true>(k, state, play, tlay, col_gas, igpt, tau, ssa, g);
+    compute_tau_impl<true, false>(
+            k, state, play, tlay, col_gas, igpt, tau, ssa, g, Array_map_2d<TF>());
 }
 
 
@@ -542,22 +565,15 @@ void Gas_optics::compute_tau_rayleigh(
 }
 
 
-void Gas_optics::compute_planck_source(
+void Gas_optics::compute_pfrac(
         const Kdist_gas& k,
         const Interp_state& state,
         const Array_3d<const TF>& col_gas,
-        const Array_2d<const TF>& tlay,
-        const Array_2d<const TF>& tlev,
-        const Array_1d<const TF>& tsfc,
-        const int sfc_lay,
         const int igpt,
-        const Source_func_lw& sources,
         const Array_map_2d<TF>& pfrac)
 {
-    const int nlay = static_cast<int>(sources.lay_source.extent(0));
-    const int ncol = static_cast<int>(sources.lay_source.extent(1));
-    const int nlev = nlay + 1;
-    const int nplancktemp = static_cast<int>(k.totplnk.extent(1));
+    const int nlay = static_cast<int>(pfrac.extent(0));
+    const int ncol = static_cast<int>(pfrac.extent(1));
 
     const auto jtemp = state.jtemp;
     const auto ftemp = state.ftemp;
@@ -573,13 +589,6 @@ void Gas_optics::compute_planck_source(
     const auto band_gpt_start = k.band_gpt_start;
     const auto gpt_band = k.gpt_band;
     const auto pfracin = k.pfracin;
-    const auto totplnk = k.totplnk;
-    const TF temp_ref_min = k.temp_ref_min;
-    const TF totplnk_delta = k.totplnk_delta;
-
-    // pfrac is the fraction of this band's Planck irradiance belonging to this
-    // g-point: the major-species interpolation with unit column mixing. It comes from
-    // the caller so that a g-point loop allocates it once.
 
     parallel_for_2d("planck_pfrac", {0, 0}, {nlay, ncol},
         KOKKOS_LAMBDA(const int ilay, const int icol)
@@ -598,20 +607,33 @@ void Gas_optics::compute_planck_source(
             Gas_optics_kernels::interp_weights(
                     ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
 
-            const int jp0 = jpress(ilay, icol) + itropo;
+            const TF unit_weight[2] = {TF(1.), TF(1.)};
 
-            TF frac = TF(0.);
-            for (int itemp=0; itemp<2; ++itemp)
-            {
-                const int je = jeta[itemp];
-                for (int ipress=0; ipress<2; ++ipress)
-                    for (int ieta=0; ieta<2; ++ieta)
-                        frac += fmaj[itemp][ipress][ieta]
-                              * pfracin(igpt, jp0 + ipress, je + ieta, jt + itemp);
-            }
-
-            pfrac(ilay, icol) = frac;
+            pfrac(ilay, icol) = Gas_optics_kernels::interp_major(
+                    pfracin, igpt, jpress(ilay, icol) + itropo, jt, jeta, fmaj, unit_weight);
         });
+}
+
+
+void Gas_optics::compute_planck_source(
+        const Kdist_gas& k,
+        const Array_2d<const TF>& tlay,
+        const Array_2d<const TF>& tlev,
+        const Array_1d<const TF>& tsfc,
+        const int sfc_lay,
+        const int igpt,
+        const Source_func_lw& sources,
+        const Array_map_2d<const TF>& pfrac)
+{
+    const int nlay = static_cast<int>(sources.lay_source.extent(0));
+    const int ncol = static_cast<int>(sources.lay_source.extent(1));
+    const int nlev = nlay + 1;
+    const int nplancktemp = static_cast<int>(k.totplnk.extent(1));
+
+    const auto gpt_band = k.gpt_band;
+    const auto totplnk = k.totplnk;
+    const TF temp_ref_min = k.temp_ref_min;
+    const TF totplnk_delta = k.totplnk_delta;
 
     const auto lay_source = sources.lay_source;
     const auto lev_source = sources.lev_source;
@@ -620,21 +642,13 @@ void Gas_optics::compute_planck_source(
     const bool do_jacobian = sfc_source_jac.size() > 0;
 
     // The band Planck function is cheap to interpolate, so it is recomputed per
-    // g-point rather than stored as (nbnd, nlev, ncol).
-    parallel_for_2d("planck_lay_source", {0, 0}, {nlay, ncol},
-        KOKKOS_LAMBDA(const int ilay, const int icol)
-        {
-            const TF planck = Gas_optics_kernels::interpolate_1d(
-                    tlay(ilay, icol), temp_ref_min, totplnk_delta,
-                    totplnk, gpt_band(igpt), nplancktemp);
-
-            lay_source(ilay, icol) = pfrac(ilay, icol) * planck;
-        });
-
-    parallel_for_2d("planck_lev_source", {0, 0}, {nlev, ncol},
+    // g-point rather than stored as (nbnd, nlev, ncol). One kernel over levels writes
+    // both sources: the layer below each level and the level itself read the same two
+    // Planck fractions.
+    parallel_for_2d("planck_source", {0, 0}, {nlev, ncol},
         KOKKOS_LAMBDA(const int ilev, const int icol)
         {
-            const TF planck = Gas_optics_kernels::interpolate_1d(
+            const TF planck_lev = Gas_optics_kernels::interpolate_1d(
                     tlev(ilev, icol), temp_ref_min, totplnk_delta,
                     totplnk, gpt_band(igpt), nplancktemp);
 
@@ -649,7 +663,18 @@ void Gas_optics::compute_planck_source(
             else
                 frac = Kokkos::sqrt(pfrac(ilev - 1, icol) * pfrac(ilev, icol));
 
-            lev_source(ilev, icol) = frac * planck;
+            lev_source(ilev, icol) = frac * planck_lev;
+
+            // The layer at this array position, where there is one; the level loop is
+            // one longer.
+            if (ilev < nlay)
+            {
+                const TF planck_lay = Gas_optics_kernels::interpolate_1d(
+                        tlay(ilev, icol), temp_ref_min, totplnk_delta,
+                        totplnk, gpt_band(igpt), nplancktemp);
+
+                lay_source(ilev, icol) = pfrac(ilev, icol) * planck_lay;
+            }
         });
 
     parallel_for_1d("planck_sfc_source", 0, ncol,
@@ -888,11 +913,14 @@ void Gas_optics::solve_lw_gpt(
         const Band_props& clouds,
         const Array_2d<TF>& flux_up_jac)
 {
-    compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
+    // The Planck fraction comes out of the same interpolation as the optical depth.
+    compute_tau_lw(
+            k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
+            state.tau, state.pfrac);
 
     compute_planck_source(
-            k, state.interp, state.col_gas, atm.tlay, atm.tlev, atm.tsfc,
-            state.sfc_lay, igpt, state.sources(), state.pfrac);
+            k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
+            state.sources(), state.pfrac);
 
     // Clouds are absorption-only in the longwave here, matching the all-sky driver:
     // the solver is the no-scattering one, so they enter as an optical depth.
@@ -1078,9 +1106,9 @@ void Gas_optics::gas_optics_lw(
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
-        compute_tau_absorption(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt));
+        compute_tau_lw(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt), pfrac);
         compute_planck_source(
-                k, state, col_gas, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
+                k, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
     }
 }
 

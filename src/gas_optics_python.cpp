@@ -297,9 +297,13 @@ void Gas_optics::init_python_bindings(py::module_& m)
                     tlay_d.extent(0), tlay_d.extent(1));
 
             for (int igpt=0; igpt<ngpt; ++igpt)
+            {
+                // The solve path takes pfrac from compute_tau_lw; this entry point
+                // tests the Planck sources alone, so it computes it on its own.
+                Gas_optics::compute_pfrac(k, state, col_gas_d, igpt, pfrac);
                 Gas_optics::compute_planck_source(
-                        k, state, col_gas_d, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt,
-                        sources.gpt(igpt), pfrac);
+                        k, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt, sources.gpt(igpt), pfrac);
+            }
             Kokkos::fence();
 
             py::dict out;

@@ -217,6 +217,19 @@ namespace Gas_optics
     // the reference's combine_abs_and_rayleigh. One kernel rather than three, because
     // Rayleigh takes the same flavour as the major species and so reuses the
     // interpolation weights already in registers.
+    // Absorption optical depth and the Planck fraction for one g-point. The two are
+    // the same major-species interpolation of two tables, so the longwave takes them
+    // from one kernel; see compute_tau_sw for the shortwave's counterpart.
+    void compute_tau_lw(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& play,     // (nlay, ncol)
+            const Array_2d<const TF>& tlay,     // (nlay, ncol)
+            const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
+            const int igpt,
+            const Array_map_2d<TF>& tau,        // (nlay, ncol)
+            const Array_map_2d<TF>& pfrac);     // (nlay, ncol)
+
     void compute_tau_sw(
             const Kdist_gas& k,
             const Interp_state& state,
@@ -446,17 +459,26 @@ namespace Gas_optics
     // Planck sources at layer centres, layer edges and the surface, plus the
     // surface-temperature Jacobian. Reference: compute_Planck_source. The longwave
     // solvers take one g-point at a time, so they consume Source_func_lw_spectral::gpt.
+    // pfrac is this g-point's share of its band's Planck irradiance, which
+    // compute_tau_lw produces along the way.
     void compute_planck_source(
             const Kdist_gas& k,
-            const Interp_state& state,
-            const Array_3d<const TF>& col_gas,   // (ngas+1, nlay, ncol)
             const Array_2d<const TF>& tlay,      // (nlay, ncol)
             const Array_2d<const TF>& tlev,      // (nlev, ncol)
             const Array_1d<const TF>& tsfc,      // (ncol)
             const int sfc_lay,                   // 0-based layer adjacent to the surface
             const int igpt,
             const Source_func_lw& sources,
-            const Array_map_2d<TF>& pfrac);      // (nlay, ncol) scratch, owned by the caller
+            const Array_map_2d<const TF>& pfrac);   // (nlay, ncol)
+
+    // The Planck fraction on its own. Test support: the solve path takes it from
+    // compute_tau_lw, which computes it from the interpolation it is already doing.
+    void compute_pfrac(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_3d<const TF>& col_gas,   // (ngas+1, nlay, ncol)
+            const int igpt,
+            const Array_map_2d<TF>& pfrac);      // (nlay, ncol)
 
     // Materialise the weights the reference stores, from the compact form above.
     // Test support only: the solvers reconstruct them in place via
