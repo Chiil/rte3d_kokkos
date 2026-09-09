@@ -9,15 +9,8 @@
 #include "rte_sw.h"
 
 
-namespace
-{
-    // The reference's guard against dividing by a vanishing column amount:
-    // 2*tiny(col_mix), twice the smallest normal number.
-    constexpr TF tiny = std::numeric_limits<TF>::min();
-}
-
-
-Interp_state Interp_state::create(const int nflav, const int nlay, const int ncol)
+Interp_state Interp_state::create(
+        const int nflav, const int nlay, const int ncol, const bool store_eta)
 {
     const auto no_init = Kokkos::WithoutInitializing;
 
@@ -28,9 +21,15 @@ Interp_state Interp_state::create(const int nflav, const int nlay, const int nco
     s.fpress = Array_2d<TF>(Kokkos::view_alloc("fpress", no_init), nlay, ncol);
     s.tropo = Array_2d<Bool>(Kokkos::view_alloc("tropo", no_init), nlay, ncol);
 
-    s.jeta = Array_4d<int>(Kokkos::view_alloc("jeta", no_init), nflav, 2, nlay, ncol);
-    s.feta = Array_4d<TF>(Kokkos::view_alloc("feta", no_init), nflav, 2, nlay, ncol);
-    s.col_mix = Array_4d<TF>(Kokkos::view_alloc("col_mix", no_init), nflav, 2, nlay, ncol);
+    // Empty unless asked for; the kernels rebuild the flavour they need. See the note
+    // on Interp_state.
+    const int nflav_s = store_eta ? nflav : 0;
+    const int nlay_s = store_eta ? nlay : 0;
+    const int ncol_s = store_eta ? ncol : 0;
+
+    s.jeta = Array_4d<int>(Kokkos::view_alloc("jeta", no_init), nflav_s, 2, nlay_s, ncol_s);
+    s.feta = Array_4d<TF>(Kokkos::view_alloc("feta", no_init), nflav_s, 2, nlay_s, ncol_s);
+    s.col_mix = Array_4d<TF>(Kokkos::view_alloc("col_mix", no_init), nflav_s, 2, nlay_s, ncol_s);
 
     s.lower_limits = Array_2d<int>(Kokkos::view_alloc("lower_limits", no_init), ncol, 2);
     s.upper_limits = Array_2d<int>(Kokkos::view_alloc("upper_limits", no_init), ncol, 2);
@@ -93,41 +92,29 @@ void Gas_optics::interpolation(
             tropo(ilay, icol) = log_p > press_ref_trop_log ? Bool(1) : Bool(0);
         });
 
-    // Binary species parameter, per flavour.
-    parallel_for_3d("interpolation_eta", {0, 0, 0}, {nflav, nlay, ncol},
-        KOKKOS_LAMBDA(const int iflav, const int ilay, const int icol)
-        {
-            const int igas0 = flavor(iflav, 0);
-            const int igas1 = flavor(iflav, 1);
-
-            // itropo = 0 lower atmosphere, 1 upper.
-            const int itropo = tropo(ilay, icol) ? 0 : 1;
-            const int jt = jtemp(ilay, icol);
-
-            for (int itemp=0; itemp<2; ++itemp)
+    // Binary species parameter, per flavour. Only materialised when the caller asked
+    // for it: the g-point kernels rebuild the one flavour they need with the same
+    // helper, and pay no memory for the other nine.
+    if (jeta.size() > 0)
+        parallel_for_3d("interpolation_eta", {0, 0, 0}, {nflav, nlay, ncol},
+            KOKKOS_LAMBDA(const int iflav, const int ilay, const int icol)
             {
-                // Ratio of reference volume mixing ratios that puts eta at 0.5, for
-                // this flavour and reference temperature level.
-                const TF ratio_eta_half = vmr_ref(jt + itemp, igas0, itropo)
-                                        / vmr_ref(jt + itemp, igas1, itropo);
+                // itropo = 0 lower atmosphere, 1 upper.
+                const int itropo = tropo(ilay, icol) ? 0 : 1;
 
-                const TF mix = col_gas(igas0, ilay, icol)
-                             + ratio_eta_half * col_gas(igas1, ilay, icol);
-                col_mix(iflav, itemp, ilay, icol) = mix;
+                TF col_mix_l[2], feta_l[2];
+                int jeta_l[2];
+                Gas_optics_kernels::eta_interp(
+                        flavor, vmr_ref, col_gas, neta, iflav, itropo,
+                        jtemp(ilay, icol), ilay, icol, col_mix_l, jeta_l, feta_l);
 
-                // A branch, not a select: the reference warns at length that with
-                // merge() both arms are evaluated and this division can trap.
-                TF eta;
-                if (mix > TF(2.) * tiny)
-                    eta = col_gas(igas0, ilay, icol) / mix;
-                else
-                    eta = TF(0.5);
-
-                const TF loceta = eta * static_cast<TF>(neta - 1);
-                jeta(iflav, itemp, ilay, icol) = Kokkos::min(static_cast<int>(loceta), neta - 2);
-                feta(iflav, itemp, ilay, icol) = loceta - Kokkos::floor(loceta);
-            }
-        });
+                for (int itemp=0; itemp<2; ++itemp)
+                {
+                    col_mix(iflav, itemp, ilay, icol) = col_mix_l[itemp];
+                    jeta(iflav, itemp, ilay, icol) = jeta_l[itemp];
+                    feta(iflav, itemp, ilay, icol) = feta_l[itemp];
+                }
+            });
 
     // Layer limits of the lower and upper atmosphere, per column, which the
     // minor-absorber loop of compute_tau_absorption walks. The reference finds the
@@ -282,11 +269,14 @@ void Gas_optics::compute_tau_absorption(
     const auto jpress = state.jpress;
     const auto fpress = state.fpress;
     const auto tropo = state.tropo;
-    const auto jeta = state.jeta;
-    const auto feta = state.feta;
-    const auto col_mix = state.col_mix;
     const auto lower_limits = state.lower_limits;
     const auto upper_limits = state.upper_limits;
+
+    // The binary-species interpolation is rebuilt per flavour rather than read from
+    // memory; see the note on Interp_state.
+    const auto flavor = k.flavor;
+    const auto vmr_ref = k.vmr_ref;
+    const int neta = k.neta;
 
     const auto gpoint_flavor = k.gpoint_flavor;
     const auto band_gpt_start = k.band_gpt_start;
@@ -307,14 +297,25 @@ void Gas_optics::compute_tau_absorption(
 
             TF tau_l = TF(0.);
 
+            // The binary-species interpolation for the flavour in hand. Held across
+            // the minor-absorber loop below, which mostly asks for the same flavour
+            // again, and rebuilt when it does not.
+            TF col_mix[2], feta[2];
+            int jeta[2];
+            int iflav_have = -1;
+
             // ---- major species -------------------------------------------------
             // The flavour comes from the first g-point of this g-point's band.
             {
                 const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
 
+                Gas_optics_kernels::eta_interp(
+                        flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
+                        col_mix, jeta, feta);
+                iflav_have = iflav;
+
                 TF fmin[2][2], fmaj[2][2][2];
-                Gas_optics_kernels::interp_weights(
-                        ft, fp, feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+                Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
 
                 // The reference indexes kmajor at jpress-1 and jpress with a 1-based
                 // jpress+itropo; 0-based that is jpress+itropo and one beyond.
@@ -322,7 +323,7 @@ void Gas_optics::compute_tau_absorption(
 
                 for (int itemp=0; itemp<2; ++itemp)
                 {
-                    const int je = jeta(iflav, itemp, ilay, icol);
+                    const int je = jeta[itemp];
                     TF acc = TF(0.);
 
                     for (int ipress=0; ipress<2; ++ipress)
@@ -330,7 +331,7 @@ void Gas_optics::compute_tau_absorption(
                             acc += fmaj[itemp][ipress][ieta]
                                  * kmajor(igpt, jp0 + ipress, je + ieta, jt + itemp);
 
-                    tau_l += col_mix(iflav, itemp, ilay, icol) * acc;
+                    tau_l += col_mix[itemp] * acc;
                 }
             }
 
@@ -373,14 +374,21 @@ void Gas_optics::compute_tau_absorption(
                     const int iflav = m.flavor(imnr);
                     const int ik = m.kminor_start(imnr) + (igpt - m.minor_limits_gpt(imnr, 0));
 
+                    if (iflav != iflav_have)
+                    {
+                        Gas_optics_kernels::eta_interp(
+                                flavor, vmr_ref, col_gas, neta, iflav, itropo, jt,
+                                ilay, icol, col_mix, jeta, feta);
+                        iflav_have = iflav;
+                    }
+
                     TF fmin[2][2], fmaj[2][2][2];
-                    Gas_optics_kernels::interp_weights(
-                            ft, fp, feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+                    Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
 
                     TF acc = TF(0.);
                     for (int itemp=0; itemp<2; ++itemp)
                     {
-                        const int je = jeta(iflav, itemp, ilay, icol);
+                        const int je = jeta[itemp];
                         for (int ieta=0; ieta<2; ++ieta)
                             acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
                     }
@@ -409,8 +417,10 @@ void Gas_optics::compute_tau_rayleigh(
     const auto ftemp = state.ftemp;
     const auto fpress = state.fpress;
     const auto tropo = state.tropo;
-    const auto jeta = state.jeta;
-    const auto feta = state.feta;
+
+    const auto flavor = k.flavor;
+    const auto vmr_ref = k.vmr_ref;
+    const int neta = k.neta;
 
     const auto gpoint_flavor = k.gpoint_flavor;
     const auto band_gpt_start = k.band_gpt_start;
@@ -428,15 +438,20 @@ void Gas_optics::compute_tau_rayleigh(
             // this g-point's band.
             const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
 
+            TF col_mix[2], feta[2];
+            int jeta[2];
+            Gas_optics_kernels::eta_interp(
+                    flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
+                    col_mix, jeta, feta);
+
             TF fmin[2][2], fmaj[2][2][2];
             Gas_optics_kernels::interp_weights(
-                    ftemp(ilay, icol), fpress(ilay, icol),
-                    feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+                    ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
 
             TF kr = TF(0.);
             for (int itemp=0; itemp<2; ++itemp)
             {
-                const int je = jeta(iflav, itemp, ilay, icol);
+                const int je = jeta[itemp];
                 for (int ieta=0; ieta<2; ++ieta)
                     kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
             }
@@ -450,6 +465,7 @@ void Gas_optics::compute_tau_rayleigh(
 void Gas_optics::compute_planck_source(
         const Kdist_gas& k,
         const Interp_state& state,
+        const Array_3d<const TF>& col_gas,
         const Array_2d<const TF>& tlay,
         const Array_2d<const TF>& tlev,
         const Array_1d<const TF>& tsfc,
@@ -468,8 +484,10 @@ void Gas_optics::compute_planck_source(
     const auto jpress = state.jpress;
     const auto fpress = state.fpress;
     const auto tropo = state.tropo;
-    const auto jeta = state.jeta;
-    const auto feta = state.feta;
+
+    const auto flavor = k.flavor;
+    const auto vmr_ref = k.vmr_ref;
+    const int neta = k.neta;
 
     const auto gpoint_flavor = k.gpoint_flavor;
     const auto band_gpt_start = k.band_gpt_start;
@@ -490,17 +508,22 @@ void Gas_optics::compute_planck_source(
             const int jt = jtemp(ilay, icol);
             const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
 
+            TF col_mix[2], feta[2];
+            int jeta[2];
+            Gas_optics_kernels::eta_interp(
+                    flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
+                    col_mix, jeta, feta);
+
             TF fmin[2][2], fmaj[2][2][2];
             Gas_optics_kernels::interp_weights(
-                    ftemp(ilay, icol), fpress(ilay, icol),
-                    feta(iflav, 0, ilay, icol), feta(iflav, 1, ilay, icol), fmin, fmaj);
+                    ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
 
             const int jp0 = jpress(ilay, icol) + itropo;
 
             TF frac = TF(0.);
             for (int itemp=0; itemp<2; ++itemp)
             {
-                const int je = jeta(iflav, itemp, ilay, icol);
+                const int je = jeta[itemp];
                 for (int ipress=0; ipress<2; ++ipress)
                     for (int ieta=0; ieta<2; ++ieta)
                         frac += fmaj[itemp][ipress][ieta]
@@ -788,8 +811,8 @@ void Gas_optics::solve_lw_gpt(
     compute_tau_absorption(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, state.tau);
 
     compute_planck_source(
-            k, state.interp, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
-            state.sources(), state.pfrac);
+            k, state.interp, state.col_gas, atm.tlay, atm.tlev, atm.tsfc,
+            state.sfc_lay, igpt, state.sources(), state.pfrac);
 
     // Clouds are absorption-only in the longwave here, matching the all-sky driver:
     // the solver is the no-scattering one, so they enter as an optical depth.
@@ -997,7 +1020,8 @@ void Gas_optics::gas_optics_lw(
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
         compute_tau_absorption(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt));
-        compute_planck_source(k, state, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
+        compute_planck_source(
+                k, state, col_gas, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
     }
 }
 

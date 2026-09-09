@@ -30,9 +30,16 @@ struct Interp_state
     Array_2d<TF> fpress;    // (nlay, ncol)          pressure interpolation fraction
     Array_2d<Bool> tropo;   // (nlay, ncol)          lower (1) or upper (0) atmosphere
 
-    Array_4d<int> jeta;     // (nflav, 2, nlay, ncol) binary species interpolation index
-    Array_4d<TF> feta;      // (nflav, 2, nlay, ncol) binary species interpolation fraction
-    Array_4d<TF> col_mix;   // (nflav, 2, nlay, ncol) combined major species column amount
+    // The binary-species interpolation, (nflav, 2, nlay, ncol) each. Empty unless the
+    // caller asks for them: each g-point reads one flavour, so storing all of them
+    // costs 24 bytes of traffic per cell per g-point against 240 bytes held, and at
+    // ncol = 65536, nlay = 256 the three together are 4 GB. The kernels rebuild the
+    // one flavour they need with Gas_optics_kernels::eta_interp instead, which is the
+    // fmajor/fminor argument above one step further. Only the tests, which compare
+    // them against the reference, ask for them.
+    Array_4d<int> jeta;     // binary species interpolation index
+    Array_4d<TF> feta;      // binary species interpolation fraction
+    Array_4d<TF> col_mix;   // combined major species column amount
 
     // First and last layer, 1-based inclusive, on each side of the tropopause, per
     // column; a zero start means the column has no layers on that side. Derived from
@@ -42,8 +49,10 @@ struct Interp_state
     Array_2d<int> lower_limits;  // (ncol, 2)
     Array_2d<int> upper_limits;  // (ncol, 2)
 
-    // Allocate for the given problem size.
-    static Interp_state create(const int nflav, const int nlay, const int ncol);
+    // Allocate for the given problem size. store_eta allocates jeta, feta and col_mix,
+    // which only the kernel-by-kernel tests need; see above.
+    static Interp_state create(
+            const int nflav, const int nlay, const int ncol, const bool store_eta = false);
 };
 
 
@@ -424,6 +433,7 @@ namespace Gas_optics
     void compute_planck_source(
             const Kdist_gas& k,
             const Interp_state& state,
+            const Array_3d<const TF>& col_gas,   // (ngas+1, nlay, ncol)
             const Array_2d<const TF>& tlay,      // (nlay, ncol)
             const Array_2d<const TF>& tlev,      // (nlev, ncol)
             const Array_1d<const TF>& tsfc,      // (ncol)

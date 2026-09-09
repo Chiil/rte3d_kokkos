@@ -1,10 +1,71 @@
 #pragma once
 
+#include <limits>
+
 #include "types.h"
 
 
 namespace Gas_optics_kernels
 {
+    // The reference's guard against dividing by a vanishing column amount:
+    // 2*tiny(col_mix), twice the smallest normal number. A function rather than a
+    // namespace-scope constant so it is usable inside device lambdas; see the note in
+    // rte_solver_kernels.h.
+    KOKKOS_INLINE_FUNCTION constexpr TF tiny() { return std::numeric_limits<TF>::min(); }
+
+
+    // The binary-species interpolation for one flavour: the reference's col_mix, jeta
+    // and feta, for the two bracketing reference temperatures jtemp and jtemp+1.
+    //
+    // The reference stores these as (nflav, 2, nlay, ncol) arrays, and so did we until
+    // the g-point loop made it clear what that costs: each g-point reads one flavour,
+    // 24 of the 240 bytes per cell, once per g-point. Recomputing needs two col_gas
+    // values and a vmr_ref lookup from a table small enough to stay in cache, for two
+    // divides -- the same trade the header note on Interp_state describes for fmajor
+    // and fminor.
+    template<typename Flavor, typename Vmr_ref, typename Col_gas>
+    KOKKOS_INLINE_FUNCTION
+    void eta_interp(
+            const Flavor& flavor,      // (nflav, 2)
+            const Vmr_ref& vmr_ref,    // (ntemp, ngas+1, 2)
+            const Col_gas& col_gas,    // (ngas+1, nlay, ncol)
+            const int neta,
+            const int iflav,
+            const int itropo,          // 0 lower atmosphere, 1 upper
+            const int jtemp,           // 0-based temperature index
+            const int ilay, const int icol,
+            TF col_mix[2], int jeta[2], TF feta[2])
+    {
+        const int igas0 = flavor(iflav, 0);
+        const int igas1 = flavor(iflav, 1);
+
+        const TF col0 = col_gas(igas0, ilay, icol);
+        const TF col1 = col_gas(igas1, ilay, icol);
+
+        for (int itemp=0; itemp<2; ++itemp)
+        {
+            // Ratio of reference volume mixing ratios that puts eta at 0.5, for this
+            // flavour and reference temperature level.
+            const TF ratio_eta_half = vmr_ref(jtemp + itemp, igas0, itropo)
+                                    / vmr_ref(jtemp + itemp, igas1, itropo);
+
+            const TF mix = col0 + ratio_eta_half * col1;
+            col_mix[itemp] = mix;
+
+            // A branch, not a select: the reference warns at length that with merge()
+            // both arms are evaluated and this division can trap.
+            TF eta;
+            if (mix > TF(2.) * tiny())
+                eta = col0 / mix;
+            else
+                eta = TF(0.5);
+
+            const TF loceta = eta * static_cast<TF>(neta - 1);
+            jeta[itemp] = Kokkos::min(static_cast<int>(loceta), neta - 2);
+            feta[itemp] = loceta - Kokkos::floor(loceta);
+        }
+    }
+
     // Reconstruct the major and minor interpolation weights the reference stores as
     // fmajor and fminor. See the note on Interp_state for why they are recomputed
     // rather than kept.

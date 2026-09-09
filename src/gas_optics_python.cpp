@@ -63,7 +63,9 @@ void Gas_optics::init_python_bindings(py::module_& m)
             const int nlay = static_cast<int>(play_d.extent(0));
             const int ncol = static_cast<int>(play_d.extent(1));
 
-            Interp_state state = Interp_state::create(nflav, nlay, ncol);
+            // store_eta: this entry point exists to be compared against the
+            // reference, which returns jeta, feta and col_mix.
+            Interp_state state = Interp_state::create(nflav, nlay, ncol, true);
 
             Gas_optics::interpolation(
                     flavor_d,
@@ -144,6 +146,11 @@ void Gas_optics::init_python_bindings(py::module_& m)
             auto tlay_d = Numpy::to_device_2d<TF>(tlay, "tlay");
             auto col_gas_d = Numpy::to_device_3d<TF>(col_gas, "col_gas");
 
+            // The kernels rebuild the binary-species interpolation themselves.
+            k.flavor = flavor_d;
+            k.vmr_ref = Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref");
+            k.neta = neta;
+
             const int nflav = static_cast<int>(flavor_d.extent(0));
             const int nlay = static_cast<int>(play_d.extent(0));
             const int ncol = static_cast<int>(play_d.extent(1));
@@ -197,6 +204,10 @@ void Gas_optics::init_python_bindings(py::module_& m)
             auto flavor_d = Numpy::to_device_2d<int>(item<int>(kdist, "flavor"), "flavor");
             auto play_d = Numpy::to_device_2d<TF>(play, "play");
             auto col_gas_d = Numpy::to_device_3d<TF>(col_gas, "col_gas");
+
+            k.flavor = flavor_d;
+            k.vmr_ref = Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref");
+            k.neta = neta;
 
             const int nflav = static_cast<int>(flavor_d.extent(0));
             const int nlay = static_cast<int>(play_d.extent(0));
@@ -255,6 +266,11 @@ void Gas_optics::init_python_bindings(py::module_& m)
 
             auto flavor_d = Numpy::to_device_2d<int>(item<int>(kdist, "flavor"), "flavor");
             auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            auto col_gas_d = Numpy::to_device_3d<TF>(col_gas, "col_gas");
+
+            k.flavor = flavor_d;
+            k.vmr_ref = Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref");
+            k.neta = neta;
 
             const int nflav = static_cast<int>(flavor_d.extent(0));
             const int nlay = static_cast<int>(play_d.extent(0));
@@ -268,8 +284,7 @@ void Gas_optics::init_python_bindings(py::module_& m)
                     Numpy::to_device_1d<TF>(temp_ref, "temp_ref"),
                     press_ref_log_delta, temp_ref_min, temp_ref_delta, press_ref_trop_log,
                     neta, Numpy::to_device_3d<TF>(vmr_ref, "vmr_ref"),
-                    play_d, Numpy::to_device_2d<TF>(tlay, "tlay"),
-                    Numpy::to_device_3d<TF>(col_gas, "col_gas"), state);
+                    play_d, Numpy::to_device_2d<TF>(tlay, "tlay"), col_gas_d, state);
 
             const auto sources = Source_func_lw_spectral::create(ngpt, nlay, ncol, true);
 
@@ -283,7 +298,7 @@ void Gas_optics::init_python_bindings(py::module_& m)
 
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Gas_optics::compute_planck_source(
-                        k, state, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt,
+                        k, state, col_gas_d, tlay_d, tlev_d, tsfc_d, sfc_lay, igpt,
                         sources.gpt(igpt), pfrac);
             Kokkos::fence();
 
