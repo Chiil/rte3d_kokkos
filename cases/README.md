@@ -1,8 +1,8 @@
 # Cases
 
 Runnable end-to-end scripts, in the spirit of `rte-rrtmgp-cpp`'s `rfmip/`, `allsky/`
-and `rcemip/` directories. Two of them validate against reference fluxes; the third is
-a performance benchmark.
+and `rcemip/` directories. Two of them validate against reference fluxes, the third is
+a performance benchmark, and `user/` runs whatever case you give it.
 
 ## Before you start
 
@@ -16,11 +16,65 @@ In full:
 
 | variable | needed by | how to get it |
 |---|---|---|
-| `RTE3D_PYTHON_PATH` | all three, always | the directory holding `rte3d_python*.so` |
+| `RTE3D_PYTHON_PATH` | all four, always | the directory holding `rte3d_python*.so` |
 | `RTE3D_FORTRAN_REF` | `run_rcemip.py --compare-fortran` only | `./tests/build_reference.sh` |
 
-Plotting needs `matplotlib`. It is not a dependency of rte3d: without it the scripts
-still run and still write their NetCDF output, and `--plot` reports what to install.
+Plotting needs `matplotlib`. It is not a dependency of rte3d: without it the two
+validation scripts still run and still write their NetCDF output, and `--plot` reports what to install.
+
+---
+
+## `user/run_case.py` — your own case
+
+The general runner: an arbitrary atmosphere from a NetCDF file, no reference to compare
+against. It is the Python counterpart of `test_rte_rrtmgp.cpp` in rte-rrtmgp-cpp and
+reads the same input layout, so a case written for that executable runs here unchanged.
+
+```bash
+python cases/user/run_case.py mycase
+```
+
+`CASE` names the case: settings come from `CASE.toml`, the atmosphere from
+`CASE_input.nc`, and the fluxes go to `CASE_output.nc`, folded back into the input's
+own `(lev, y, x)` layout.
+
+| flag | meaning |
+|---|---|
+| `--settings F`, `-i F`, `-o F` | override the three paths derived from `CASE` |
+| `--longwave` / `--no-longwave` | solve the longwave (default: on) |
+| `--shortwave` / `--no-shortwave` | solve the shortwave (default: on) |
+| `--cloud-optics` | read `lwp`, `iwp`, `rel`, `dei` and include clouds (default: off) |
+| `--no-delta-cloud` | do not delta-scale the shortwave cloud properties |
+| `--output-bnd-fluxes` | also write the fluxes resolved by band |
+
+Flags override the settings file, so a case stays reproducible from its `.toml` alone
+while a single run can still be varied. See [`user/example.toml`](user/example.toml)
+for the switches and the coefficient-file paths.
+
+### The input file
+
+Columns are flattened as x fastest, which is what `(lay, y, x)` already is in memory.
+
+| variable | dimensions | needed for |
+|---|---|---|
+| `p_lay`, `t_lay` | `(lay, y, x)` | always |
+| `p_lev`, `t_lev` | `(lev, y, x)` | always |
+| `vmr_<gas>` | scalar, `(lay)` or `(lay, y, x)` | always; every gas the k-distribution knows |
+| `col_dry` | `(lay, y, x)` | optional; computed from `p_lev` and water vapour otherwise |
+| `t_sfc` | `(y, x)` | longwave |
+| `emis_sfc` | `(y, x, band_lw)` | longwave |
+| `mu0` | `(y, x)` | shortwave; columns with `mu0 <= 0` come back zero |
+| `sfc_alb_dir`, `sfc_alb_dif` | `(y, x, band_sw)` | shortwave; `dif` defaults to `dir` |
+| `tsi` `(y, x)` or `tsi_scaling` | scalar | optional; the k-distribution's own solar source otherwise |
+| `lwp`, `iwp`, `rel`, `dei` | `(lay, y, x)` | `cloud-optics` |
+
+`dei` is an effective *diameter*, as RRTMGP's current cloud coefficient files document
+the quantity; `rei` is accepted as a name for the same thing. A file may use a flat
+`col` dimension in place of `x` and `y`, and may be stored either surface-first or
+top-first -- the orientation is read from `p_lay` rather than assumed.
+
+Aerosols are not read: rte3d has no aerosol optics yet. Cloud coefficients must be the
+band-resolved `-bnd` files, since the solvers take cloud properties by band.
 
 ---
 

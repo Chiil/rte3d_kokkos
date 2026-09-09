@@ -74,14 +74,19 @@ coefficient file contains them. Aerosol optics is not started.
 
 ## Cases
 
-Three runnable end-to-end scripts live in [`cases/`](cases/README.md), which documents
+Four runnable end-to-end scripts live in [`cases/`](cases/README.md), which documents
 every flag:
 
 ```bash
 python cases/rfmip/run_rfmip.py   --plot     # clear-sky, 100 sites, vs reference
 python cases/allsky/run_allsky.py --plot     # cloudy, 24 columns, vs reference
 python cases/rcemip/run_rcemip.py --ncol 512 --compare-fortran   # benchmark
+python cases/user/run_case.py mycase         # your own case, from NetCDF
 ```
+
+The last is the general one: it reads a case you supply as `mycase_input.nc`, with the
+switches in `mycase.toml`, and writes `mycase_output.nc`. The file layout is the one
+rte-rrtmgp-cpp's test executable reads, so cases written for that run here unchanged.
 
 Agreement with the reference fluxes shipped in `extern/rrtmgp-data`, which RRTMGP
 itself produced:

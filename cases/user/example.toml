@@ -1,0 +1,29 @@
+# Settings for a user case, read by run_case.py as CASE.toml. Everything here is
+# optional; the values shown are the defaults.
+
+[switches]
+longwave = true
+shortwave = true
+
+# Read lwp, iwp, rel and dei from the input and include clouds. The cloud
+# coefficient files must be band-resolved -bnd ones.
+cloud-optics = false
+
+# Delta-scale the shortwave cloud properties before adding them, as the reference
+# driver does. No effect on the longwave, where clouds are absorption only.
+delta-cloud = true
+
+# Also write the fluxes resolved by band, as lw_bnd_flux_* and sw_bnd_flux_*.
+output-bnd-fluxes = false
+
+[files]
+# Bare names are looked up in extern/rrtmgp-data; anything with a separator in it is
+# taken as a path.
+gas-lw = "rrtmgp-gas-lw-g256.nc"
+gas-sw = "rrtmgp-gas-sw-g224.nc"
+cloud-lw = "rrtmgp-clouds-lw-bnd.nc"
+cloud-sw = "rrtmgp-clouds-sw-bnd.nc"
+
+# Ice roughness type, 0-based. The reference defaults to the smoothest; the all-sky
+# example uses 1.
+icergh = 0
