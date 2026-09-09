@@ -233,7 +233,7 @@ RCEMIP at 65536 columns x 256 layers, single precision, on an RTX A4500:
 | | longwave | shortwave |
 |---|---|---|
 | before | 1879 ms | 2167 ms |
-| now | **1356 ms** | **1496 ms** |
+| now | **1356 ms** | **1556 ms** |
 
 Every one of those milliseconds was memory traffic, not arithmetic and not
 parallelism: the kernels were already running at 400-650 GB/s, against a card that
@@ -244,9 +244,27 @@ already doing, and the fluxes added into the spectral totals where they are prod
 instead of being written per g-point and read straight back. `git log` has the
 measurement for each.
 
-What is left is the column sweeps, 44% of the shortwave. They run at `ncol` threads,
-because one g-point at a time leaves nothing else to parallelise over, and at 65536
-columns that is enough to reach about 70% of peak bandwidth --- but they still move
-five `(nlay, ncol)` arrays between the direct-beam sweep and the two adding sweeps.
-Fusing those is the next thing to try; a g-point block dimension in the transport
-arrays is the other, at the cost of the property this design is built around.
+What is left is the column sweeps. Against `rte-rrtmgp-cpp`'s CUDA solver on its own
+RCEMIP case --- the same input file, 4096 columns, both single precision --- that is
+now the whole of the gap:
+
+| stage | rte3d | rte-rrtmgp-cpp |
+|---|---|---|
+| longwave, optical depth + Planck | 36.4 ms | 33.3 ms |
+| longwave, transport | **69.0 ms** | **38.3 ms** |
+| shortwave, optical depth + Rayleigh | 23.9 ms | 19.0 ms |
+| shortwave, transport | **175 ms** | **40.5 ms** |
+| total, longwave / shortwave | 121 / 200 ms | 74 / 75 ms |
+
+Gas optics is at parity. The sweeps are not, and the launch geometry says why: it
+solves four column blocks with every g-point resolved, so its `sw_adding` runs 229376
+threads and its `lw_solver_noscat_step_2` 262144, where ours run `ncol` --- 4096. Same
+work, 64x the parallelism, and at 4096 columns ours reach about 15% of peak bandwidth
+where at 65536 they reach 70%. The gap is a small-problem gap: 55.7 us/column at 4096
+against 22.8 at 65536, while a chunked full-spectrum solver is flat in problem size and
+pays for it in memory --- 4 column blocks here, 64 for the case above.
+
+Two ways out, neither taken: fuse the direct-beam sweep with the adding sweeps, which
+move five `(nlay, ncol)` arrays between them, or give the transport arrays a g-point
+block dimension, which buys the parallelism directly at the cost of the property this
+design is built around.
