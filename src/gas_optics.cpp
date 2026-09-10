@@ -1,3 +1,4 @@
+#include <cmath>
 #include <limits>
 #include <vector>
 
@@ -734,12 +735,35 @@ void Gas_optics::compute_col_dry(
 
     const bool has_latitude = latitude.size() > 0;
 
+    // Helmert's gravity is a function of the column alone, so it is built once per
+    // column here rather than once per cell inside the kernel. On the host, and
+    // deliberately: it is the only transcendental gas optics evaluates on the device,
+    // and cosf's argument-reduction fallback is double precision, which a
+    // single-precision build has no business emitting. This file cannot be compiled
+    // with fast math the way the ray tracer is, because its kernels are judged against
+    // the Fortran reference at 1e-12.
+    //
+    // Empty unless the caller gave a latitude, so the common path allocates nothing.
+    Array_1d<TF> g0;
+    if (has_latitude)
+    {
+        g0 = Array_1d<TF>(Kokkos::view_alloc("g0", Kokkos::WithoutInitializing), ncol);
+
+        auto g0_h = Kokkos::create_mirror_view(g0);
+        auto lat_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, latitude);
+
+        for (int icol=0; icol<ncol; ++icol)
+            g0_h(icol) = helmert1 - helmert2*std::cos(TF(2.)*pi_tf*lat_h(icol)/TF(180.));
+
+        Kokkos::deep_copy(g0, g0_h);
+    }
+
+    const Array_1d<const TF> g0_c = g0;
+
     parallel_for_2d("compute_col_dry", {0, 0}, {nlay, ncol},
         KOKKOS_LAMBDA(const int ilay, const int icol)
         {
-            const TF g0 = has_latitude
-                    ? helmert1 - helmert2 * Kokkos::cos(TF(2.) * pi_tf * latitude(icol) / TF(180.))
-                    : grav;
+            const TF g0 = has_latitude ? g0_c(icol) : grav;
 
             const TF delta_plev = Kokkos::abs(plev(ilay, icol) - plev(ilay + 1, icol));
 

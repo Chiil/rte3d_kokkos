@@ -288,6 +288,15 @@ Measured on RCEMIP at 65536 columns, single precision: the tracer goes from 10.6
 10.24 s, and the fluxes move by 0.01% per column against a Monte Carlo noise floor
 far above that. The domain-mean fluxes are unchanged to five decimals.
 
+Everywhere else the fix is to keep the transcendental off the device. Gas optics had
+one, Helmert's latitude correction to gravity in `compute_col_dry`, and it is a
+function of the column rather than the cell, so it is now built once per column on the
+host. With that gone, a single-precision GPU build contains **no double-precision
+instruction at all** -- 335 kernels, 54384 instructions, verified with `cuobjdump
+-sass`. Worth re-checking after adding a kernel that calls a transcendental: the
+slow path of `sinf`, `cosf` and friends is double precision, and on a consumer card it
+runs at a sixty-fourth of the single-precision rate.
+
 ### Known defects in the Fortran reference
 
 Each is reproduced or worked around deliberately, and pinned by a test.
