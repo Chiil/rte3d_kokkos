@@ -110,7 +110,7 @@ namespace
     void launch_photons(
             const Rt_lw_kernels::Scene& scene, const int nthread,
             const int photons_per_thread, const int photons_extra,
-            const unsigned int gpt_offset)
+            const unsigned int gpt_offset, const double du)
     {
         Kokkos::parallel_for("rt_lw_trace_photons",
             Kokkos::RangePolicy<Default_exec>(0, nthread),
@@ -122,8 +122,11 @@ namespace
                 const unsigned int start = static_cast<unsigned int>(n)*photons_per_thread
                         + static_cast<unsigned int>(n < photons_extra ? n : photons_extra);
 
+                // The thread's slice of the emitted power: photons are stratified
+                // over the launch, one to each 1/photons_total of it, and the threads
+                // partition that exactly because start and nshoot do.
                 Rt_lw_kernels::trace_photons<independent_column>(
-                        scene, nshoot, gpt_offset + start);
+                        scene, nshoot, gpt_offset + start, start*du, du);
             });
     }
 
@@ -327,10 +330,14 @@ void Raytracer_lw::trace_rays(
 
     const unsigned int gpt_offset = static_cast<unsigned int>(igpt*photons_total);
 
+    const double du = 1./static_cast<double>(photons_total);
+
     if (independent_column)
-        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra,
+                             gpt_offset, du);
     else
-        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra,
+                              gpt_offset, du);
 
     count_to_flux(grid, static_cast<double>(photons_total), scratch, fluxes);
 }

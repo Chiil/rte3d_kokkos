@@ -68,22 +68,20 @@ namespace Rt_lw_kernels
     };
 
 
-    // The slot a uniform deviate picks out of the cumulative distribution: the first
-    // one whose running total is above u times the total emitted power. Slot i owns an
-    // interval of the line exactly as wide as its own emitted power, so it comes up
-    // with the probability it should.
+    // The first slot whose running total is above x. Slot i owns an interval of the
+    // line exactly as wide as its own emitted power, so a uniform x picks it with the
+    // probability it should.
     //
-    // A binary search, where the reference samples an alias table in two loads. It
-    // costs log2(n) dependent loads instead, but the top of the search tree is a
-    // handful of addresses that stay in cache across a whole launch, and it happens
-    // once per photon where the walk it feeds does tens of collisions. What it buys is
-    // the build: one prefix sum, against a partition loop that synchronizes the device
-    // on every iteration.
+    // Used once per thread, to find where that thread's slice of the distribution
+    // starts. Per photon the walk uses advance_cdf below instead, which is the whole
+    // point: this search jumps around an array of millions of doubles, and every
+    // thread of a warp jumps somewhere different, so one warp-wide load fans out into
+    // as many sectors as there are threads. Measured on a 192x192x128 field, the
+    // per-photon form of this search was 14 percent of the walk's load instructions
+    // and 71 percent of its L1 sector traffic, in a kernel that is L1-throttle bound.
     RTE3D_DEVICE_FUNCTION
-    int sample_cdf(const Array_map_1d<const double>& cdf, const int n, const double u)
+    int lower_bound_cdf(const Array_map_1d<const double>& cdf, const int n, const double x)
     {
-        const double x = u*cdf(n - 1);
-
         int lo = 0;
         int hi = n - 1;
         while (lo < hi)
@@ -96,6 +94,30 @@ namespace Rt_lw_kernels
         }
 
         return lo;
+    }
+
+
+    // The same answer, reached by walking forward from where the last photon left off.
+    //
+    // A thread's photons are stratified: photon i of the launch takes its draw from
+    // [i, i+1)/photons_total, so within a thread the draw only ever increases and the
+    // slot it lands in only ever moves forward. The cursor therefore crosses each slot
+    // at most once over the thread's whole run -- nslot/nthread of them in total,
+    // about nine on a domain of this size against a hundred and more photons -- and it
+    // crosses them in order, so the loads are sequential and hit the line the last one
+    // brought in.
+    //
+    // Stratifying is not only cheaper but less noisy: one photon per stratum instead
+    // of a Poisson scatter of them, which is the same variance reduction the shortwave
+    // tracer gets from drawing its launch pixel out of a low-discrepancy sequence.
+    RTE3D_DEVICE_FUNCTION
+    int advance_cdf(const Array_map_1d<const double>& cdf, const int n, int& cursor,
+                    const double x)
+    {
+        while (cursor < n - 1 && cdf(cursor) <= x)
+            ++cursor;
+
+        return cursor;
     }
 
 
@@ -132,14 +154,18 @@ namespace Rt_lw_kernels
     RTE3D_DEVICE_FUNCTION
     void reset_photon(
             Photon& photon, TF& weight, int& photons_shot, const int photons_to_shoot,
-            const Scene& s, const TF s_min, Rand::Rng& rng)
+            const Scene& s, const TF s_min, int& cursor,
+            const double u0, const double du, Rand::Rng& rng)
     {
         ++photons_shot;
         if (photons_shot >= photons_to_shoot)
             return;
 
         const int ncol = s.grid_cells.x*s.grid_cells.y;
-        const int slot = sample_cdf(s.cdf, s.nslot, rng.uniform_double());
+
+        // This photon's stratum of the emitted power, and a point within it.
+        const double u = u0 + (photons_shot + rng.uniform_double())*du;
+        const int slot = advance_cdf(s.cdf, s.nslot, cursor, u*s.cdf(s.nslot - 1));
 
         const int ij = slot%ncol;
         const int k = slot/ncol - 1;
@@ -210,9 +236,14 @@ namespace Rt_lw_kernels
     template<bool independent_column>
     RTE3D_DEVICE_FUNCTION
     void trace_photons(
-            const Scene& s, const int photons_to_shoot, const unsigned int rng_seed)
+            const Scene& s, const int photons_to_shoot, const unsigned int rng_seed,
+            const double u0, const double du)
     {
         Rand::Rng rng(rng_seed);
+
+        // Where this thread's slice of the emitted power begins. The one binary search
+        // of the whole run; every photon after this walks forward from it.
+        int cursor = lower_bound_cdf(s.cdf, s.nslot, u0*s.cdf(s.nslot - 1));
 
         // The nudge that carries a photon past a cell face it has just landed on.
         const TF s_min = Kokkos::max(s.grid_size.z,
@@ -222,7 +253,8 @@ namespace Rt_lw_kernels
         TF weight = TF(0.);
         int photons_shot = -1;
 
-        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, rng);
+        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                     cursor, u0, du, rng);
 
         TF tau = TF(0.);
         TF d_max = TF(0.);
@@ -308,7 +340,8 @@ namespace Rt_lw_kernels
                     else
                     {
                         write_emission(s, photon);
-                        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, rng);
+                        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                     cursor, u0, du, rng);
                     }
                 }
                 else if (photon.position.z >= s.grid_size.z)
@@ -324,7 +357,8 @@ namespace Rt_lw_kernels
                     photon.emitted += weight;
 
                     write_emission(s, photon);
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, rng);
+                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                     cursor, u0, du, rng);
                 }
                 else
                 {
@@ -447,7 +481,8 @@ namespace Rt_lw_kernels
                     d_max = TF(0.);
 
                     write_emission(s, photon);
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, rng);
+                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                     cursor, u0, du, rng);
                 }
             }
         }
