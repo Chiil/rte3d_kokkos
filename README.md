@@ -14,7 +14,7 @@ cmake --build .
 cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
-pytest tests                                     # 153 tests
+pytest tests                                     # 180 tests
 python cases/rfmip/run_rfmip.py --plot           # a case, end to end
 ```
 
@@ -70,7 +70,26 @@ optics through the by-band increments, `-g###` files by g-point. Only the lookup
 path is implemented — the reference also offers Pade approximants, but no shipped
 coefficient file contains them. Aerosol optics is not started.
 
-**Next:** aerosol optics, then the Monte Carlo ray tracer, then MicroHH integration.
+**Step 4, the Monte Carlo ray tracer — shortwave done.**
+
+| header | contents |
+|---|---|
+| `include/raytracer.h` | the ray-tracing box, the fluxes it produces, and `trace_rays` |
+| `include_kernels/raytracer_kernels.h` | the photon walk and the sampling it needs |
+| `include/random.h` | the backend's generators, behind one interface |
+
+A forward, three-dimensional, null-collision tracer, after `raytracer_sw.cu` in
+rte-rrtmgp-cpp. `Gas_optics::solve_sw_rt` drives it the way `solve_sw` drives the
+two-stream solver: same gas optics, same cloud properties, one g-point at a time, only
+the transport differs. Aerosols and the Mie phase function are left out — clouds
+scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP tables give,
+gases as Rayleigh — and the longwave and backward-camera tracers are not started.
+
+On the RCEMIP case with clouds, 16x16 columns and a 42 degree sun, the two solvers
+agree to 1.2% on the downward surface flux, 0.2% on the direct beam and 0.02% on the
+column absorption.
+
+**Next:** aerosol optics, the longwave ray tracer, then MicroHH integration.
 
 ## Cases
 
@@ -213,6 +232,35 @@ get the same mangled type in `rte_lw.cpp` and `rte_sw.cpp`, which both instantia
 the linker merges them and the launch calls a closure that was never registered. It
 segfaults on the host, with nothing for `compute-sanitizer` to report.
 
+### Where the backend RNG lives
+
+Convention 3 says the backend appears in `include/types.h` and nowhere else. The ray
+tracer needs a second such file, `include/random.h`, because the generators come from
+the vendors and their device APIs are not interchangeable: cuRAND on CUDA, rocRAND on
+HIP, and a xorshift on the host. Above that header there are two types, `Rand::Rng` and
+`Rand::Qrng_2d`, and the photon walk is written once.
+
+The quasi-random one picks the pixel a photon starts in. Drawing those from a
+low-discrepancy sequence rather than a pseudo-random one spreads the photons evenly
+over the domain and is worth roughly a factor of two in photon count for the same
+noise. There is no host counterpart, so the CPU build draws them pseudo-randomly and is
+noisier at the same photon count; it is there to run the test suite, whose tolerances
+are set by the photon count anyway.
+
+### Null collisions, not a march through cells
+
+A photon's free path in an inhomogeneous medium is an integral equation. The tracer
+avoids it by pretending every cell in a block of a coarse grid has that block's largest
+extinction, which makes the medium homogeneous and the free path a single logarithm;
+the excess is undone by collisions that do nothing. `create_knull_grid` builds those
+maxima, `ngrid_x/y/z` in the case file sets how coarse the blocks are. Coarser blocks
+mean more null collisions, finer ones more block faces to cross.
+
+Absorption is not sampled either. Each collision takes its share out of the photon's
+weight and scores it, which is the variance reduction of Iwabuchi (2006); Russian
+roulette below a weight of a half keeps the walk finite. That is why the energy budget
+closes exactly under conservative scattering and only in the mean otherwise.
+
 ### Known defects in the Fortran reference
 
 Each is reproduced or worked around deliberately, and pinned by a test.
@@ -247,7 +295,7 @@ cmake --build .
 
 | switch | meaning |
 |---|---|
-| `-DSYST=<system>` | **required**; picks `config/<system>.cmake` — `macbook` (clang), `macbook_gcc`, `ubuntu_22lts_gcc` |
+| `-DSYST=<system>` | **required**; picks `config/<system>.cmake` — `macbook` (clang), `macbook_gcc`, `ubuntu_22lts_gcc` (CUDA), `lumi` (HIP) |
 | `-DUSEGPU=1` | build for GPU; the backend (CUDA or HIP) comes from the config file |
 | `-DUSESP=1` | 32-bit floats instead of 64-bit |
 | `-DCMAKE_BUILD_TYPE=DEBUG` | unoptimised build |

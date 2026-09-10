@@ -51,6 +51,33 @@ Flags override the settings file, so a case stays reproducible from its `.toml` 
 while a single run can still be varied. See [`user/example.toml`](user/example.toml)
 for the switches and the coefficient-file paths.
 
+### Two shortwave solvers
+
+The shortwave can be solved twice over, by the plane-parallel two-stream solver and by
+the three-dimensional Monte Carlo ray tracer, in one run. They share the gas optics, the
+cloud properties and the boundary conditions and differ only in transport, which is what
+makes running both worth it: the difference is what the third dimension is worth.
+The `[shortwave]` section chooses, after the same section in rte-rrtmgp-cpp's `.ini`
+files:
+
+```toml
+[shortwave]
+plane-parallel = true      # the two-stream solver
+raytracing = false         # the ray tracer; needs the grid below in the input file
+photons-per-pixel = 256    # noise falls as one over the square root of this
+independent-column = false # trace without horizontal transport
+```
+
+The tracer's output has a different shape from the two-stream's, because there is no
+such thing as a flux profile per column once photons move sideways:
+
+| variable | dimensions | meaning |
+|---|---|---|
+| `rt_flux_sfc_dir`, `rt_flux_sfc_dif` | `(y, x)` | downward direct and diffuse at the surface |
+| `rt_flux_sfc_up` | `(y, x)` | upward at the surface |
+| `rt_flux_tod_dn`, `rt_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
+| `rt_flux_abs_dir`, `rt_flux_abs_dif` | `(z, y, x)` | absorbed flux per unit height, W/m3 |
+
 ### Making an input file
 
 [`user/make_input.py`](user/make_input.py) writes one, so there is something to run
@@ -71,6 +98,8 @@ produce -- and the tests use it to build the case they solve.
 | flag | default | meaning |
 |---|---|---|
 | `--nx N`, `--ny N` | `64` | horizontal size; the columns are `nx*ny` |
+| `--dx M`, `--dy M` | `100` | horizontal grid spacing in metres, for the ray tracer |
+| `--rt-nz N` | all | layers the ray tracer resolves; the rest are lumped into one cell on top |
 | `--nlay N` | `256` | layers, equally spaced up to 70 km |
 | `--sst K` | `300` | sea surface temperature, which sets the whole sounding |
 | `--clouds` | off | add the two cloud layers |
@@ -92,6 +121,15 @@ Columns are flattened as x fastest, which is what `(lay, y, x)` already is in me
 | `sfc_alb_dir`, `sfc_alb_dif` | `(y, x, band_sw)` | shortwave; `dif` defaults to `dir` |
 | `tsi` `(y, x)` or `tsi_scaling` | scalar | optional; the k-distribution's own solar source otherwise |
 | `lwp`, `iwp`, `rel`, `dei` | `(lay, y, x)` | `cloud-optics` |
+| `x`, `xh`, `y`, `yh`, `z`, `zh` | `(x)`, `(xh)`, ... | `raytracing`; the Cartesian grid, equally spaced |
+| `ngrid_x`, `ngrid_y`, `ngrid_z` | scalar | optional; blocks of the null-collision grid |
+| `azi` | `(y, x)` | optional; solar azimuth in radians from north, clockwise |
+
+The ray tracer needs a box of equally spaced cells, which is what `x`/`xh`, `y`/`yh`
+and `z`/`zh` describe. The `z` dimension is the part it resolves in three dimensions;
+every layer above it is lumped into one more cell on top, so the tracer still sees the
+whole atmosphere. The sun is one direction for the whole domain, taken from the first
+column's `mu0` and `azi`.
 
 `dei` is an effective *diameter*, as RRTMGP's current cloud coefficient files document
 the quantity; `rei` is accepted as a name for the same thing. A file may use a flat
