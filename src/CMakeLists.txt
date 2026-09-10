@@ -16,7 +16,10 @@ file(GLOB sourcefiles
     "gas_optics_load.cpp"
     "gas_optics_load_python.cpp"
     "cloud_optics.cpp"
-    "cloud_optics_python.cpp")
+    "cloud_optics_python.cpp"
+    "random.cpp"
+    "raytracer.cpp"
+    "raytracer_python.cpp")
 
 add_library(rte3d_core STATIC ${sourcefiles})
 
