@@ -19,7 +19,9 @@ file(GLOB sourcefiles
     "cloud_optics_python.cpp"
     "random.cpp"
     "raytracer.cpp"
-    "raytracer_python.cpp")
+    "raytracer_python.cpp"
+    "raytracer_lw.cpp"
+    "raytracer_lw_python.cpp")
 
 # The ray tracer is the one place in rte3d where correctly-rounded transcendentals are
 # not worth their price. It samples a Monte Carlo distribution, where two ulp on a sine
@@ -34,9 +36,11 @@ file(GLOB sourcefiles
 # against the Fortran reference at 1e-13 and have to keep IEEE semantics.
 if (USEGPU)
     if (Kokkos_ENABLE_CUDA)
-        set_source_files_properties(raytracer.cpp PROPERTIES COMPILE_OPTIONS "-use_fast_math")
+        set_source_files_properties(raytracer.cpp raytracer_lw.cpp
+                                    PROPERTIES COMPILE_OPTIONS "-use_fast_math")
     elseif (Kokkos_ENABLE_HIP)
-        set_source_files_properties(raytracer.cpp PROPERTIES COMPILE_OPTIONS "-ffast-math")
+        set_source_files_properties(raytracer.cpp raytracer_lw.cpp
+                                    PROPERTIES COMPILE_OPTIONS "-ffast-math")
     endif()
 endif()
 

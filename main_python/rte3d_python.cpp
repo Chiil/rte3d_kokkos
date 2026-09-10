@@ -10,6 +10,7 @@
 #include "gas_concs.h"
 #include "cloud_optics.h"
 #include "raytracer.h"
+#include "raytracer_lw.h"
 
 
 PYBIND11_MODULE(rte3d_python, m)
@@ -27,4 +28,5 @@ PYBIND11_MODULE(rte3d_python, m)
     Gas_concs::init_python_bindings(m);
     Clouds::init_python_bindings(m);
     Raytracer::init_python_bindings(m);
+    Raytracer_lw::init_python_bindings(m);
 }
