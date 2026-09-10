@@ -113,21 +113,29 @@ def read_cloud_optics(path):
     in older ones. The numbers are the same, but RRTMGP now documents the quantity as
     an effective *diameter*, so a host model supplying an effective radius has to
     double it.
+
+    The lookup tables themselves are named extliq and the rest in current files and
+    lut_extliq in older ones, beside the Pade coefficients rte3d does not use. Same
+    arrays, same dimensions; only the prefix moved. Reading both is what lets a case
+    written for rte-rrtmgp-cpp run here on its own coefficient files.
     """
     d = xr.open_dataset(path)
 
-    spectral = 'ngpt' if 'ngpt' in d['extliq'].dims else 'nband'
+    lut = 'lut_' if 'lut_extliq' in d else ''
+    spectral = 'ngpt' if 'ngpt' in d[f'{lut}extliq'].dims else 'nband'
     ice_lwr = 'diamice_lwr' if 'diamice_lwr' in d else 'radice_lwr'
     ice_upr = 'diamice_upr' if 'diamice_upr' in d else 'radice_upr'
+
+    def liq(name):
+        return _f8(d[f'{lut}{name}'].transpose(spectral, 'nsize_liq'))
+
+    def ice(name):
+        return _f8(d[f'{lut}{name}'].transpose('nrghice', spectral, 'nsize_ice'))
 
     return dict(
         radliq_lwr=float(d['radliq_lwr']), radliq_upr=float(d['radliq_upr']),
         radice_lwr=float(d[ice_lwr]), radice_upr=float(d[ice_upr]),
-        extliq=_f8(d['extliq'].transpose(spectral, 'nsize_liq')),
-        ssaliq=_f8(d['ssaliq'].transpose(spectral, 'nsize_liq')),
-        asyliq=_f8(d['asyliq'].transpose(spectral, 'nsize_liq')),
-        extice=_f8(d['extice'].transpose('nrghice', spectral, 'nsize_ice')),
-        ssaice=_f8(d['ssaice'].transpose('nrghice', spectral, 'nsize_ice')),
-        asyice=_f8(d['asyice'].transpose('nrghice', spectral, 'nsize_ice')),
+        extliq=liq('extliq'), ssaliq=liq('ssaliq'), asyliq=liq('asyliq'),
+        extice=ice('extice'), ssaice=ice('ssaice'), asyice=ice('asyice'),
         band_lims_wavenum=_f8(d['bnd_limits_wavenumber']),
     )
