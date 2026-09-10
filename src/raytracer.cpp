@@ -55,6 +55,11 @@ void Raytracer::bundle_optics(
     const TF dz_inv = TF(1.)/grid.dz;
     const bool clouds = tau_cld.size() > 0;
 
+    // A cloud with no single-scattering albedo is one that only absorbs, which is what
+    // a longwave case without scattering hands in. Its asymmetry parameter is then
+    // never read, since nothing ever scatters off it.
+    const bool cld_scatters = clouds && ssa_cld.size() > 0;
+
     parallel_for_2d("rt_bundle_optics", {0, 0}, {grid.nz - 1, ncol},
         KOKKOS_LAMBDA(const int k, const int icol)
         {
@@ -68,8 +73,8 @@ void Raytracer::bundle_optics(
             optics(k, icol) = Optics_cell{
                     Kokkos::max(k_ext_min(), k_gas + k_cld),
                     k_gas*ssa_gas(ilay, icol),
-                    clouds ? k_cld*ssa_cld(ilay, icol) : TF(0.),
-                    clouds ? asy_cld(ilay, icol) : TF(0.)};
+                    cld_scatters ? k_cld*ssa_cld(ilay, icol) : TF(0.),
+                    cld_scatters ? asy_cld(ilay, icol) : TF(0.)};
         });
 }
 
@@ -91,6 +96,7 @@ void Raytracer::bundle_optics_tod(
     const int ktod = grid.nz - 1;
     const TF dz_inv = TF(1.)/grid.dz;
     const bool clouds = tau_cld.size() > 0;
+    const bool cld_scatters = clouds && ssa_cld.size() > 0;
 
     parallel_for_1d("rt_bundle_optics_tod", 0, ncol,
         KOKKOS_LAMBDA(const int icol)
@@ -110,10 +116,14 @@ void Raytracer::bundle_optics_tod(
 
                 if (clouds)
                 {
-                    const TF sca = tau_cld(ilay, icol)*ssa_cld(ilay, icol);
+                    const TF sca = cld_scatters
+                            ? tau_cld(ilay, icol)*ssa_cld(ilay, icol) : TF(0.);
+
                     tau_cld_sum += tau_cld(ilay, icol);
                     sca_cld_sum += sca;
-                    scag_cld_sum += sca*asy_cld(ilay, icol);
+
+                    if (cld_scatters)
+                        scag_cld_sum += sca*asy_cld(ilay, icol);
                 }
             }
 

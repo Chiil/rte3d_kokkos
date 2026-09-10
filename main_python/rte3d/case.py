@@ -261,6 +261,36 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
     return out
 
 
+def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
+                photons_per_pixel=256, independent_column=False, scattering=False):
+    """Longwave fluxes for the case, from the Monte Carlo ray tracer.
+
+    The counterpart of solve_sw_rt, and it returns the same shape of answer: the
+    surface and top-of-domain fluxes, (ncol) each, and rt_flux_net, the net absorbed
+    flux per unit height, (nz, ncol). The longwave has no direct beam and no separate
+    absorption of one, so there is one three-dimensional field rather than two, and it
+    is signed -- negative where a cell emits more than it absorbs.
+
+    Clouds are absorption-only unless scattering is asked for, which is what
+    lw-scattering does in rte-rrtmgp-cpp's ini files.
+    """
+    if atm.get('grid') is None:
+        raise SystemExit(
+            'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
+            'the input file. cases/user/make_input.py writes them.')
+
+    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering)
+              if cloud_optics else {})
+
+    return rte3d.solve_lw_rt(
+        kdist, gas_concs, atm['top_at_1'],
+        atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
+        sfc_emis=expand_bands(atm['sfc_emis'], gpt_band),
+        photons_per_pixel=photons_per_pixel,
+        independent_column=independent_column,
+        col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
+
+
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
                 delta_cloud=True, photons_per_pixel=256, independent_column=False):
     """Shortwave fluxes for the case, from the Monte Carlo ray tracer.

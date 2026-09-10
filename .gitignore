@@ -10,3 +10,8 @@ __pycache__/
 rte-rrtmgp
 rte-rrtmgp-cpp
 microhh_simple
+
+# Case data: inputs and outputs are hundreds of megabytes and belong beside the case,
+# not in the history. Every case's .toml says where its input comes from.
+*.nc
+cases/user/ref/

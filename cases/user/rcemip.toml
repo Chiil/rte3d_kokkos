@@ -1,0 +1,11 @@
+[switches]
+longwave = true
+shortwave = true
+cloud-optics = true
+
+# Which shortwave solver, or both. The ray tracer reads the Cartesian
+# grid this file was written with; see example.toml for the rest.
+[shortwave]
+plane-parallel = true
+raytracing = false
+photons-per-pixel = 256

@@ -1,0 +1,36 @@
+# The example LES cloud field of rte-rrtmgp-cpp: a 2560 x 2560 x 4000 m RICO
+# cumulus field at 20 m resolution, 128 x 128 x 200 ray-tracing cells, cloud in
+# 0.8 percent of them. Input is the same test_input.nc that case reads.
+#
+# Kept out of git: the input file is 26 MB and lives in the reference tree.
+
+[switches]
+longwave = false
+shortwave = true
+cloud-optics = true
+delta-cloud = false     # as in the reference case's test.ini
+
+# The k-distribution the reference case's test.ini reads, so that a run here and a
+# run of rte-rrtmgp-cpp's test_rte_rrtmgp_rt cover the same 112 g-points.
+[files]
+gas-sw = "rrtmgp-gas-sw-g112.nc"
+
+[shortwave]
+plane-parallel = false
+raytracing = true
+photons-per-pixel = 256
+
+# Verified against rte-rrtmgp-cpp's own test_rte_rrtmgp_rt on this field, same 112
+# g-points, same sun: surface direct, surface diffuse, surface up and top-of-domain
+# up all agree to better than 0.1 percent, and the absorption profile agrees to
+# 0.00 percent in the mean over the 200 shared cells. rte3d reports one cell more
+# than the reference: index 200 holds the layers above the box, lumped.
+#
+# To reproduce, set sza and azi explicitly in the reference's test.ini -- sza = 30,
+# azi = 108.8975, the input file's own sun. Its documented fallback, "mu0 from input
+# file is used if sza < 0", did not do that in the build tested here: the whole solve
+# came out as though mu0 were 1, which transmits 15 percent more direct beam and
+# makes the reference look both brighter and faster than it is.
+#
+# The stored test_output.nc in the reference tree is a third configuration again --
+# test.ini ships sza = 45 -- so it is not a like-for-like check either.

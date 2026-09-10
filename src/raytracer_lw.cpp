@@ -23,10 +23,12 @@ namespace
     TF tau_abs(
             const Array_map_2d<const TF>& tau_gas, const Array_map_2d<const TF>& ssa_gas,
             const Array_map_2d<const TF>& tau_cld, const Array_map_2d<const TF>& ssa_cld,
-            const bool clouds, const int ilay, const int icol)
+            const bool clouds, const bool cld_scatters, const int ilay, const int icol)
     {
         const TF gas = tau_gas(ilay, icol)*(TF(1.) - ssa_gas(ilay, icol));
-        const TF cld = clouds ? tau_cld(ilay, icol)*(TF(1.) - ssa_cld(ilay, icol)) : TF(0.);
+        const TF cld = !clouds ? TF(0.)
+                : (cld_scatters ? tau_cld(ilay, icol)*(TF(1.) - ssa_cld(ilay, icol))
+                                : tau_cld(ilay, icol));
 
         return gas + cld;
     }
@@ -59,6 +61,7 @@ namespace
         const int ncol = grid.ncol();
         const int nz = grid.nz;
         const bool clouds = tau_cld.size() > 0;
+        const bool cld_scatters = clouds && ssa_cld.size() > 0;
 
         parallel_for_1d("rt_lw_emission_boundaries", 0, ncol,
             KOKKOS_LAMBDA(const int icol)
@@ -73,7 +76,7 @@ namespace
             {
                 const int ilay = layer_of(k, nlay, top_at_1);
                 emission(k + 1, icol) = TF(4.*M_PI)
-                        *tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, ilay, icol)
+                        *tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, cld_scatters, ilay, icol)
                         *lay_source(ilay, icol);
             });
 
@@ -90,7 +93,7 @@ namespace
                 for (int k=ktod; k<nlay; ++k)
                 {
                     const int ilay = layer_of(k, nlay, top_at_1);
-                    power += tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, ilay, icol)
+                    power += tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, cld_scatters, ilay, icol)
                             *lay_source(ilay, icol);
                 }
 

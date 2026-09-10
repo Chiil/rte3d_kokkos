@@ -1,0 +1,34 @@
+# The longwave counterpart of les_cloudfield: rte-rrtmgp-cpp's own lw_case_to_chiel,
+# a 192 x 192 column field over 209 layers with a 128-cell ray-tracing box.
+#
+# Input is that case's lw_case_to_chiel_input.nc, 45 MB, which lives in the reference
+# tree and is kept out of git. Run it with
+#
+#   python cases/user/run_case.py lw_cloudfield \
+#       -i rte-rrtmgp-cpp/lw_case_to_chiel/lw_case_to_chiel_input.nc \
+#       -o cases/lw_cloudfield/lw_cloudfield_output.nc
+#
+# The settings follow lw_case_to_chiel.ini switch for switch, so that a run here and a
+# run of the reference's test_rte_rrtmgp_rt cover the same 256 g-points.
+
+[switches]
+longwave = true
+shortwave = false
+cloud-optics = true
+
+[files]
+gas-lw = "rrtmgp-gas-lw-g256.nc"
+
+[longwave]
+plane-parallel = false
+raytracing = true
+photons-per-pixel = 28      # lw-raytracing = 28 in the reference's ini
+scattering = false          # lw-scattering = false
+
+# The one configuration difference that is not a switch: the atmosphere above the box.
+# 209 layers sit over a 128-cell box, so 82 of them are outside it. rte3d lumps those
+# into the top cell, emission included; the reference instead runs its plane-parallel
+# solver over the whole column and feeds the downward flux at the top of the box in as
+# a single scalar, taken from column 1 and applied to all 36864 of them. The two are
+# different approximations of the same thing, so the top-of-domain fluxes are expected
+# to differ; see the note in include/raytracer_lw.h.

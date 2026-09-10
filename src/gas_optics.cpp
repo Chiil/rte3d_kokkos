@@ -1166,6 +1166,56 @@ void Gas_optics::solve_sw_rt(
 }
 
 
+void Gas_optics::solve_lw_rt(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const Raytracer_lw::Grid& grid,
+        const int photons_per_pixel,
+        const bool independent_column,
+        const Array_2d<const TF>& sfc_emis,
+        const Band_props& clouds,
+        const Raytracer_lw::Fluxes_lw& fluxes)
+{
+    const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+    const Solve_state state = prepare(k, gas_concs, atm, true);
+    const auto scratch = Raytracer_lw::Scratch::make(grid);
+
+    // The gas does not scatter in the longwave, and the tracer wants that as an array
+    // rather than as a special case. Allocated once and left at zero.
+    const Array_2d<TF> ssa_gas("lw_rt_ssa_gas", state.tau.extent(0), state.tau.extent(1));
+
+    fluxes.zero();
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        const int ibnd = k.gpt_band_h(igpt);
+
+        // The Planck fraction comes out of the same interpolation as the optical
+        // depth, and the sources out of the fraction, exactly as solve_lw_gpt does it.
+        compute_tau_lw(
+                k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
+                state.tau, state.pfrac);
+
+        compute_planck_source(
+                k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
+                state.sources(), state.pfrac);
+
+        Raytracer_lw::trace_rays(
+                grid, top_at_1, independent_column, photons_per_pixel, igpt,
+                state.tau, ssa_gas,
+                band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
+                band_slice(clouds.g, ibnd),
+                state.lay_source, state.sfc_source,
+                slice_1d(sfc_emis, igpt),
+                TF(0.),
+                fluxes, scratch);
+    }
+}
+
+
 void Gas_optics::gas_optics_lw(
         const Kdist_gas& k,
         const Gas_concs& gas_concs,

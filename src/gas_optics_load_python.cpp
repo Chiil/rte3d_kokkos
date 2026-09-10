@@ -443,6 +443,87 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
         "with flux_up, flux_dn and flux_dir, plus the by-band totals when byband.");
 
 
+    m.def("solve_lw_rt",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev,
+           const Numpy::In<TF>& tlay, const Numpy::In<TF>& tlev,
+           const Numpy::In<TF>& tsfc, const Numpy::In<TF>& sfc_emis,
+           const int nx, const int ny, const int nz,
+           const TF dx, const TF dy, const TF dz,
+           const int photons_per_pixel, const bool independent_column,
+           const std::optional<Numpy::In<TF>>& cloud_tau,
+           const std::optional<Numpy::In<TF>>& cloud_ssa,
+           const std::optional<Numpy::In<TF>>& cloud_g,
+           const std::optional<Numpy::In<TF>>& col_dry,
+           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+        {
+            Runtime::get();
+
+            Gas_optics::Atmosphere atm;
+            atm.play = Numpy::to_device_2d<TF>(play, "play");
+            atm.plev = Numpy::to_device_2d<TF>(plev, "plev");
+            atm.tlay = Numpy::to_device_2d<TF>(tlay, "tlay");
+            atm.tlev = Numpy::to_device_2d<TF>(tlev, "tlev");
+            atm.tsfc = Numpy::to_device_1d<TF>(tsfc, "tsfc");
+            atm.col_dry = optional_2d(col_dry, "col_dry");
+
+            const Raytracer_lw::Grid grid =
+                    Raytracer_lw::Grid::make(nx, ny, nz, dx, dy, dz, kn_x, kn_y, kn_z);
+
+            const int nlay = static_cast<int>(atm.play.extent(0));
+            const int ncol = static_cast<int>(atm.play.extent(1));
+
+            if (ncol != grid.ncol())
+                throw std::invalid_argument("The atmosphere has " + std::to_string(ncol)
+                        + " columns where the grid has " + std::to_string(grid.ncol()));
+            if (nz > nlay)
+                throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
+
+            Gas_optics::Band_props clouds;
+            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
+            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
+            clouds.g = optional_3d(cloud_g, "cloud_g");
+
+            const auto fluxes = Raytracer_lw::Fluxes_lw::make(grid);
+
+            Gas_optics::solve_lw_rt(
+                    k, gas_concs, atm, top_at_1, grid,
+                    photons_per_pixel, independent_column,
+                    Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
+                    clouds, fluxes);
+            Kokkos::fence();
+
+            py::dict out;
+            // Named as rte-rrtmgp-cpp names them in its own output, so that a run
+            // here and a run of test_rte_rrtmgp_rt can be compared variable for
+            // variable. Its "abs" is this net flux, not gross absorption.
+            out["rt_lw_flux_tod_dn"] = Numpy::from_device(fluxes.tod_dn);
+            out["rt_lw_flux_tod_up"] = Numpy::from_device(fluxes.tod_up);
+            out["rt_lw_flux_sfc_dn"] = Numpy::from_device(fluxes.sfc_dn);
+            out["rt_lw_flux_sfc_up"] = Numpy::from_device(fluxes.sfc_up);
+            out["rt_lw_flux_abs"] = Numpy::from_device(fluxes.flux_net);
+
+            return out;
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
+        py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("tlev"),
+        py::arg("tsfc"), py::arg("sfc_emis"),
+        py::arg("nx"), py::arg("ny"), py::arg("nz"),
+        py::arg("dx"), py::arg("dy"), py::arg("dz"),
+        py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
+        py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
+        py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
+        py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        "Longwave gas optics, Planck sources, clouds and the Monte Carlo ray tracer, "
+        "one g-point at a time. The columns are the tracer's horizontal grid, "
+        "ncol = nx*ny with the column index i + j*nx, and layers from nz-1 upward are "
+        "lumped into the top cell, their emission included. sfc_emis is (ngpt, ncol). "
+        "cloud_ssa and cloud_g may be omitted, which is a cloud that only absorbs. "
+        "Returns a dict of the surface and top-of-domain fluxes, (ncol) each, and "
+        "rt_lw_flux_abs, the absorbed minus emitted flux per unit height, "
+        "(nz, ncol). The names are rte-rrtmgp-cpp's own.");
+
+
     m.def("solve_sw_rt",
         [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
            const Numpy::In<TF>& play, const Numpy::In<TF>& plev, const Numpy::In<TF>& tlay,

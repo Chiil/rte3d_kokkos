@@ -195,7 +195,15 @@ def test_energy_budget_closes(rte3d, independent_column):
     assert boundaries.mean() == pytest.approx(column_net(out).mean(), rel=rtol)
 
     if independent_column:
-        np.testing.assert_allclose(boundaries, column_net(out), rtol=rtol)
+        # Measured against the fluxes that were summed, not against the net they add
+        # up to. Every cell's net is a small difference of a large absorption and a
+        # large emission, and the column is the sum of nz of those, so in single
+        # precision the net arrives about a decimal digit short of the boundary fluxes
+        # it is compared with. That is the accumulation, not the transport.
+        scale = (np.abs(out['tod_up']) + np.abs(out['sfc_up'])
+                 + np.abs(out['sfc_dn'])).max()
+
+        assert np.abs(boundaries - column_net(out)).max() < rtol*scale
     else:
         # Horizontal transport really is what breaks the per-column identity, rather
         # than the columns happening to balance anyway.
@@ -246,8 +254,12 @@ def test_both_vertical_orientations_give_the_same_answer(rte3d):
     rtol = exact_rtol(rte3d)
     for key in ('tod_up', 'sfc_dn', 'sfc_up'):
         np.testing.assert_allclose(down[key], up[key], rtol=rtol)
-    np.testing.assert_allclose(down['flux_net'], up['flux_net'], rtol=rtol,
-                               atol=1e-9*np.pi*B/DZ)
+
+    # Against the scale of the field rather than cell by cell: a cell whose net is a
+    # rounding away from zero is a difference of two large atomic sums, and the order
+    # threads add those in is not fixed, so it is not the same rounding twice.
+    assert (np.abs(down['flux_net'] - up['flux_net']).max()
+            < rtol*np.abs(up['flux_net']).max())
 
 
 @pytest.mark.parametrize('nlay', [NZ, NZ + 8, NZ + 24])
