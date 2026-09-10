@@ -214,6 +214,29 @@ namespace Rt_kernels
     }
 
 
+    // Write out the absorbed weight a photon has piled up in one fine cell.
+    //
+    // The walk deposits at every collision, null ones included, and a photon takes
+    // several of those in the same cell -- so the deposit is held in a register and
+    // written with one atomic when the photon leaves the cell or changes kind, rather
+    // than with an atomic per collision. Thesis 4.1.7. A cell that absorbs nothing
+    // asks for no atomic at all.
+    RTE3D_DEVICE_FUNCTION
+    void flush_absorbed(
+            const Scene& s, TF& absorbed, const int k, const int ij, const Photon_kind kind)
+    {
+        if (absorbed > TF(0.))
+        {
+            if (kind == Photon_kind::Direct)
+                Kokkos::atomic_add(&s.atmos_dir(k, ij), absorbed);
+            else
+                Kokkos::atomic_add(&s.atmos_dif(k, ij), absorbed);
+
+            absorbed = TF(0.);
+        }
+    }
+
+
     // Send the photon off in a new direction, cos_scat away from the old one and at a
     // random azimuth about it.
     RTE3D_DEVICE_FUNCTION
@@ -281,6 +304,19 @@ namespace Rt_kernels
         TF k_ext_null_inv = TF(0.);
         bool transition = false;
         int i_n = 0, j_n = 0, k_n = 0;
+
+        // The fine cell the last collision fell in, its optical properties, the kind
+        // of photon that was in it, and the weight absorbed there so far. Consecutive
+        // collisions land in the same cell often enough -- null collisions above all
+        // -- that both the loads and the atomic are worth holding back for. Thesis
+        // 4.1.6 and 4.1.7. The cell's raw coefficients are cached, not the fractions
+        // derived from them, since the fractions also depend on the coarse block and
+        // the block can change while the fine cell does not.
+        int c_k = -1, c_ij = -1;
+        Optics_scat c_scat{};
+        TF c_k_ext = TF(0.);
+        Photon_kind c_kind = Photon_kind::Direct;
+        TF absorbed = TF(0.);
 
         while (photons_shot < photons_to_shoot)
         {
@@ -427,8 +463,27 @@ namespace Rt_kernels
                 const int k = coord_to_index(photon.position.z, s.grid_d_inv.z, s.grid_cells.z);
                 const int ij = s.column(i, j);
 
-                const Optics_scat scat = s.scat(k, ij);
-                const TF k_ext = s.k_ext(k, ij);
+                // A new cell, or a new kind of photon in it, ends the accumulation
+                // the last one was collecting; a new cell also ends the usefulness of
+                // its cached optics.
+                if (k != c_k || ij != c_ij)
+                {
+                    flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
+
+                    c_scat = s.scat(k, ij);
+                    c_k_ext = s.k_ext(k, ij);
+                    c_k = k;
+                    c_ij = ij;
+                    c_kind = photon.kind;
+                }
+                else if (photon.kind != c_kind)
+                {
+                    flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
+                    c_kind = photon.kind;
+                }
+
+                const Optics_scat scat = c_scat;
+                const TF k_ext = c_k_ext;
                 const TF k_sca_tot = scat.k_sca_gas + scat.k_sca_cld;
 
                 // Absorption is taken out of the weight rather than sampled, which is
@@ -451,10 +506,7 @@ namespace Rt_kernels
                 // negative, k_ext_null being the largest extinction in the block.
                 const TF k_ext_no_abs = k_ext_null - k_abs;
 
-                if (photon.kind == Photon_kind::Direct)
-                    Kokkos::atomic_add(&s.atmos_dir(k, ij), weight*f_abs);
-                else
-                    Kokkos::atomic_add(&s.atmos_dif(k, ij), weight*f_abs);
+                absorbed += weight*f_abs;
 
                 weight *= f_no_abs;
                 if (weight < w_thres())
@@ -493,5 +545,10 @@ namespace Rt_kernels
                 }
             }
         }
+
+        // What the last cell collected. A reset needs no flush of its own: the key is
+        // the cell and the kind, not the photon, so a deposit left standing is only
+        // ever added to by a photon that would have written to the same place.
+        flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
     }
 }
