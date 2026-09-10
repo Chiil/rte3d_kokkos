@@ -112,7 +112,9 @@ def run_band(band, atm, switches, files, shortwave, longwave,
     if band == 'lw':
         if longwave['plane_parallel']:
             out = timer.run(lambda: solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
-                                             cloud_optics, byband))
+                                             cloud_optics, byband,
+                                             longwave['scattering'],
+                                             switches['delta_cloud']))
             print(timer.report(ncol=atm['ncol']))
             band_fluxes(out, f'{band}_flux', results)
 

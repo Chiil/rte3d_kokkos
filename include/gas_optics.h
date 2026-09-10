@@ -328,6 +328,7 @@ namespace Gas_optics
         // The transport solvers' own working set, likewise reused every iteration.
         // Only the one the band in question uses is allocated.
         Rte_lw::Noscat_scratch lw_noscat;
+        Rte_lw::Two_stream_scratch lw_2stream;
         Rte_sw::Two_stream_scratch sw_2stream;
 
         Source_func_lw sources() const
@@ -338,13 +339,15 @@ namespace Gas_optics
     // plus every array the per-g-point loop reuses. do_lw allocates the Planck
     // sources and finds the surface layer; weights is the longwave quadrature, whose
     // host mirror the no-scattering solver needs, and is ignored otherwise.
+    // lw_scattering allocates the two-stream working set instead of the quadrature's.
     Solve_state prepare(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
             const Atmosphere& atm,
             const bool do_lw,
             const bool do_jacobian = false,
-            const Array_1d<const TF>& weights = Array_1d<const TF>());
+            const Array_1d<const TF>& weights = Array_1d<const TF>(),
+            const bool lw_scattering = false);
 
     // Where the accumulated fluxes go. The broadband views are required; the by-band
     // ones may be empty, in which case no by-band reduction is done. dir is shortwave
@@ -381,6 +384,7 @@ namespace Gas_optics
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
             const Array_map_1d<const TF>& inc_flux,  // (ncol), may be empty
             const Band_props& clouds,
+            const bool scattering,
             const Flux_sink& flux_up,
             const Flux_sink& flux_dn,
             const Array_2d<TF>& flux_up_jac);        // (nlev, ncol), may be empty
@@ -414,6 +418,7 @@ namespace Gas_optics
             const Array_2d<const TF>& sfc_emis,    // (ngpt, ncol)
             const Array_2d<const TF>& inc_flux,    // (ngpt, ncol), may be empty
             const Band_props& clouds,
+            const bool scattering,                 // solve with scattering, not by quadrature
             const Fluxes_out& fluxes);
 
     void solve_sw(
@@ -479,8 +484,8 @@ namespace Gas_optics
     // reached with no photons and no Monte Carlo noise. Returns how many g-points were
     // actually traced. Zero traces everything; the reference's default is 1.
     //
-    // The fallback solve is the no-scattering one, so scattering clouds and a nonzero
-    // ratio are refused rather than silently solved without scattering.
+    // The fallback solve follows the caller's own scattering switch, so it is the same
+    // solver a plane-parallel run of the case would have used.
     int solve_lw_rt(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -494,6 +499,7 @@ namespace Gas_optics
             const Array_1d<const TF>& weights,    // (nmus)
             const TF min_mfp_grid_ratio,
             const Band_props& clouds,
+            const bool scattering,
             const Raytracer_lw::Fluxes_lw& fluxes);
 
     // Full longwave gas optics: interpolation, absorption optical depth and the

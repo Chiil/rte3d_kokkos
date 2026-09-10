@@ -868,7 +868,8 @@ Gas_optics::Solve_state Gas_optics::prepare(
         const Atmosphere& atm,
         const bool do_lw,
         const bool do_jacobian,
-        const Array_1d<const TF>& weights)
+        const Array_1d<const TF>& weights,
+        const bool lw_scattering)
 {
     const auto no_init = Kokkos::WithoutInitializing;
 
@@ -909,7 +910,10 @@ Gas_optics::Solve_state Gas_optics::prepare(
 
     // The solver's scratch, allocated here so the g-point loop never allocates.
     if (do_lw)
-        s.lw_noscat = Rte_lw::Noscat_scratch::make(nlay, ncol, weights, do_jacobian);
+        if (lw_scattering)
+            s.lw_2stream = Rte_lw::Two_stream_scratch::make(nlay, ncol);
+        else
+            s.lw_noscat = Rte_lw::Noscat_scratch::make(nlay, ncol, weights, do_jacobian);
     else
         s.sw_2stream = Rte_sw::Two_stream_scratch::make(nlay, ncol);
 
@@ -942,6 +946,7 @@ void Gas_optics::solve_lw_gpt(
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
         const Band_props& clouds,
+        const bool scattering,
         const Flux_sink& flux_up,
         const Flux_sink& flux_dn,
         const Array_2d<TF>& flux_up_jac)
@@ -955,17 +960,38 @@ void Gas_optics::solve_lw_gpt(
             k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
             state.sources(), state.pfrac);
 
-    // Clouds are absorption-only in the longwave here, matching the all-sky driver:
-    // the solver is the no-scattering one, so they enter as an optical depth.
     const int ibnd = k.gpt_band_h(igpt);
     const auto cloud_tau = band_slice(clouds.tau, ibnd);
 
-    if (cloud_tau.size() > 0)
-        Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+    if (!scattering)
+    {
+        // Clouds are absorption-only on this path: the solver cannot deflect anything,
+        // so they enter as an optical depth and nothing else.
+        if (cloud_tau.size() > 0)
+            Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
 
-    Rte_lw::solver_noscat(
-            top_at_1, secants, weights, state.tau, state.sources(), sfc_emis, inc_flux,
-            flux_up, flux_dn, flux_up_jac, state.lw_noscat);
+        Rte_lw::solver_noscat(
+                top_at_1, secants, weights, state.tau, state.sources(), sfc_emis,
+                inc_flux, flux_up, flux_dn, flux_up_jac, state.lw_noscat);
+
+        return;
+    }
+
+    // With scattering the gas still only absorbs, so its single-scattering albedo and
+    // asymmetry are zero and the cloud's survive the combination unchanged. Zeroed
+    // rather than special-cased so that the same tested increment the shortwave uses
+    // does the work here too.
+    Kokkos::deep_copy(state.ssa, TF(0.));
+    Kokkos::deep_copy(state.g, TF(0.));
+
+    if (cloud_tau.size() > 0)
+        Optical_props::increment_2stream_by_2stream(
+                state.tau, state.ssa, state.g,
+                cloud_tau, band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+
+    Rte_lw::solver_2stream(
+            top_at_1, state.tau, state.ssa, state.g, state.sources(), sfc_emis,
+            inc_flux, flux_up, flux_dn, state.lw_2stream);
 }
 
 
@@ -1054,12 +1080,17 @@ void Gas_optics::solve_lw(
         const Array_2d<const TF>& sfc_emis,
         const Array_2d<const TF>& inc_flux,
         const Band_props& clouds,
+        const bool scattering,
         const Fluxes_out& fluxes)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
 
+    if (scattering && fluxes.up_jac.size() > 0)
+        throw std::invalid_argument(
+                "The longwave two-stream solver does not produce a surface Jacobian.");
+
     const Solve_state state = prepare(
-            k, gas_concs, atm, true, fluxes.up_jac.size() > 0, weights);
+            k, gas_concs, atm, true, fluxes.up_jac.size() > 0, weights, scattering);
 
     zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
     zero(fluxes.up_byband); zero(fluxes.dn_byband);
@@ -1074,7 +1105,7 @@ void Gas_optics::solve_lw(
                 k, state, atm, top_at_1, igpt, secants, weights,
                 slice_1d(sfc_emis, igpt),
                 inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
-                clouds,
+                clouds, scattering,
                 sink(ibnd, fluxes.up, fluxes.up_byband),
                 sink(ibnd, fluxes.dn, fluxes.dn_byband),
                 fluxes.up_jac);
@@ -1179,20 +1210,15 @@ int Gas_optics::solve_lw_rt(
         const Array_1d<const TF>& weights,
         const TF min_mfp_grid_ratio,
         const Band_props& clouds,
+        const bool scattering,
         const Raytracer_lw::Fluxes_lw& fluxes)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
     const int nlay = static_cast<int>(atm.play.extent(0));
     const int ncol = static_cast<int>(atm.play.extent(1));
 
-    const bool cloud_scatters = clouds.ssa.size() > 0;
-    if (min_mfp_grid_ratio > TF(0.) && cloud_scatters)
-        throw std::invalid_argument(
-                "The longwave ray tracer's plane-parallel fallback solves without "
-                "scattering, so min_mfp_grid_ratio cannot be used with scattering "
-                "clouds. Set one of the two to zero.");
-
-    const Solve_state state = prepare(k, gas_concs, atm, true, false, weights);
+    const Solve_state state = prepare(
+            k, gas_concs, atm, true, false, weights, scattering);
     const auto scratch = Raytracer_lw::Scratch::make(grid);
 
     // The gas does not scatter in the longwave, and the tracer wants that as an array
@@ -1262,19 +1288,37 @@ int Gas_optics::solve_lw_rt(
         }
         else
         {
-            // Opaque within a cell: solve the column instead. Clouds go into the gas
-            // optical depth here rather than beside it, since nothing scatters off
-            // them on this path.
+            // Opaque within a cell: solve the column instead, with whichever solver a
+            // plane-parallel run of this case would have used.
             const auto cloud_tau = band_slice(clouds.tau, ibnd);
-            if (cloud_tau.size() > 0)
-                Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+            const Flux_sink up{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()};
+            const Flux_sink dn{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()};
 
-            Rte_lw::solver_noscat(
-                    top_at_1, secants, weights, state.tau, state.sources(),
-                    slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
-                    Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
-                    Flux_sink{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()},
-                    Array_2d<TF>(), state.lw_noscat);
+            if (scattering)
+            {
+                Kokkos::deep_copy(state.ssa, TF(0.));
+                Kokkos::deep_copy(state.g, TF(0.));
+
+                if (cloud_tau.size() > 0)
+                    Optical_props::increment_2stream_by_2stream(
+                            state.tau, state.ssa, state.g, cloud_tau,
+                            band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+
+                Rte_lw::solver_2stream(
+                        top_at_1, state.tau, state.ssa, state.g, state.sources(),
+                        slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
+                        up, dn, state.lw_2stream);
+            }
+            else
+            {
+                if (cloud_tau.size() > 0)
+                    Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+
+                Rte_lw::solver_noscat(
+                        top_at_1, secants, weights, state.tau, state.sources(),
+                        slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
+                        up, dn, Array_2d<TF>(), state.lw_noscat);
+            }
 
             Raytracer_lw::add_plane_parallel(
                     grid, top_at_1, nlay,

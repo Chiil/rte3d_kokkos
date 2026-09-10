@@ -214,9 +214,17 @@ def cloud_props(rte3d, cloud_optics, atm, two_stream, delta_scale=True):
 
 
 def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
-             cloud_optics=None, byband=False):
-    """Longwave fluxes for the case. Returns the solver's dict as it stands."""
-    clouds = cloud_props(rte3d, cloud_optics, atm, False) if cloud_optics else {}
+             cloud_optics=None, byband=False, scattering=False, delta_cloud=False):
+    """Longwave fluxes for the case. Returns the solver's dict as it stands.
+
+    Without scattering the solver is the multi-angle no-scattering one and clouds enter
+    as an optical depth alone. With it the two-stream solver takes over and clouds keep
+    their single-scattering albedo and asymmetry, which is what lw-scattering selects
+    in rte-rrtmgp-cpp's ini files; delta scaling then applies to them, as it does there.
+    """
+    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering,
+                          delta_cloud and scattering)
+              if cloud_optics else {})
 
     return rte3d.solve_lw(
         kdist, gas_concs, atm['top_at_1'],
@@ -224,7 +232,7 @@ def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
         secants=np.full((1, atm['ncol']), LW_SECANT),
         weights=np.array([1.0]),
         sfc_emis=expand_bands(atm['sfc_emis'], gpt_band),
-        col_dry=atm.get('col_dry'), byband=byband, **clouds)
+        col_dry=atm.get('col_dry'), byband=byband, scattering=scattering, **clouds)
 
 
 def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
@@ -295,6 +303,7 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         secants=np.full((1, atm['ncol']), LW_SECANT),
         weights=np.array([1.0]),
         min_mfp_grid_ratio=min_mfp_grid_ratio,
+        scattering=scattering,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
         col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
