@@ -53,8 +53,19 @@ photons-per-pixel = 256
 #   surface up    0.01 percent    top-of-domain up   0.16 percent
 #   surface down  0.23 percent    column-integrated net  0.08 percent
 #
-# at 2**25 photons, where the cooling profile correlates at 0.974 over the 200 cells
-# and at 0.9996 over the eight that carry a signal above the Monte Carlo noise.
+# at 2**25 photons. The cooling *profile* is a weaker check than those numbers look:
+# it correlates at 0.974 over the 200 cells, but that is carried by the topmost cell
+# alone, which cools at 3.4 W/m3 against a median of 0.05 -- drop the top twenty and
+# the correlation is 0.07, because at this budget the per-cell rate is not converged in
+# either code. Both scatter by a tenth of a W/m3 cell to cell, sign flips and all, in a
+# profile that should be smooth. What is converged is the integral: running column
+# sums agree to 1 to 2 percent from the surface up, and to 0.08 over the whole column.
+#
+# The field is liquid-only, thin -- 1.29 percent of cells carry cloud, 19 percent of
+# columns -- so the cloud effect is modest but present in both, and agrees within the
+# noise on the difference: surface down +9.22 against +8.91 W/m2, column net -6.41
+# against -6.51, top-of-domain up -2.64 against -2.32.
+#
 # rte3d is 2.5 times faster at that photon count, 2.1 times at 2**22.
 #
 # Run as it stands, without truncating, rte3d lumps the 132 layers above the box into
