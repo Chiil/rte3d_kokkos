@@ -114,6 +114,64 @@ namespace Raytracer
     };
 
 
+    // Smallest extinction the null-collision grid is allowed to hold. Without it a
+    // transparent block would give an infinite free path, and the reciprocal of it
+    // appears in the collision test. Reference: k_ext_null_min.
+    //
+    // A function rather than a constant, as eps() and min_k() in the solver kernels
+    // are: a device lambda that passes it by reference to Kokkos::max would otherwise
+    // odr-use a host-side object.
+    KOKKOS_INLINE_FUNCTION constexpr TF k_null_min() { return TF(1.e-3); }
+
+    // Floor on a cell's extinction, so that the ratios the walk forms out of it stay
+    // finite in a cell that happens to be empty.
+    KOKKOS_INLINE_FUNCTION constexpr TF k_ext_min() { return TF(1.e-25); }
+
+
+    // The layer a ray-tracing cell reads, in the caller's own vertical orientation.
+    KOKKOS_INLINE_FUNCTION
+    int layer_of(const int k, const int nlay, const bool top_at_1)
+    {
+        return top_at_1 ? nlay - 1 - k : k;
+    }
+
+
+    // Extinction and the two scattering coefficients per cell, from the optical depths
+    // of one g-point, and the null-collision maxima taken over them. Shared with the
+    // longwave tracer, which builds exactly the same scene out of its own optical
+    // depths; only the sources and the scoring differ between the two.
+    //
+    // Gas and cloud stay apart: a scattering event has to pick which of the two did
+    // it, and each has its own phase function. The cloud triple may be empty.
+    void bundle_optics(
+            const Grid& grid, const bool top_at_1, const int nlay,
+            const Array_map_2d<const TF>& tau_gas,   // (nlay, ncol)
+            const Array_map_2d<const TF>& ssa_gas,   // (nlay, ncol)
+            const Array_map_2d<const TF>& tau_cld,   // (nlay, ncol), may be empty
+            const Array_map_2d<const TF>& ssa_cld,   // (nlay, ncol), may be empty
+            const Array_map_2d<const TF>& asy_cld,   // (nlay, ncol), may be empty
+            const Array_2d<Optics_cell>& optics);    // (nz, ncol)
+
+    // The top cell of the box holds everything above it: the atmosphere reaches far
+    // higher than the part worth resolving in three dimensions, and lumping the rest
+    // into one homogeneous cell keeps the optical depth right without the cells.
+    // Call it after bundle_optics, which it overwrites the top row of.
+    void bundle_optics_tod(
+            const Grid& grid, const bool top_at_1, const int nlay,
+            const Array_map_2d<const TF>& tau_gas,
+            const Array_map_2d<const TF>& ssa_gas,
+            const Array_map_2d<const TF>& tau_cld,
+            const Array_map_2d<const TF>& ssa_cld,
+            const Array_map_2d<const TF>& asy_cld,
+            const Array_2d<Optics_cell>& optics);
+
+    // Largest extinction in each block of the coarse grid, which is what the
+    // null-collision transport marches on.
+    void create_knull_grid(
+            const Grid& grid, const Array_map_2d<const Optics_cell>& optics,
+            const Array_3d<TF>& k_null);
+
+
     // Trace one g-point.
     //
     // tau_gas and ssa_gas are the gas optical depth and its Rayleigh single-scattering

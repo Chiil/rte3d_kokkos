@@ -1,9 +1,8 @@
 #pragma once
 
-#include <limits>
-
 #include "random.h"
 #include "raytracer.h"
+#include "raytracer_common.h"
 #include "types.h"
 
 
@@ -20,92 +19,7 @@
 // which is why the whole walk is one function rather than a kernel per event.
 namespace Rt_kernels
 {
-    using Raytracer::Optics_cell;
-    using Raytracer::Vector;
-
-    KOKKOS_INLINE_FUNCTION constexpr TF eps() { return std::numeric_limits<TF>::epsilon(); }
-
-    // Below this the photon weight is put through Russian roulette rather than
-    // followed further. Iwabuchi (2006), and the reference's w_thres.
-    KOKKOS_INLINE_FUNCTION constexpr TF w_thres() { return TF(0.5); }
-
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    Vector<T> operator+(const Vector<T> a, const Vector<T> b)
-    { return Vector<T>{a.x + b.x, a.y + b.y, a.z + b.z}; }
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    Vector<T> operator-(const Vector<T> a, const Vector<T> b)
-    { return Vector<T>{a.x - b.x, a.y - b.y, a.z - b.z}; }
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    Vector<T> operator*(const T s, const Vector<T> v)
-    { return Vector<T>{s*v.x, s*v.y, s*v.z}; }
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    T dot(const Vector<T>& a, const Vector<T>& b)
-    { return a.x*b.x + a.y*b.y + a.z*b.z; }
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    Vector<T> cross(const Vector<T>& a, const Vector<T>& b)
-    {
-        return Vector<T>{a.y*b.z - a.z*b.y,
-                         a.z*b.x - a.x*b.z,
-                         a.x*b.y - a.y*b.x};
-    }
-
-    template<typename T> KOKKOS_INLINE_FUNCTION
-    Vector<T> normalize(const Vector<T> v)
-    {
-        const T len = Kokkos::sqrt(dot(v, v));
-        return Vector<T>{v.x/len, v.y/len, v.z/len};
-    }
-
-
-    // Cosine of the scattering angle for Rayleigh scattering, sampled by the cubic
-    // solution of the phase function's cumulative distribution.
-    KOKKOS_INLINE_FUNCTION
-    TF rayleigh(const TF r)
-    {
-        const TF q = TF(4.)*r - TF(2.);
-        const TF d = TF(1.) + q*q;
-        const TF u = Kokkos::pow(-q + Kokkos::sqrt(d), TF(1./3.));
-        return u - TF(1.)/u;
-    }
-
-
-    // The same for the Henyey-Greenstein phase function of asymmetry g, which stands
-    // in for the cloud droplets' Mie phase function.
-    KOKKOS_INLINE_FUNCTION
-    TF henyey(const TF g, const TF r)
-    {
-        const TF a = (TF(1.) - g*g)*(TF(1.) - g*g);
-        const TF b = TF(2.)*g*(TF(2.)*r*g + TF(1.) - g)*(TF(2.)*r*g + TF(1.) - g);
-        const TF c = -g/TF(2.) - TF(1.)/(TF(2.)*g);
-        return TF(-1.)*(a/b) - c;
-    }
-
-
-    // Optical depth to the next collision, from an exponential distribution.
-    KOKKOS_INLINE_FUNCTION
-    TF sample_tau(const TF r)
-    {
-        // The epsilon keeps the logarithm off zero.
-        return TF(-1.)*Kokkos::log(-r + TF(1.) + eps());
-    }
-
-
-    // Which cell a coordinate falls in, clamped to the last one. Takes the reciprocal
-    // of the cell size rather than the size itself: the walk asks this question at
-    // every collision, and a multiplication is what a division would be lowered to
-    // anyway, but only where the compiler can see the divisor is loop-invariant.
-    // The cast rounds toward zero, which is the rounding this wants.
-    KOKKOS_INLINE_FUNCTION
-    int coord_to_index(const TF s, const TF ds_inv, const int ntot)
-    {
-        const int n = static_cast<int>(s*ds_inv);
-        return n < ntot ? n : ntot - 1;
-    }
+    using namespace Rt_common;
 
 
     enum class Photon_kind { Direct, Diffuse };
@@ -197,14 +111,7 @@ namespace Rt_kernels
         }
         else
         {
-            // Isotropic downward, sampled by the cosine law.
-            const TF mu = Kokkos::sqrt(rng());
-            const TF azimuth = TF(2.*M_PI)*rng();
-            const TF sin_theta = Kokkos::sqrt(TF(1.) - mu*mu + eps());
-
-            photon.direction.x = sin_theta*Kokkos::sin(azimuth);
-            photon.direction.y = sin_theta*Kokkos::cos(azimuth);
-            photon.direction.z = -mu;
+            photon.direction = cosine_direction(TF(-1.), rng);
             photon.kind = Photon_kind::Diffuse;
         }
 
@@ -236,38 +143,12 @@ namespace Rt_kernels
     }
 
 
-    // Send the photon off in a new direction, cos_scat away from the old one and at a
-    // random azimuth about it.
+    // Send the photon off in a new direction, cos_scat away from the old one. Anything
+    // that has scattered is diffuse, whatever it was before.
     RTE3D_DEVICE_FUNCTION
     void scatter(Photon& photon, const TF cos_scat, Rand::Rng& rng)
     {
-        const TF sin_scat = Kokkos::max(TF(0.), Kokkos::sqrt(TF(1.) - cos_scat*cos_scat + eps()));
-
-        // Any vector not parallel to the direction will do to build the frame; take
-        // the axis the direction leans on least.
-        Vector<TF> t1{TF(0.), TF(0.), TF(0.)};
-        if (Kokkos::abs(photon.direction.x) < Kokkos::abs(photon.direction.y))
-        {
-            if (Kokkos::abs(photon.direction.x) < Kokkos::abs(photon.direction.z))
-                t1.x = TF(1.);
-            else
-                t1.z = TF(1.);
-        }
-        else
-        {
-            if (Kokkos::abs(photon.direction.y) < Kokkos::abs(photon.direction.z))
-                t1.y = TF(1.);
-            else
-                t1.z = TF(1.);
-        }
-
-        t1 = normalize(t1 - dot(t1, photon.direction)*photon.direction);
-        const Vector<TF> t2 = cross(photon.direction, t1);
-
-        const TF phi = TF(2.*M_PI)*rng();
-
-        photon.direction = cos_scat*photon.direction
-                + sin_scat*(Kokkos::sin(phi)*t1 + Kokkos::cos(phi)*t2);
+        photon.direction = scatter_direction(photon.direction, cos_scat, rng);
         photon.kind = Photon_kind::Diffuse;
     }
 
@@ -382,13 +263,7 @@ namespace Rt_kernels
 
                     if (weight > TF(0.))
                     {
-                        const TF mu = Kokkos::sqrt(rng());
-                        const TF azimuth = TF(2.*M_PI)*rng();
-                        const TF sin_theta = Kokkos::sqrt(TF(1.) - mu*mu + eps());
-
-                        photon.direction.x = sin_theta*Kokkos::sin(azimuth);
-                        photon.direction.y = sin_theta*Kokkos::cos(azimuth);
-                        photon.direction.z = mu;
+                        photon.direction = cosine_direction(TF(1.), rng);
                         photon.kind = Photon_kind::Diffuse;
                     }
                     else
@@ -524,15 +399,7 @@ namespace Rt_kernels
                     {
                         d_max = TF(0.);
 
-                        const bool by_cloud = rng()*k_sca_tot < optics.k_sca_cld;
-                        const TF g = Kokkos::min(TF(1.) - eps(), optics.asy_cld);
-
-                        // Henyey-Greenstein divides by g, so a cloud that happens to
-                        // scatter isotropically gets the isotropic law directly.
-                        const TF cos_scat = !by_cloud ? rayleigh(rng())
-                                : (g > TF(1.e-6) ? henyey(g, rng()) : TF(2.)*rng() - TF(1.));
-
-                        scatter(photon, cos_scat, rng);
+                        scatter(photon, sample_cos_scat(optics, k_sca_tot, rng), rng);
                     }
                 }
                 else

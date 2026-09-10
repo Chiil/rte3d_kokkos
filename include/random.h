@@ -122,6 +122,23 @@ namespace Rand
             #endif
         }
 
+        // The same in double, whatever TF is. The emission sampler of the longwave
+        // tracer indexes a cumulative distribution over every cell of the domain, and
+        // a float deviate has only 2^24 distinct values -- far too few to address the
+        // millions of emitters an LES box holds. Reference: the alias table's own
+        // Random_number_generator<double>.
+        RTE3D_DEVICE_FUNCTION
+        double uniform_double()
+        {
+            #if defined(USECUDA)
+            return 1. - curand_uniform_double(&state);
+            #elif defined(USEHIP)
+            return 1. - hiprand_uniform_double(&state);
+            #else
+            return double(next() >> 11) * (1./9007199254740992.);   // 2^-53
+            #endif
+        }
+
         #if defined(USECUDA) || defined(USEHIP)
         Rng_state state;
         #else
