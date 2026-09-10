@@ -226,6 +226,25 @@ namespace
 }
 
 
+Raytracer::Grid Raytracer::Grid::make(
+        const int nx, const int ny, const int nz,
+        const TF dx, const TF dy, const TF dz,
+        const int kn_x, const int kn_y, const int kn_z)
+{
+    const auto blocks = [](const int n, const int given)
+    { return given > 0 ? given : std::max(1, n/4); };
+
+    Grid grid;
+    grid.nx = nx; grid.ny = ny; grid.nz = nz;
+    grid.dx = dx; grid.dy = dy; grid.dz = dz;
+    grid.kn_x = blocks(nx, kn_x);
+    grid.kn_y = blocks(ny, kn_y);
+    grid.kn_z = blocks(nz, kn_z);
+
+    return grid;
+}
+
+
 Raytracer::Fluxes_rt Raytracer::Fluxes_rt::make(const Grid& grid)
 {
     const int ncol = grid.ncol();

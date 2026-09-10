@@ -16,6 +16,27 @@ delta-cloud = true
 # Also write the fluxes resolved by band, as lw_bnd_flux_* and sw_bnd_flux_*.
 output-bnd-fluxes = false
 
+[shortwave]
+# Which shortwave solver to run; both is allowed, and is how to see what the third
+# dimension is worth. They share the gas optics and the cloud properties.
+
+# The plane-parallel two-stream solver, a flux profile per column.
+plane-parallel = true
+
+# The three-dimensional Monte Carlo ray tracer. Needs the Cartesian grid -- x, xh, y,
+# yh, z, zh -- in the input file; cases/user/make_input.py writes it. Its output is
+# rt_flux_sfc_dir, rt_flux_sfc_dif, rt_flux_sfc_up and rt_flux_tod_dn / rt_flux_tod_up
+# as (y, x), and rt_flux_abs_dir / rt_flux_abs_dif, the absorbed flux per unit height,
+# as (z, y, x).
+raytracing = false
+
+# Photons per column per g-point. The noise falls as one over its square root.
+photons-per-pixel = 256
+
+# Trace without horizontal transport, which makes the tracer an expensive but exact
+# column solver. Useful for telling the two-stream's error from the third dimension's.
+independent-column = false
+
 [files]
 # Bare names are looked up in extern/rrtmgp-data; anything with a separator in it is
 # taken as a path.

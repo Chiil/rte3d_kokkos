@@ -51,6 +51,14 @@ namespace Raytracer
         TF dx = TF(0.), dy = TF(0.), dz = TF(0.);
         int kn_x = 1, kn_y = 1, kn_z = 1;
 
+        // Build a grid, filling in any null-collision block count left at zero with
+        // blocks a quarter of the domain across. That is a compromise: coarser and the
+        // tracer takes null collisions it did not have to, finer and it crosses block
+        // faces it did not have to.
+        static Grid make(const int nx, const int ny, const int nz,
+                         const TF dx, const TF dy, const TF dz,
+                         const int kn_x = 0, const int kn_y = 0, const int kn_z = 0);
+
         int ncol() const { return nx*ny; }
         Vector<int> cells() const { return Vector<int>{nx, ny, nz}; }
         Vector<TF> d() const { return Vector<TF>{dx, dy, dz}; }

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "gas_concs.h"
+#include "raytracer.h"
 #include "rte_lw.h"
 #include "rte_sw.h"
 #include "source_functions.h"
@@ -426,6 +427,34 @@ namespace Gas_optics
             const Array_2d<const TF>& inc_flux_dif,    // (ngpt, ncol), may be empty
             const Band_props& clouds,
             const Fluxes_out& fluxes);
+
+    // The whole shortwave spectrum through the Monte Carlo ray tracer instead of the
+    // two-stream solver. Same gas optics and the same cloud properties; only the
+    // transport differs, and with it the shape of what comes out -- three-dimensional
+    // absorption and boundary fluxes rather than a profile per column.
+    //
+    // The columns are the ray tracer's horizontal grid, ncol = grid.nx*grid.ny with
+    // the column index i + j*nx. The sun is one direction for the whole domain, so
+    // mu0 and azi are scalars, and toa_src is the solar irradiance per g-point on the
+    // host, since the tracer needs it as a number rather than an array.
+    //
+    // Cloud properties are handed to the tracer separately rather than incremented
+    // into the gas ones: a scattering event has to know whether a cloud droplet or a
+    // molecule did it, and the two have different phase functions.
+    void solve_sw_rt(
+            const Kdist_gas& k,
+            const Gas_concs& gas_concs,
+            const Atmosphere& atm,
+            const bool top_at_1,
+            const Raytracer::Grid& grid,
+            const int photons_per_pixel,
+            const bool independent_column,
+            const TF mu0,
+            const TF azi,
+            const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
+            const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
+            const Band_props& clouds,
+            const Raytracer::Fluxes_rt& fluxes);
 
     // Full longwave gas optics: interpolation, absorption optical depth and the
     // Planck sources. Reference: ty_gas_optics_rrtmgp%gas_optics for the longwave.

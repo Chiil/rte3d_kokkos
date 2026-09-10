@@ -15,14 +15,6 @@ namespace
 
         return Numpy::to_device_2d<TF>(*a, name);
     }
-
-    // A null-collision block count the caller did not give. Blocks a quarter of the
-    // grid across are a compromise: coarser and the tracer takes null collisions it
-    // did not have to, finer and it crosses block faces it did not have to.
-    int default_kn(const int n, const int given)
-    {
-        return given > 0 ? given : Kokkos::max(1, n/4);
-    }
 }
 
 
@@ -43,12 +35,7 @@ void Raytracer::init_python_bindings(py::module_& m)
         {
             Runtime::get();
 
-            Grid grid;
-            grid.nx = nx; grid.ny = ny; grid.nz = nz;
-            grid.dx = dx; grid.dy = dy; grid.dz = dz;
-            grid.kn_x = default_kn(nx, kn_x);
-            grid.kn_y = default_kn(ny, kn_y);
-            grid.kn_z = default_kn(nz, kn_z);
+            const Grid grid = Grid::make(nx, ny, nz, dx, dy, dz, kn_x, kn_y, kn_z);
 
             auto tau_gas_d = Numpy::to_device_2d<TF>(tau_gas, "tau_gas");
             auto ssa_gas_d = Numpy::to_device_2d<TF>(ssa_gas, "ssa_gas");

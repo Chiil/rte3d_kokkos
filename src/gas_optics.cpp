@@ -5,6 +5,7 @@
 #include "gas_optics.h"
 #include "gas_optics_kernels.h"
 #include "optical_props.h"
+#include "raytracer.h"
 #include "rte_lw.h"
 #include "rte_sw.h"
 
@@ -1093,6 +1094,50 @@ void Gas_optics::solve_sw(
                 sink(ibnd, fluxes.up, fluxes.up_byband),
                 sink(ibnd, fluxes.dn, fluxes.dn_byband),
                 sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
+    }
+}
+
+
+void Gas_optics::solve_sw_rt(
+        const Kdist_gas& k,
+        const Gas_concs& gas_concs,
+        const Atmosphere& atm,
+        const bool top_at_1,
+        const Raytracer::Grid& grid,
+        const int photons_per_pixel,
+        const bool independent_column,
+        const TF mu0,
+        const TF azi,
+        const Array_1d_h<const TF>& toa_src,
+        const Array_2d<const TF>& sfc_alb_dir,
+        const Band_props& clouds,
+        const Raytracer::Fluxes_rt& fluxes)
+{
+    const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+    const Solve_state state = prepare(k, gas_concs, atm, false);
+    const auto scratch = Raytracer::Scratch::make(grid);
+
+    fluxes.zero();
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+    {
+        const int ibnd = k.gpt_band_h(igpt);
+
+        // Absorption and Rayleigh scattering, as the two-stream path computes them.
+        // The asymmetry parameter is not asked for: the gas scatters by the Rayleigh
+        // phase function, which the tracer samples directly.
+        compute_tau_sw(k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
+                       state.tau, state.ssa, Array_map_2d<TF>());
+
+        Raytracer::trace_rays(
+                grid, top_at_1, independent_column, photons_per_pixel, igpt,
+                state.tau, state.ssa,
+                band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
+                band_slice(clouds.g, ibnd),
+                slice_1d(sfc_alb_dir, igpt),
+                mu0, azi, toa_src(igpt)*mu0, TF(0.),
+                fluxes, scratch);
     }
 }
 

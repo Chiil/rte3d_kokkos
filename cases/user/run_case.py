@@ -25,11 +25,16 @@ from common import DATA, Timer  # noqa: E402
 
 import rte3d  # noqa: E402
 from rte3d.case import (gpoint_bands, make_gas_concs, read_case,  # noqa: E402
-                        solve_lw, solve_sw)
+                        solve_lw, solve_sw, solve_sw_rt)
 from rte3d.kdist import read_cloud_optics, read_kdist  # noqa: E402
 
 SWITCHES = dict(longwave=True, shortwave=True, cloud_optics=False,
                 delta_cloud=True, output_bnd_fluxes=False)
+
+# Which shortwave solver, or both. Named as in rte-rrtmgp-cpp's ini files, whose
+# [shortwave] section this is.
+SHORTWAVE = dict(plane_parallel=True, raytracing=False,
+                 photons_per_pixel=256, independent_column=False)
 
 FILES = dict(gas_lw='rrtmgp-gas-lw-g256.nc', gas_sw='rrtmgp-gas-sw-g224.nc',
              cloud_lw='rrtmgp-clouds-lw-bnd.nc', cloud_sw='rrtmgp-clouds-sw-bnd.nc',
@@ -42,20 +47,21 @@ def read_settings(path):
     Keys are written with dashes in the file, as in the reference's ini files, and
     with underscores here.
     """
-    switches, files = dict(SWITCHES), dict(FILES)
+    switches, files, shortwave = dict(SWITCHES), dict(FILES), dict(SHORTWAVE)
 
     if os.path.exists(path):
         with open(path, 'rb') as f:
             settings = tomllib.load(f)
 
-        for section, target in (('switches', switches), ('files', files)):
+        for section, target in (('switches', switches), ('files', files),
+                                ('shortwave', shortwave)):
             for key, value in settings.get(section, {}).items():
                 key = key.replace('-', '_')
                 if key not in target:
                     raise SystemExit(f'{path}: unknown [{section}] key "{key}"')
                 target[key] = value
 
-    return switches, files
+    return switches, files, shortwave
 
 
 def coefficients(name, files):
@@ -74,8 +80,14 @@ def band_fluxes(out, prefix, results):
         results[prefix + '_net_byband'] = out['flux_dn_byband'] - out['flux_up_byband']
 
 
-def run_band(band, atm, switches, files, results):
-    """Load the coefficients for one band, solve, and collect the fluxes."""
+def run_band(band, atm, switches, files, shortwave, results, rt_results):
+    """Load the coefficients for one band, solve, and collect the fluxes.
+
+    The shortwave may run either solver or both: the plane-parallel two-stream, whose
+    fluxes are a profile per column, and the ray tracer, whose are three-dimensional.
+    They share the gas optics and the cloud properties and differ only in transport,
+    so running both is the way to see what the third dimension is worth.
+    """
     f = read_kdist(coefficients(f'gas_{band}', files))
     gas_concs = make_gas_concs(rte3d, atm, f['gas_names'])
     kdist = rte3d.load_kdist(f, gas_concs)
@@ -92,18 +104,29 @@ def run_band(band, atm, switches, files, results):
     if band == 'lw':
         out = timer.run(lambda: solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
                                          cloud_optics, byband))
+        print(timer.report(ncol=atm['ncol']))
+        band_fluxes(out, f'{band}_flux', results)
     else:
-        out = timer.run(lambda: solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
-                                         cloud_optics, byband,
-                                         switches['delta_cloud']))
+        if shortwave['plane_parallel']:
+            out = timer.run(lambda: solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
+                                             cloud_optics, byband,
+                                             switches['delta_cloud']))
+            print(timer.report(ncol=atm['ncol']))
+            band_fluxes(out, f'{band}_flux', results)
 
-    print(timer.report(ncol=atm['ncol']))
-    band_fluxes(out, f'{band}_flux', results)
+        if shortwave['raytracing']:
+            rt_timer = Timer('sw ray tracer')
+            rt_results.update(rt_timer.run(
+                lambda: solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band,
+                                    cloud_optics, switches['delta_cloud'],
+                                    shortwave['photons_per_pixel'],
+                                    shortwave['independent_column'])))
+            print(rt_timer.report(ncol=atm['ncol']))
 
     return kdist.nbnd
 
 
-def write_output(path, atm, results, nbnd):
+def write_output(path, atm, results, rt_results, nbnd):
     """Write the fluxes back in the input's own layout.
 
     A field comes out of the solvers as (nlev, ncol), or (nbnd, nlev, ncol) by band;
@@ -123,6 +146,12 @@ def write_output(path, atm, results, nbnd):
                 band + ('lev',) + dims, flux.reshape((nbnd[name[:2]], -1) + shape))
         else:
             variables[name] = (('lev',) + dims, flux.reshape((-1,) + shape))
+
+    # The ray tracer's fluxes are not profiles: two-dimensional at the surface and the
+    # top of the domain, three-dimensional for the absorption, which is per unit height.
+    for name, flux in rt_results.items():
+        variables[name] = ((dims, flux.reshape(shape)) if flux.ndim == 1
+                           else (('z',) + dims, flux.reshape((-1,) + shape)))
 
     xr.Dataset(variables).to_netcdf(path)
     print(f'wrote {path}')
@@ -145,26 +174,42 @@ def main():
                    help='delta-scale the shortwave cloud properties (default: on)')
     p.add_argument('--output-bnd-fluxes', action=flag, default=None,
                    help='also write the fluxes resolved by band')
+
+    p.add_argument('--plane-parallel', action=flag, default=None,
+                   help='solve the shortwave with the two-stream solver (default: on)')
+    p.add_argument('--raytracing', action=flag, default=None,
+                   help='solve the shortwave with the Monte Carlo ray tracer; needs '
+                        'the Cartesian grid in the input file (default: off)')
+    p.add_argument('--photons-per-pixel', type=int, default=None,
+                   help='ray tracer photons per column per g-point (default: 256)')
+    p.add_argument('--independent-column', action=flag, default=None,
+                   help='trace rays without horizontal transport (default: off)')
     args = p.parse_args()
 
-    switches, files = read_settings(args.settings or f'{args.case}.toml')
-    for key in switches:
-        if getattr(args, key) is not None:
-            switches[key] = getattr(args, key)
+    switches, files, shortwave = read_settings(args.settings or f'{args.case}.toml')
+    for target in (switches, shortwave):
+        for key in target:
+            if getattr(args, key, None) is not None:
+                target[key] = getattr(args, key)
+
+    if switches['shortwave'] and not (shortwave['plane_parallel']
+                                      or shortwave['raytracing']):
+        raise SystemExit('The shortwave is on but neither solver is.')
 
     atm = read_case(args.input or f'{args.case}_input.nc')
     print(f'{atm["ncol"]} columns, {atm["nlay"]} layers, '
           f'{"top" if atm["top_at_1"] else "surface"} at index 0')
 
-    results, nbnd = {}, {}
+    results, rt_results, nbnd = {}, {}, {}
     for band in ('lw', 'sw'):
         if switches['longwave' if band == 'lw' else 'shortwave']:
-            nbnd[band] = run_band(band, atm, switches, files, results)
+            nbnd[band] = run_band(band, atm, switches, files, shortwave,
+                                  results, rt_results)
 
-    if not results:
+    if not results and not rt_results:
         raise SystemExit('Nothing to do: both the longwave and the shortwave are off.')
 
-    write_output(args.output or f'{args.case}_output.nc', atm, results, nbnd)
+    write_output(args.output or f'{args.case}_output.nc', atm, results, rt_results, nbnd)
 
     return 0
 

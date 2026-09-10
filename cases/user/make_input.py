@@ -106,7 +106,8 @@ def cloud_fields(z):
     return fields
 
 
-def make_input(path, nx=64, ny=64, nlay=256, clouds=False, sst=SST):
+def make_input(path, nx=64, ny=64, nlay=256, clouds=False, sst=SST,
+               dx=100.0, dy=100.0, rt_nz=None):
     """Write one case input file. Returns its path."""
     profile = rcemip_profile(nlay, sst=sst)
 
@@ -115,7 +116,28 @@ def make_input(path, nx=64, ny=64, nlay=256, clouds=False, sst=SST):
         return np.ascontiguousarray(
             np.broadcast_to(values[:, None, None], (values.size, ny, nx)))
 
+    # The Cartesian grid, which only the ray tracer reads. The horizontal spacing is
+    # ours to choose; the vertical is the sounding's own, which is equally spaced, as
+    # the tracer requires. rt_nz cells are resolved in three dimensions and everything
+    # above them is lumped into one more cell on top.
+    rt_nz = nlay if rt_nz is None else min(rt_nz, nlay)
+    dz = profile['zh'][1] - profile['zh'][0]
+
     variables = {
+        'x': (('x',), (np.arange(nx) + 0.5)*dx),
+        'xh': (('xh',), np.arange(nx + 1)*dx),
+        'y': (('y',), (np.arange(ny) + 0.5)*dy),
+        'yh': (('yh',), np.arange(ny + 1)*dy),
+        'z': (('z',), profile['z'][:rt_nz]),
+        'zh': (('zh',), profile['zh'][:rt_nz + 1]),
+
+        # Blocks of the null-collision grid the tracer marches on.
+        'ngrid_x': ((), np.int32(max(1, nx//4))),
+        'ngrid_y': ((), np.int32(max(1, ny//4))),
+        'ngrid_z': ((), np.int32(max(1, rt_nz//4))),
+
+        'azi': (('y', 'x'), np.zeros((ny, nx))),
+
         'z_lay': (('lay',), profile['z']), 'z_lev': (('lev',), profile['zh']),
         'p_lay': (('lay', 'y', 'x'), field(profile['p_lay'])),
         'p_lev': (('lev', 'y', 'x'), field(profile['p_lev'])),
@@ -155,7 +177,14 @@ def make_settings(path, clouds=False):
         f.write('[switches]\n'
                 'longwave = true\n'
                 'shortwave = true\n'
-                f'cloud-optics = {"true" if clouds else "false"}\n')
+                f'cloud-optics = {"true" if clouds else "false"}\n'
+                '\n'
+                '# Which shortwave solver, or both. The ray tracer reads the Cartesian\n'
+                '# grid this file was written with; see example.toml for the rest.\n'
+                '[shortwave]\n'
+                'plane-parallel = true\n'
+                'raytracing = false\n'
+                'photons-per-pixel = 256\n')
 
     return path
 
@@ -168,6 +197,14 @@ def main():
     p.add_argument('--ny', type=int, default=64, help='columns in y (default: %(default)s)')
     p.add_argument('--nlay', type=int, default=256,
                    help='layers, equally spaced up to 70 km (default: %(default)s)')
+    p.add_argument('--dx', type=float, default=100.0,
+                   help='horizontal grid spacing in x, for the ray tracer '
+                        '(default: %(default)s m)')
+    p.add_argument('--dy', type=float, default=100.0,
+                   help='horizontal grid spacing in y (default: %(default)s m)')
+    p.add_argument('--rt-nz', type=int, default=None,
+                   help='layers the ray tracer resolves in three dimensions; the rest '
+                        'are lumped into one cell on top (default: all of them)')
     p.add_argument('--sst', type=float, default=SST,
                    help='sea surface temperature, which sets the whole sounding '
                         '(default: %(default)s K)')
@@ -179,7 +216,7 @@ def main():
     args = p.parse_args()
 
     path = make_input(f'{args.case}_input.nc', args.nx, args.ny, args.nlay,
-                      args.clouds, args.sst)
+                      args.clouds, args.sst, args.dx, args.dy, args.rt_nz)
     print(f'wrote {path}   {args.nx*args.ny} columns, {args.nlay} layers'
           f'{", with clouds" if args.clouds else ""}')
 

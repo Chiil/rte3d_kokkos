@@ -98,6 +98,8 @@ def read_case(path):
 
     if 'mu0' in d:
         atm['mu0'] = surface('mu0')
+    if 'azi' in d:
+        atm['azi'] = surface('azi')
     if 'sfc_alb_dir' in d:
         atm['sfc_alb_dir'] = by_band('sfc_alb_dir')
         atm['sfc_alb_dif'] = by_band(
@@ -111,7 +113,40 @@ def read_case(path):
     elif 'tsi_scaling' in d:
         atm['tsi_scaling'] = np.full(ncol, float(d['tsi_scaling'].values))
 
+    atm['grid'] = read_grid(d, atm, nx, ny)
+
     return atm
+
+
+def read_grid(d, atm, nx, ny):
+    """The Cartesian grid the ray tracer needs, or None if the file does not carry it.
+
+    The tracer works on a box of equally spaced cells, which the two-stream solver
+    never asks about, so a file may leave it out. The vertical is the `z` dimension:
+    those cells are resolved in three dimensions and everything above them is lumped
+    into one more cell on top, which is how rte-rrtmgp-cpp reads the same files.
+
+    ngrid_x/y/z give the null-collision grid; a file without them gets the default.
+    """
+    if 'xh' not in d or 'zh' not in d:
+        return None
+
+    def spacing(name, default):
+        if name not in d:
+            return default
+
+        edges = d[name].values.astype(np.float64)
+        return float(edges[1] - edges[0])
+
+    nz_in = int(d.sizes['z'])
+    dx = spacing('xh', 1.0)
+
+    return dict(nx=nx, ny=ny,
+                nz=nz_in + 1 if nz_in < atm['nlay'] else nz_in,
+                dx=dx, dy=spacing('yh', dx), dz=spacing('zh', 1.0),
+                kn_x=int(d['ngrid_x'].values) if 'ngrid_x' in d else 0,
+                kn_y=int(d['ngrid_y'].values) if 'ngrid_y' in d else 0,
+                kn_z=int(d['ngrid_z'].values) if 'ngrid_z' in d else 0)
 
 
 def make_gas_concs(rte3d, atm, gas_names=None):
@@ -224,6 +259,39 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
         flux[..., ~daytime] = 0.0
 
     return out
+
+
+def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
+                delta_cloud=True, photons_per_pixel=256, independent_column=False):
+    """Shortwave fluxes for the case, from the Monte Carlo ray tracer.
+
+    The tracer follows photons through the whole domain at once, so unlike the
+    two-stream solver it takes one sun for all of it: mu0, the azimuth and the solar
+    irradiance are read from the first column. What comes back is the surface and
+    top-of-domain fluxes, (ncol) each, and the absorbed flux per unit height,
+    (nz, ncol) -- not a profile per column, since there is no such thing here.
+    """
+    if atm.get('grid') is None:
+        raise SystemExit(
+            'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
+            'the input file. cases/user/make_input.py writes them.')
+
+    clouds = (cloud_props(rte3d, cloud_optics, atm, True, delta_cloud)
+              if cloud_optics else {})
+
+    solar = np.array(kdist.solar_source, dtype=np.float64)
+    toa_src = solar*scaling(kdist, atm)[0]
+
+    return rte3d.solve_sw_rt(
+        kdist, gas_concs, atm['top_at_1'],
+        atm['play'], atm['plev'], atm['tlay'],
+        mu0=float(atm['mu0'][0]),
+        azi=float(atm['azi'][0]) if 'azi' in atm else 0.0,
+        sfc_alb_dir=expand_bands(atm['sfc_alb_dir'], gpt_band),
+        toa_src=toa_src,
+        photons_per_pixel=photons_per_pixel,
+        independent_column=independent_column,
+        col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
 
 
 def scaling(kdist, atm):

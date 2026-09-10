@@ -282,6 +282,65 @@ def test_generated_case_solves(rte3d, tmp_path):
 
 
 @requires_data
+def test_generated_case_carries_the_ray_tracing_grid(rte3d, tmp_path):
+    """The Cartesian grid, which only the ray tracer reads."""
+    make_input, atm = generated_case(tmp_path)
+
+    grid = atm['grid']
+    assert (grid['nx'], grid['ny']) == (NX, NY)
+    assert grid['nz'] == NLAY          # every layer resolved, so nothing is lumped
+    assert grid['dx'] == pytest.approx(100.0)
+    assert grid['dz'] == pytest.approx(70.0e3/NLAY)
+
+
+@requires_data
+def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
+    """The two-stream solver and the ray tracer in one run, on the same atmosphere.
+
+    They share the gas optics and the boundary conditions and differ only in transport,
+    so on this case -- clear sky, the same profile in every column -- the ray tracer has
+    to reproduce the two-stream's direct beam, which both compute exactly, and account
+    for every watt that enters the domain.
+    """
+    import sys
+
+    import xarray as xr
+
+    make_input, run_case = case_scripts()
+
+    monkeypatch.chdir(tmp_path)
+    make_input.make_input('rtcase_input.nc', nx=NX, ny=NY, nlay=NLAY)
+
+    monkeypatch.setattr(sys, 'argv', [
+        'run_case.py', 'rtcase', '--no-longwave', '--raytracing',
+        '--photons-per-pixel', '1024'])
+    assert run_case.main() == 0
+
+    out = xr.open_dataset(tmp_path/'rtcase_output.nc')
+
+    assert out['rt_flux_sfc_dir'].dims == ('y', 'x')
+    assert out['rt_flux_abs_dir'].dims == ('z', 'y', 'x')
+    assert out['rt_flux_abs_dir'].shape == (NLAY, NY, NX)
+
+    # The domain sees the irradiance the case asks for, to within the fluctuation in
+    # how many photons each pixel happens to have been given.
+    incoming = make_input.TSI*np.cos(np.deg2rad(make_input.SOLAR_ZENITH_ANGLE))
+    assert float(out['rt_flux_tod_dn'].mean()) == pytest.approx(incoming, rel=0.02)
+
+    # The direct beam is Beer-Lambert in both solvers.
+    assert float(out['rt_flux_sfc_dir'].mean()) == pytest.approx(
+        float(out['sw_flux_dir'][0].mean()), rel=0.03)
+
+    # And nothing is lost: in, out, absorbed.
+    dz = 70.0e3/NLAY
+    absorbed = float((out['rt_flux_abs_dir'] + out['rt_flux_abs_dif']).sum('z').mean())*dz
+    leaving = float((out['rt_flux_tod_up'] + out['rt_flux_sfc_dir']
+                     + out['rt_flux_sfc_dif'] - out['rt_flux_sfc_up']).mean())
+    assert leaving + absorbed == pytest.approx(
+        float(out['rt_flux_tod_dn'].mean()), rel=0.02)
+
+
+@requires_data
 def test_run_case_end_to_end(rte3d, tmp_path, monkeypatch):
     """make_input.py, then run_case.py, as a user runs them.
 
