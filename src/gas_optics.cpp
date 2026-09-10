@@ -1166,7 +1166,7 @@ void Gas_optics::solve_sw_rt(
 }
 
 
-void Gas_optics::solve_lw_rt(
+int Gas_optics::solve_lw_rt(
         const Kdist_gas& k,
         const Gas_concs& gas_concs,
         const Atmosphere& atm,
@@ -1175,19 +1175,44 @@ void Gas_optics::solve_lw_rt(
         const int photons_per_pixel,
         const bool independent_column,
         const Array_2d<const TF>& sfc_emis,
+        const Array_2d<const TF>& secants,
+        const Array_1d<const TF>& weights,
+        const TF min_mfp_grid_ratio,
         const Band_props& clouds,
         const Raytracer_lw::Fluxes_lw& fluxes)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
+    const int nlay = static_cast<int>(atm.play.extent(0));
+    const int ncol = static_cast<int>(atm.play.extent(1));
 
-    const Solve_state state = prepare(k, gas_concs, atm, true);
+    const bool cloud_scatters = clouds.ssa.size() > 0;
+    if (min_mfp_grid_ratio > TF(0.) && cloud_scatters)
+        throw std::invalid_argument(
+                "The longwave ray tracer's plane-parallel fallback solves without "
+                "scattering, so min_mfp_grid_ratio cannot be used with scattering "
+                "clouds. Set one of the two to zero.");
+
+    const Solve_state state = prepare(k, gas_concs, atm, true, false, weights);
     const auto scratch = Raytracer_lw::Scratch::make(grid);
 
     // The gas does not scatter in the longwave, and the tracer wants that as an array
     // rather than as a special case. Allocated once and left at zero.
     const Array_2d<TF> ssa_gas("lw_rt_ssa_gas", state.tau.extent(0), state.tau.extent(1));
 
+    // The shortest gas mean free path the box may hold before the tracer gives up on
+    // it, as an optical depth per cell: a mean free path of ratio*min(dx, dy) is an
+    // optical depth of dz/(ratio*min(dx, dy)) across a cell of depth dz.
+    const TF d_xy_min = std::min(grid.dx, grid.dy);
+    const TF tau_max_traced = min_mfp_grid_ratio > TF(0.)
+            ? grid.dz/(min_mfp_grid_ratio*d_xy_min)
+            : std::numeric_limits<TF>::infinity();
+
+    const auto tau = state.tau;
+    const int nz = grid.nz;
+
     fluxes.zero();
+
+    int traced = 0;
 
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
@@ -1203,16 +1228,63 @@ void Gas_optics::solve_lw_rt(
                 k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
                 state.sources(), state.pfrac);
 
-        Raytracer_lw::trace_rays(
-                grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                state.tau, ssa_gas,
-                band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
-                band_slice(clouds.g, ibnd),
-                state.lay_source, state.sfc_source,
-                slice_1d(sfc_emis, igpt),
-                TF(0.),
-                fluxes, scratch);
+        // The largest gas optical depth across a cell of the resolved box, which is
+        // where the shortest mean free path is. Clouds are left out of it, as the
+        // reference leaves them out: the threshold asks whether the *gas* alone
+        // already closes the cell. Reference: max_tau_gas.
+        TF tau_max = TF(0.);
+        if (min_mfp_grid_ratio > TF(0.))
+        {
+            Kokkos::parallel_reduce("lw_rt_max_tau",
+                Kokkos::MDRangePolicy<Default_exec, Kokkos::Rank<2>>({0, 0}, {nz, ncol}),
+                KOKKOS_LAMBDA(const int kc, const int icol, TF& acc)
+                {
+                    const TF t = tau(Raytracer::layer_of(kc, nlay, top_at_1), icol);
+                    if (t > acc)
+                        acc = t;
+                },
+                Kokkos::Max<TF>(tau_max));
+        }
+
+        if (tau_max < tau_max_traced)
+        {
+            ++traced;
+
+            Raytracer_lw::trace_rays(
+                    grid, top_at_1, independent_column, photons_per_pixel, igpt,
+                    state.tau, ssa_gas,
+                    band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
+                    band_slice(clouds.g, ibnd),
+                    state.lay_source, state.sfc_source,
+                    slice_1d(sfc_emis, igpt),
+                    TF(0.),
+                    fluxes, scratch);
+        }
+        else
+        {
+            // Opaque within a cell: solve the column instead. Clouds go into the gas
+            // optical depth here rather than beside it, since nothing scatters off
+            // them on this path.
+            const auto cloud_tau = band_slice(clouds.tau, ibnd);
+            if (cloud_tau.size() > 0)
+                Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+
+            Rte_lw::solver_noscat(
+                    top_at_1, secants, weights, state.tau, state.sources(),
+                    slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
+                    Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
+                    Flux_sink{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()},
+                    Array_2d<TF>(), state.lw_noscat);
+
+            Raytracer_lw::add_plane_parallel(
+                    grid, top_at_1, nlay,
+                    Array_map_2d<const TF>(state.flux_up.data(), nlay + 1, ncol),
+                    Array_map_2d<const TF>(state.flux_dn.data(), nlay + 1, ncol),
+                    fluxes);
+        }
     }
+
+    return traced;
 }
 
 

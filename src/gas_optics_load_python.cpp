@@ -448,6 +448,8 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
            const Numpy::In<TF>& play, const Numpy::In<TF>& plev,
            const Numpy::In<TF>& tlay, const Numpy::In<TF>& tlev,
            const Numpy::In<TF>& tsfc, const Numpy::In<TF>& sfc_emis,
+           const Numpy::In<TF>& secants, const Numpy::In<TF>& weights,
+           const TF min_mfp_grid_ratio,
            const int nx, const int ny, const int nz,
            const TF dx, const TF dy, const TF dz,
            const int photons_per_pixel, const bool independent_column,
@@ -486,11 +488,13 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
 
             const auto fluxes = Raytracer_lw::Fluxes_lw::make(grid);
 
-            Gas_optics::solve_lw_rt(
+            const int traced = Gas_optics::solve_lw_rt(
                     k, gas_concs, atm, top_at_1, grid,
                     photons_per_pixel, independent_column,
                     Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
-                    clouds, fluxes);
+                    Numpy::to_device_2d<TF>(secants, "secants"),
+                    Numpy::to_device_1d<TF>(weights, "weights"),
+                    min_mfp_grid_ratio, clouds, fluxes);
             Kokkos::fence();
 
             py::dict out;
@@ -502,12 +506,15 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
             out["rt_lw_flux_sfc_dn"] = Numpy::from_device(fluxes.sfc_dn);
             out["rt_lw_flux_sfc_up"] = Numpy::from_device(fluxes.sfc_up);
             out["rt_lw_flux_abs"] = Numpy::from_device(fluxes.flux_net);
+            out["n_gpt_traced"] = traced;
 
             return out;
         },
         py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
         py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("tlev"),
         py::arg("tsfc"), py::arg("sfc_emis"),
+        py::arg("secants"), py::arg("weights"),
+        py::arg("min_mfp_grid_ratio") = TF(0.),
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
         py::arg("dx"), py::arg("dy"), py::arg("dz"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
@@ -521,7 +528,10 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
         "cloud_ssa and cloud_g may be omitted, which is a cloud that only absorbs. "
         "Returns a dict of the surface and top-of-domain fluxes, (ncol) each, and "
         "rt_lw_flux_abs, the absorbed minus emitted flux per unit height, "
-        "(nz, ncol). The names are rte-rrtmgp-cpp's own.");
+        "(nz, ncol) -- the names are rte-rrtmgp-cpp's own -- plus n_gpt_traced, how "
+        "many g-points were actually traced. min_mfp_grid_ratio skips the g-points "
+        "whose gas is opaque within a grid cell and solves those plane-parallel "
+        "instead, which is what secants and weights are for; zero traces everything.");
 
 
     m.def("solve_sw_rt",

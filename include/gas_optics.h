@@ -471,7 +471,17 @@ namespace Gas_optics
     // reference instead runs the plane-parallel solver over the whole column and feeds
     // its downward flux at the top of the box in as a scalar; see the note in
     // raytracer_lw.h.
-    void solve_lw_rt(
+    // min_mfp_grid_ratio makes the tracer skip the g-points it cannot learn anything
+    // from. Where the gas is opaque on the scale of a grid cell -- the shortest gas
+    // mean free path in the box below min_mfp_grid_ratio times the horizontal grid
+    // spacing -- a photon is absorbed before it can cross a cell, so there is no
+    // horizontal transport to resolve and the plane-parallel solve is the same answer,
+    // reached with no photons and no Monte Carlo noise. Returns how many g-points were
+    // actually traced. Zero traces everything; the reference's default is 1.
+    //
+    // The fallback solve is the no-scattering one, so scattering clouds and a nonzero
+    // ratio are refused rather than silently solved without scattering.
+    int solve_lw_rt(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
             const Atmosphere& atm,
@@ -480,6 +490,9 @@ namespace Gas_optics
             const int photons_per_pixel,
             const bool independent_column,
             const Array_2d<const TF>& sfc_emis,   // (ngpt, ncol)
+            const Array_2d<const TF>& secants,    // (nmus, ncol) for the fallback
+            const Array_1d<const TF>& weights,    // (nmus)
+            const TF min_mfp_grid_ratio,
             const Band_props& clouds,
             const Raytracer_lw::Fluxes_lw& fluxes);
 

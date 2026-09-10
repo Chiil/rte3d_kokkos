@@ -225,6 +225,55 @@ Raytracer_lw::Scratch Raytracer_lw::Scratch::make(const Grid& grid)
 }
 
 
+void Raytracer_lw::add_plane_parallel(
+        const Grid& grid,
+        const bool top_at_1,
+        const int nlay,
+        const Array_map_2d<const TF>& flux_up,
+        const Array_map_2d<const TF>& flux_dn,
+        const Fluxes_lw& fluxes)
+{
+    const int ncol = grid.ncol();
+    const int nz = grid.nz;
+    const TF dz_inv = TF(1.)/grid.dz;
+
+    // The level bounding cell kc from below, counting cells up from the surface. Level
+    // 0 is the surface when the caller stores bottom-up and the top of the atmosphere
+    // when it stores top-down, which is what V::lev_sfc encodes for the solvers.
+    const auto level_of = [=](const int kc) { return top_at_1 ? nlay - kc : kc; };
+
+    const int lev_sfc = level_of(0);
+    const int lev_tod = level_of(nz);
+
+    const auto f_tod_dn = fluxes.tod_dn, f_tod_up = fluxes.tod_up;
+    const auto f_sfc_dn = fluxes.sfc_dn, f_sfc_up = fluxes.sfc_up;
+    const auto f_net = fluxes.flux_net;
+
+    parallel_for_1d("rt_lw_plane_parallel_2d", 0, ncol,
+        KOKKOS_LAMBDA(const int icol)
+        {
+            f_sfc_dn(icol) += flux_dn(lev_sfc, icol);
+            f_sfc_up(icol) += flux_up(lev_sfc, icol);
+            f_tod_dn(icol) += flux_dn(lev_tod, icol);
+            f_tod_up(icol) += flux_up(lev_tod, icol);
+        });
+
+    // What a cell absorbs is what the net downward flux loses across it, which is the
+    // same quantity the tracer accumulates by following photons.
+    parallel_for_2d("rt_lw_plane_parallel_3d", {0, 0}, {nz, ncol},
+        KOKKOS_LAMBDA(const int kc, const int icol)
+        {
+            const int lo = top_at_1 ? nlay - kc : kc;
+            const int hi = top_at_1 ? nlay - kc - 1 : kc + 1;
+
+            const TF net_lo = flux_dn(lo, icol) - flux_up(lo, icol);
+            const TF net_hi = flux_dn(hi, icol) - flux_up(hi, icol);
+
+            f_net(kc, icol) += (net_hi - net_lo)*dz_inv;
+        });
+}
+
+
 void Raytracer_lw::trace_rays(
         const Grid& grid,
         const bool top_at_1,

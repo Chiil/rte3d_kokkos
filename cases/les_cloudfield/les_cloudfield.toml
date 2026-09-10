@@ -46,27 +46,45 @@ scattering = false      # lw-scattering = false in the reference's test.ini
 # is 256 per pixel exactly, so the two budgets match to the photon.
 photons-per-pixel = 256
 
+# Skip the g-points whose gas is opaque within a grid cell and solve those
+# plane-parallel: a photon cannot cross a cell before it is absorbed, so there is no
+# horizontal transport to resolve and tracing them buys nothing but noise. On this
+# field 62 of the 128 g-points are traced and 66 are not.
+#
+# 1.0 is what the reference actually uses here, though its test.ini does not say so:
+# the ini writes min_mf_grid_ratio where the code reads min_mfp_grid_ratio, so the
+# 0.0 in it is ignored and the built-in default of 1.0 applies. Match it, or the two
+# runs differ over half the spectrum -- the reference's fluxes then carry a smooth
+# plane-parallel contribution for 66 g-points and a fully traced run does not, which
+# shows up as a completely different pattern and six times less scatter.
+#
+# Setting this to 0 traces the whole spectrum. That costs about 0.3 percent on the
+# boundary fluxes here, which is the size of the approximation.
+min-mfp-grid-ratio = 1.0
+
 # Verified against rte-rrtmgp-cpp's test_rte_rrtmgp_rt on this field, same 128
 # g-points, same photon budget, with the atmosphere truncated to the 200 resolved
 # layers so that both codes see the same air:
 #
-#   surface up    0.01 percent    top-of-domain up   0.16 percent
-#   surface down  0.23 percent    column-integrated net  0.08 percent
+#   surface up    0.003 percent   top-of-domain up   0.003 percent
+#   surface down  0.18 percent    column-integrated net  0.24 percent
 #
-# at 2**25 photons. The cooling *profile* is a weaker check than those numbers look:
-# it correlates at 0.974 over the 200 cells, but that is carried by the topmost cell
-# alone, which cools at 3.4 W/m3 against a median of 0.05 -- drop the top twenty and
-# the correlation is 0.07, because at this budget the per-cell rate is not converged in
-# either code. Both scatter by a tenth of a W/m3 cell to cell, sign flips and all, in a
-# profile that should be smooth. What is converged is the integral: running column
-# sums agree to 1 to 2 percent from the surface up, and to 0.08 over the whole column.
+# with the same 62 of 128 g-points traced, where the cooling profile correlates at
+# 0.9989 over the 200 cells.
+#
+# Tracing the whole spectrum instead (min-mfp-grid-ratio = 0) makes the profile a much
+# weaker check: correlation 0.974 over the 200 cells, but carried by the topmost cell
+# alone, which cools at 3.4 W/m3 against a median of 0.05 -- drop the top twenty and it
+# is 0.07, because at that budget the per-cell rate is not converged in either code.
+# What is converged there is the integral: running column sums agree to 1 to 2 percent
+# from the surface up and to 0.08 over the whole column.
 #
 # The field is liquid-only, thin -- 1.29 percent of cells carry cloud, 19 percent of
 # columns -- so the cloud effect is modest but present in both, and agrees within the
 # noise on the difference: surface down +9.22 against +8.91 W/m2, column net -6.41
 # against -6.51, top-of-domain up -2.64 against -2.32.
 #
-# rte3d is 2.5 times faster at that photon count, 2.1 times at 2**22.
+# rte3d is 2.1 times faster: 1104 ms against 2350.
 #
 # Run as it stands, without truncating, rte3d lumps the 132 layers above the box into
 # its top cell and the reference discards them. That is a real difference and a large

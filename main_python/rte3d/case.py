@@ -262,7 +262,8 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
 
 def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
-                photons_per_pixel=256, independent_column=False, scattering=False):
+                photons_per_pixel=256, independent_column=False, scattering=False,
+                min_mfp_grid_ratio=0.0):
     """Longwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The counterpart of solve_sw_rt, and it returns the same shape of answer: the
@@ -273,6 +274,11 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
 
     Clouds are absorption-only unless scattering is asked for, which is what
     lw-scattering does in rte-rrtmgp-cpp's ini files.
+
+    min_mfp_grid_ratio skips the g-points whose gas is opaque within a grid cell and
+    solves those with the plane-parallel no-scattering solver instead: there is no
+    horizontal transport left to resolve, so tracing them buys nothing but noise. Zero
+    traces the whole spectrum; rte-rrtmgp-cpp's own default is 1.
     """
     if atm.get('grid') is None:
         raise SystemExit(
@@ -286,6 +292,9 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         kdist, gas_concs, atm['top_at_1'],
         atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
         sfc_emis=expand_bands(atm['sfc_emis'], gpt_band),
+        secants=np.full((1, atm['ncol']), LW_SECANT),
+        weights=np.array([1.0]),
+        min_mfp_grid_ratio=min_mfp_grid_ratio,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
         col_dry=atm.get('col_dry'), **atm['grid'], **clouds)

@@ -39,7 +39,8 @@ SHORTWAVE = dict(plane_parallel=True, raytracing=False,
 # The same for the longwave. scattering follows lw-scattering in those ini files:
 # without it clouds absorb and emit but do not deflect a photon.
 LONGWAVE = dict(plane_parallel=True, raytracing=False,
-                photons_per_pixel=256, independent_column=False, scattering=False)
+                photons_per_pixel=256, independent_column=False, scattering=False,
+                min_mfp_grid_ratio=0.0)
 
 FILES = dict(gas_lw='rrtmgp-gas-lw-g256.nc', gas_sw='rrtmgp-gas-sw-g224.nc',
              cloud_lw='rrtmgp-clouds-lw-bnd.nc', cloud_sw='rrtmgp-clouds-sw-bnd.nc',
@@ -130,9 +131,16 @@ def run_band(band, atm, switches, files, shortwave, longwave,
                                     cloud_optics,
                                     longwave['photons_per_pixel'],
                                     longwave['independent_column'],
-                                    longwave['scattering']),
+                                    longwave['scattering'],
+                                    longwave['min_mfp_grid_ratio']),
                 repeats=1, warmup=0))
             print(rt_timer.report(ncol=atm['ncol']))
+
+            traced = rt_results.pop('n_gpt_traced', kdist.ngpt)
+            if traced < kdist.ngpt:
+                print(f'lw ray tracer                traced {traced} of {kdist.ngpt} '
+                      f'g-points; the rest were opaque within a cell and were solved '
+                      f'plane-parallel')
     else:
         if shortwave['plane_parallel']:
             out = timer.run(lambda: solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,

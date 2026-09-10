@@ -118,5 +118,23 @@ namespace Raytracer_lw
             const Fluxes_lw& fluxes,
             const Scratch& scratch);
 
+    // Add a plane-parallel solve of one g-point into the ray tracer's own fluxes.
+    //
+    // Where a g-point's gas is opaque on the scale of a grid cell, a photon cannot
+    // cross one before it is absorbed, so horizontal transport has nothing to move and
+    // the plane-parallel answer is the same answer -- reached without tracing anything
+    // and without Monte Carlo noise. Reference: convert_1d_to_rt_output, which the
+    // reference reaches through min_mfp_grid_ratio.
+    //
+    // flux_up and flux_dn are one g-point's profiles, (nlev, ncol), in the caller's own
+    // vertical orientation. Only the levels bounding the box are read.
+    void add_plane_parallel(
+            const Grid& grid,
+            const bool top_at_1,
+            const int nlay,
+            const Array_map_2d<const TF>& flux_up,   // (nlev, ncol)
+            const Array_map_2d<const TF>& flux_dn,   // (nlev, ncol)
+            const Fluxes_lw& fluxes);
+
     void init_python_bindings(py::module_& m);
 }
