@@ -9,7 +9,7 @@
 namespace
 {
     using Raytracer::Grid;
-    using Raytracer::Optics_scat;
+    using Raytracer::Optics_cell;
     using Raytracer::Vector;
 
     // Smallest extinction the null-collision grid is allowed to hold. Without it a
@@ -69,8 +69,7 @@ namespace
             const Array_map_2d<const TF>& tau_cld,
             const Array_map_2d<const TF>& ssa_cld,
             const Array_map_2d<const TF>& asy_cld,
-            const Array_2d<TF>& k_ext,
-            const Array_2d<Optics_scat>& scat)
+            const Array_2d<Optics_cell>& optics)
     {
         const int ncol = grid.ncol();
         const TF dz_inv = TF(1.)/grid.dz;
@@ -84,11 +83,13 @@ namespace
                 const TF k_gas = tau_gas(ilay, icol)*dz_inv;
                 const TF k_cld = clouds ? tau_cld(ilay, icol)*dz_inv : TF(0.);
 
-                k_ext(k, icol) = Kokkos::max(k_ext_min(), k_gas + k_cld);
-
-                scat(k, icol).k_sca_gas = k_gas*ssa_gas(ilay, icol);
-                scat(k, icol).k_sca_cld = clouds ? k_cld*ssa_cld(ilay, icol) : TF(0.);
-                scat(k, icol).asy_cld = clouds ? asy_cld(ilay, icol) : TF(0.);
+                // Written as one struct so the store is as wide as the load the
+                // walk will make of it.
+                optics(k, icol) = Optics_cell{
+                        Kokkos::max(k_ext_min(), k_gas + k_cld),
+                        k_gas*ssa_gas(ilay, icol),
+                        clouds ? k_cld*ssa_cld(ilay, icol) : TF(0.),
+                        clouds ? asy_cld(ilay, icol) : TF(0.)};
             });
     }
 
@@ -104,8 +105,7 @@ namespace
             const Array_map_2d<const TF>& tau_cld,
             const Array_map_2d<const TF>& ssa_cld,
             const Array_map_2d<const TF>& asy_cld,
-            const Array_2d<TF>& k_ext,
-            const Array_2d<Optics_scat>& scat)
+            const Array_2d<Optics_cell>& optics)
     {
         const int ncol = grid.ncol();
         const int ktod = grid.nz - 1;
@@ -137,11 +137,11 @@ namespace
                     }
                 }
 
-                k_ext(ktod, icol) = Kokkos::max(k_ext_min(), (tau_gas_sum + tau_cld_sum)*dz_inv);
-
-                scat(ktod, icol).k_sca_gas = sca_gas_sum*dz_inv;
-                scat(ktod, icol).k_sca_cld = sca_cld_sum*dz_inv;
-                scat(ktod, icol).asy_cld = sca_cld_sum > TF(0.) ? scag_cld_sum/sca_cld_sum : TF(0.);
+                optics(ktod, icol) = Optics_cell{
+                        Kokkos::max(k_ext_min(), (tau_gas_sum + tau_cld_sum)*dz_inv),
+                        sca_gas_sum*dz_inv,
+                        sca_cld_sum*dz_inv,
+                        sca_cld_sum > TF(0.) ? scag_cld_sum/sca_cld_sum : TF(0.)};
             });
     }
 
@@ -149,7 +149,8 @@ namespace
     // Largest extinction in each block of the coarse grid, which is what the
     // null-collision transport marches on. Reference: create_knull_grid.
     void create_knull_grid(
-            const Grid& grid, const Array_2d<const TF>& k_ext, const Array_3d<TF>& k_null)
+            const Grid& grid, const Array_map_2d<const Optics_cell>& optics,
+            const Array_3d<TF>& k_null)
     {
         const Vector<int> cells = grid.cells();
         const Vector<int> kn = grid.kn_cells();
@@ -172,7 +173,7 @@ namespace
                 for (int k=k0; k<=k1; ++k)
                     for (int j=j0; j<=j1; ++j)
                         for (int i=i0; i<=i1; ++i)
-                            k_max = Kokkos::max(k_max, k_ext(k, i + j*cells.x));
+                            k_max = Kokkos::max(k_max, optics(k, i + j*cells.x).k_ext);
 
                 k_null(kn_k, kn_j, kn_i) = k_max;
             });
@@ -294,10 +295,8 @@ Raytracer::Scratch Raytracer::Scratch::make(const Grid& grid)
     const int ncol = grid.ncol();
 
     Scratch s;
-    s.k_ext = Array_2d<TF>(Kokkos::view_alloc("rt_k_ext", Kokkos::WithoutInitializing),
-                           grid.nz, ncol);
-    s.scat = Array_2d<Optics_scat>(
-            Kokkos::view_alloc("rt_scat", Kokkos::WithoutInitializing), grid.nz, ncol);
+    s.optics = Array_2d<Optics_cell>(
+            Kokkos::view_alloc("rt_optics", Kokkos::WithoutInitializing), grid.nz, ncol);
     s.k_null = Array_3d<TF>(Kokkos::view_alloc("rt_k_null", Kokkos::WithoutInitializing),
                             grid.kn_z, grid.kn_y, grid.kn_x);
 
@@ -338,13 +337,13 @@ void Raytracer::trace_rays(
     const int ncol = grid.ncol();
 
     bundle_optics(grid, top_at_1, nlay, tau_gas, ssa_gas, tau_cld, ssa_cld, asy_cld,
-                  scratch.k_ext, scratch.scat);
+                  scratch.optics);
     bundle_optics_tod(grid, top_at_1, nlay, tau_gas, ssa_gas, tau_cld, ssa_cld, asy_cld,
-                      scratch.k_ext, scratch.scat);
+                      scratch.optics);
 
     create_knull_grid(
             grid,
-            Array_map_2d<const TF>(scratch.k_ext.data(), grid.nz, ncol),
+            Array_map_2d<const Optics_cell>(scratch.optics.data(), grid.nz, ncol),
             scratch.k_null);
 
     Kokkos::deep_copy(scratch.tod_dn, TF(0.));
@@ -356,8 +355,7 @@ void Raytracer::trace_rays(
     Kokkos::deep_copy(scratch.atmos_dif, TF(0.));
 
     Rt_kernels::Scene scene;
-    scene.k_ext = Array_map_2d<const TF>(scratch.k_ext.data(), grid.nz, ncol);
-    scene.scat = Array_map_2d<const Optics_scat>(scratch.scat.data(), grid.nz, ncol);
+    scene.optics = Array_map_2d<const Optics_cell>(scratch.optics.data(), grid.nz, ncol);
     scene.k_null = Array_map_3d<const TF>(
             scratch.k_null.data(), grid.kn_z, grid.kn_y, grid.kn_x);
     scene.sfc_alb = sfc_alb;

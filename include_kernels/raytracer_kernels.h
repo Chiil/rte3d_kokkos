@@ -20,7 +20,7 @@
 // which is why the whole walk is one function rather than a kernel per event.
 namespace Rt_kernels
 {
-    using Raytracer::Optics_scat;
+    using Raytracer::Optics_cell;
     using Raytracer::Vector;
 
     KOKKOS_INLINE_FUNCTION constexpr TF eps() { return std::numeric_limits<TF>::epsilon(); }
@@ -122,8 +122,7 @@ namespace Rt_kernels
     // object. Views are handles, so this is cheap to copy to the device.
     struct Scene
     {
-        Array_map_2d<const TF> k_ext;             // (nz, ncol) [1/m]
-        Array_map_2d<const Optics_scat> scat;     // (nz, ncol)
+        Array_map_2d<const Optics_cell> optics;   // (nz, ncol)
         Array_map_3d<const TF> k_null;            // (kn_z, kn_y, kn_x) [1/m]
         Array_map_1d<const TF> sfc_alb;           // (ncol)
 
@@ -313,8 +312,7 @@ namespace Rt_kernels
         // derived from them, since the fractions also depend on the coarse block and
         // the block can change while the fine cell does not.
         int c_k = -1, c_ij = -1;
-        Optics_scat c_scat{};
-        TF c_k_ext = TF(0.);
+        Optics_cell c_optics{};
         Photon_kind c_kind = Photon_kind::Direct;
         TF absorbed = TF(0.);
 
@@ -470,8 +468,7 @@ namespace Rt_kernels
                 {
                     flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
 
-                    c_scat = s.scat(k, ij);
-                    c_k_ext = s.k_ext(k, ij);
+                    c_optics = s.optics(k, ij);
                     c_k = k;
                     c_ij = ij;
                     c_kind = photon.kind;
@@ -482,9 +479,9 @@ namespace Rt_kernels
                     c_kind = photon.kind;
                 }
 
-                const Optics_scat scat = c_scat;
-                const TF k_ext = c_k_ext;
-                const TF k_sca_tot = scat.k_sca_gas + scat.k_sca_cld;
+                const Optics_cell optics = c_optics;
+                const TF k_ext = optics.k_ext;
+                const TF k_sca_tot = optics.k_sca_gas + optics.k_sca_cld;
 
                 // Absorption is taken out of the weight rather than sampled, which is
                 // the variance reduction of Iwabuchi (2006). The null part of the
@@ -527,8 +524,8 @@ namespace Rt_kernels
                     {
                         d_max = TF(0.);
 
-                        const bool by_cloud = rng()*k_sca_tot < scat.k_sca_cld;
-                        const TF g = Kokkos::min(TF(1.) - eps(), scat.asy_cld);
+                        const bool by_cloud = rng()*k_sca_tot < optics.k_sca_cld;
+                        const TF g = Kokkos::min(TF(1.) - eps(), optics.asy_cld);
 
                         // Henyey-Greenstein divides by g, so a cloud that happens to
                         // scatter isotropically gets the isotropic law directly.

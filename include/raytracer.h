@@ -31,10 +31,17 @@ namespace Raytracer
     };
 
 
-    // The scattering part of a cell's optical properties, kept apart from the total
-    // extinction because a scattering event has to pick which of the two did it.
-    struct Optics_scat
+    // A cell's optical properties, all four of them together and aligned so that the
+    // walk fetches them in one instruction.
+    //
+    // The extinction used to live in an array of its own, beside a three-wide
+    // scattering struct. Every collision then issued four separate 32-bit loads for
+    // four contiguous numbers of one cell, and the photon kernel is bound by the L1
+    // queue those loads sit in -- 74 percent of its stall cycles are spent waiting
+    // for it, with DRAM at 3.5 percent. One aligned struct is one wide load instead.
+    struct alignas(16) Optics_cell
     {
+        TF k_ext;       // extinction coefficient [1/m]
         TF k_sca_gas;   // Rayleigh scattering coefficient [1/m]
         TF k_sca_cld;   // cloud scattering coefficient [1/m]
         TF asy_cld;     // cloud asymmetry parameter
@@ -93,8 +100,7 @@ namespace Raytracer
     // because freeing a device allocation per g-point synchronizes the device.
     struct Scratch
     {
-        Array_2d<TF> k_ext;             // (nz, ncol) extinction coefficient [1/m]
-        Array_2d<Optics_scat> scat;     // (nz, ncol)
+        Array_2d<Optics_cell> optics;   // (nz, ncol)
         Array_3d<TF> k_null;            // (kn_z, kn_y, kn_x) maximum extinction per block
 
         // Photon counts, zeroed at the start of every trace. Separate from the fluxes
