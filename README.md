@@ -269,6 +269,25 @@ weight and scores it, which is the variance reduction of Iwabuchi (2006); Russia
 roulette below a weight of a half keeps the walk finite. That is why the energy budget
 closes exactly under conservative scattering and only in the mean otherwise.
 
+### The one place fast math is allowed
+
+`src/CMakeLists.txt` compiles `raytracer.cpp`, and only that file, with
+`-use_fast_math` (`-ffast-math` under HIP). Everything else keeps IEEE semantics,
+because gas optics and the transport solvers are compared against the Fortran
+reference at 1e-13 and would not survive it.
+
+The tracer is different in kind: it samples a Monte Carlo distribution, where two ulp
+on a sine is a fraction of the noise the photon count already leaves behind. Without
+the flag, `Kokkos::sin`, `cos` and `log` lower to the software implementations,
+argument-reduction slow paths and all -- twelve double-precision instructions in a
+kernel that never needs one, on a card that runs them at a sixty-fourth of the single
+precision rate. With it they become the single hardware instructions rte-rrtmgp-cpp's
+kernel gets, and the kernel halves: 3816 SASS instructions to 1992.
+
+Measured on RCEMIP at 65536 columns, single precision: the tracer goes from 10.61 to
+10.24 s, and the fluxes move by 0.01% per column against a Monte Carlo noise floor
+far above that. The domain-mean fluxes are unchanged to five decimals.
+
 ### Known defects in the Fortran reference
 
 Each is reproduced or worked around deliberately, and pinned by a test.
