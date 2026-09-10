@@ -15,11 +15,15 @@ namespace
     // Smallest extinction the null-collision grid is allowed to hold. Without it a
     // transparent block would give an infinite free path, and the reciprocal of it
     // appears in the collision test. Reference: k_ext_null_min.
-    constexpr TF k_null_min = TF(1.e-3);
+    //
+    // A function rather than a constant, as eps() and min_k() in the solver kernels
+    // are: a device lambda that passes it by reference to Kokkos::max would otherwise
+    // odr-use a host-side object.
+    KOKKOS_INLINE_FUNCTION constexpr TF k_null_min() { return TF(1.e-3); }
 
     // Floor on a cell's extinction, so that the ratios the walk forms out of it stay
     // finite in a cell that happens to be empty.
-    constexpr TF k_ext_min = TF(1.e-25);
+    KOKKOS_INLINE_FUNCTION constexpr TF k_ext_min() { return TF(1.e-25); }
 
 
     // The layer a ray-tracing cell reads, in the caller's own vertical orientation.
@@ -67,7 +71,7 @@ namespace
                 const TF k_gas = tau_gas(ilay, icol)*dz_inv;
                 const TF k_cld = clouds ? tau_cld(ilay, icol)*dz_inv : TF(0.);
 
-                k_ext(k, icol) = Kokkos::max(k_ext_min, k_gas + k_cld);
+                k_ext(k, icol) = Kokkos::max(k_ext_min(), k_gas + k_cld);
 
                 scat(k, icol).k_sca_gas = k_gas*ssa_gas(ilay, icol);
                 scat(k, icol).k_sca_cld = clouds ? k_cld*ssa_cld(ilay, icol) : TF(0.);
@@ -120,7 +124,7 @@ namespace
                     }
                 }
 
-                k_ext(ktod, icol) = Kokkos::max(k_ext_min, (tau_gas_sum + tau_cld_sum)*dz_inv);
+                k_ext(ktod, icol) = Kokkos::max(k_ext_min(), (tau_gas_sum + tau_cld_sum)*dz_inv);
 
                 scat(ktod, icol).k_sca_gas = sca_gas_sum*dz_inv;
                 scat(ktod, icol).k_sca_cld = sca_cld_sum*dz_inv;
@@ -151,7 +155,7 @@ namespace
                 const int k0 = static_cast<int>(kn_k*fz);
                 const int k1 = Kokkos::min(cells.z - 1, static_cast<int>((kn_k + 1)*fz));
 
-                TF k_max = k_null_min;
+                TF k_max = k_null_min();
                 for (int k=k0; k<=k1; ++k)
                     for (int j=j0; j<=j1; ++j)
                         for (int i=i0; i<=i1; ++i)

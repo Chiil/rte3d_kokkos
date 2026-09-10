@@ -154,7 +154,7 @@ namespace Rt_kernels
     // Put a new photon at the top of the domain, in a pixel drawn from the
     // quasi-random sequence and at a random point within it. photons_shot counts every
     // draw, including the ones thrown away for landing outside the grid.
-    KOKKOS_INLINE_FUNCTION
+    RTE3D_DEVICE_FUNCTION
     void reset_photon(
             Photon& photon, TF& weight, int& photons_shot, const int photons_to_shoot,
             const Scene& s, Rand::Qrng_2d& qrng, Rand::Rng& rng)
@@ -206,7 +206,7 @@ namespace Rt_kernels
 
     // Send the photon off in a new direction, cos_scat away from the old one and at a
     // random azimuth about it.
-    KOKKOS_INLINE_FUNCTION
+    RTE3D_DEVICE_FUNCTION
     void scatter(Photon& photon, const TF cos_scat, Rand::Rng& rng)
     {
         const TF sin_scat = Kokkos::max(TF(0.), Kokkos::sqrt(TF(1.) - cos_scat*cos_scat + eps()));
@@ -247,7 +247,7 @@ namespace Rt_kernels
     // the threads of one launch together cover a contiguous block of it; rng_seed is
     // its counterpart for the pseudo-random stream.
     template<bool independent_column>
-    KOKKOS_INLINE_FUNCTION
+    RTE3D_DEVICE_FUNCTION
     void trace_photons(
             const Scene& s, const int photons_to_shoot,
             const unsigned int qrng_offset, const unsigned int rng_seed)

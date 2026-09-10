@@ -32,6 +32,19 @@
 // the same photon count. That build is there to run the test suite, where the
 // tolerances are set from the photon count anyway, so it is not worth carrying a
 // Sobol implementation of our own.
+
+
+// The vendors' generators are __device__ functions, where KOKKOS_INLINE_FUNCTION is
+// __host__ __device__, and nvcc refuses the one calling the other. So everything that
+// touches a generator carries this instead, all the way up to the photon walk in
+// raytracer_kernels.h. It costs nothing: none of it is ever called on the host.
+#if defined(USECUDA) || defined(USEHIP)
+    #define RTE3D_DEVICE_FUNCTION __device__ inline
+#else
+    #define RTE3D_DEVICE_FUNCTION inline
+#endif
+
+
 namespace Rand
 {
     #if defined(USECUDA)
@@ -71,7 +84,7 @@ namespace Rand
     // given photon count and backend.
     struct Rng
     {
-        KOKKOS_INLINE_FUNCTION
+        RTE3D_DEVICE_FUNCTION
         explicit Rng(const unsigned int seed)
         {
             #if defined(USECUDA)
@@ -89,7 +102,7 @@ namespace Rand
             #endif
         }
 
-        KOKKOS_INLINE_FUNCTION
+        RTE3D_DEVICE_FUNCTION
         TF operator()()
         {
             // One minus the deviate, as the reference does: the vendors return
@@ -112,7 +125,7 @@ namespace Rand
         #if defined(USECUDA) || defined(USEHIP)
         Rng_state state;
         #else
-        KOKKOS_INLINE_FUNCTION
+        RTE3D_DEVICE_FUNCTION
         std::uint64_t next()
         {
             state ^= state >> 12;
@@ -133,7 +146,7 @@ namespace Rand
     // launch together walk one contiguous block of it.
     struct Qrng_2d
     {
-        KOKKOS_INLINE_FUNCTION
+        RTE3D_DEVICE_FUNCTION
         Qrng_2d(const Qrng_vectors& v, const unsigned int offset)
             #if !defined(USECUDA) && !defined(USEHIP)
             : rng_x(offset*2 + 1), rng_y(offset*2 + 2)
@@ -150,7 +163,7 @@ namespace Rand
             #endif
         }
 
-        KOKKOS_INLINE_FUNCTION
+        RTE3D_DEVICE_FUNCTION
         void next(unsigned int& x, unsigned int& y)
         {
             #if defined(USECUDA)

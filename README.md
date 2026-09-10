@@ -85,9 +85,11 @@ the transport differs. Aerosols and the Mie phase function are left out — clou
 scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP tables give,
 gases as Rayleigh — and the longwave and backward-camera tracers are not started.
 
-On the RCEMIP case with clouds, 16x16 columns and a 42 degree sun, the two solvers
-agree to 1.2% on the downward surface flux, 0.2% on the direct beam and 0.02% on the
-column absorption.
+On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two solvers
+agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on the
+column absorption -- which is the two-stream's own error plus what the third dimension
+moves around, not a discrepancy. That case is 235 million photons and takes 11.9 s on
+an RTX A4500, single precision, against 179 ms for the two-stream solve beside it.
 
 **Next:** aerosol optics, the longwave ray tracer, then MicroHH integration.
 
@@ -246,6 +248,12 @@ over the domain and is worth roughly a factor of two in photon count for the sam
 noise. There is no host counterpart, so the CPU build draws them pseudo-randomly and is
 noisier at the same photon count; it is there to run the test suite, whose tolerances
 are set by the photon count anyway.
+
+The generators are `__device__` functions where `KOKKOS_INLINE_FUNCTION` is
+`__host__ __device__`, and nvcc will not let the second call the first. So the photon
+walk carries `RTE3D_DEVICE_FUNCTION` instead, declared in the same header. It costs
+nothing -- none of it is ever called on the host -- but it does mean anything that
+touches a generator has to be declared that way all the way up.
 
 ### Null collisions, not a march through cells
 
