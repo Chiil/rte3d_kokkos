@@ -115,12 +115,21 @@ def run_band(band, atm, switches, files, shortwave, results, rt_results):
             band_fluxes(out, f'{band}_flux', results)
 
         if shortwave['raytracing']:
+            grid = atm['grid']
+            print(f'sw ray tracer                tracing '
+                  f'{shortwave["photons_per_pixel"]} photons per pixel through '
+                  f'{grid["nx"]}x{grid["ny"]}x{grid["nz"]} cells, '
+                  f'{kdist.ngpt} g-points', flush=True)
+
+            # Once, not the timer's usual four: a trace is minutes rather than
+            # milliseconds, and there is nothing to warm up.
             rt_timer = Timer('sw ray tracer')
             rt_results.update(rt_timer.run(
                 lambda: solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band,
                                     cloud_optics, switches['delta_cloud'],
                                     shortwave['photons_per_pixel'],
-                                    shortwave['independent_column'])))
+                                    shortwave['independent_column']),
+                repeats=1, warmup=0))
             print(rt_timer.report(ncol=atm['ncol']))
 
     return kdist.nbnd
