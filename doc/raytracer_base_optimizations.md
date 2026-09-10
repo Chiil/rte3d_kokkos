@@ -3,13 +3,14 @@
 Plan for porting the *base optimizations* of Ivor Brouwer's MSc thesis, **"GPU Thread
 Data Remapping In Monte Carlo Short-wave Ray-tracing"** (LIACS, Leiden University,
 26 August 2026; supervisors Ben van Werkhoven and Stijn Heldens), to the Kokkos ray
-tracer in this repository.
+tracer in this repository — **and what measuring it actually showed**.
 
-This file is self-contained: everything needed from the thesis is reproduced below, so
-it can be read and acted on without the PDF.
+Written first against commit `8826bde` as a plan. Rewritten at `6e1395a`, once every
+item had been built or priced on the hardware. The measurements are the point of the
+file now; the thesis is the reason the questions were asked, not the authority on the
+answers.
 
-Written against `include_kernels/raytracer_kernels.h` and `src/raytracer.cpp` at commit
-`8826bde` ("Take the divisions out of the collision, and the cancellation with them").
+This file is self-contained: everything needed from the thesis is reproduced below.
 
 ---
 
@@ -31,390 +32,336 @@ workload. The author's own conclusion is that improved warp coherence alone does
 guarantee better performance, and that for realistic workloads the optimized
 history-based implementation remains the preferred approach.
 
-**So: port §4.1, ignore §4.2–4.7.** The remapping machinery (warp stacks, block stacks,
-link-based shared-memory structures, vote skipping) is warp-intrinsic-heavy — which
-collides with our convention 3, "one frontend for CPU and GPU" — and did not win.
+**So: §4.1 only, never §4.2–4.7.** The remapping machinery is warp-intrinsic-heavy, which
+collides with our convention 3, "one frontend for CPU and GPU", and did not win.
+
+One caution the numbers below will keep repeating: the thesis' 2.81×–4.16× is over *its
+own* original, on different hardware. Our starting point was not that code, and the
+ordering of the wins is not the same. Ported items that the thesis calls strong came out
+worth nothing here, and the largest win we found is not in the thesis at all.
 
 ---
 
-## 2. The nine base optimizations, and how each lands here
+## 2. How the measurements were made
 
-The thesis' §4.1 items, verbatim in substance, each judged against our code.
+Repeat any claim below with these; without them a number in this file means nothing.
 
-| # | Thesis §4.1 item | Verdict for us |
+**GPU** — NVIDIA RTX A4500 (Ampere, sm_86), single precision:
+
+```
+cmake -B build_cuda -DSYST=ubuntu_cuda -DUSEGPU=1 -DUSESP=1
+export PATH=/opt/nvidia/hpc_sdk/Linux_x86_64/25.3/compilers/bin:$PATH
+```
+
+**CPU** — `-DSYST=ubuntu_22lts_gcc`, double precision, 24 OpenMP threads.
+
+**Two cases**, both untracked, both real fields:
+
+| | cells | g-points | columns | photons/pixel |
+|---|---|---|---|---|
+| `cases/user/rcemip` | 256×256×65 | 224 | 65536 | 256 |
+| `cases/les_cloudfield` | 128×128×201 | 112 | 16384 | 256 |
+
+`cases/les_cloudfield` is rte-rrtmgp-cpp's own `les_cloudfield` — a RICO cumulus field at
+20 m, cloud in 0.8 percent of cells — pointed at that tree's `test_input.nc`. It exists so
+that the two codes can be compared directly; see §6.
+
+```
+python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
+python cases/user/run_case.py cases/user/rcemip --no-longwave --raytracing --no-plane-parallel
+```
+
+**Read the timer correctly.** `run_case.py`'s `sw ray tracer` line is `repeats=1,
+warmup=0` — a **single shot**, not a best-of-three like the other solvers. Run-to-run
+spread is 1–3 percent, so anything under about 3 percent needs repeating before it is
+believed. Every number below that matters was taken back to back against a freshly
+rebuilt comparison.
+
+Resource use per build, which explains more than the timings do:
+
+```
+cuobjdump -res-usage build_cuda/src/CMakeFiles/rte3d_core.dir/raytracer.cpp.o \
+  | grep -A1 launch_photonsILb0
+```
+
+---
+
+## 3. Where the time goes
+
+Nsight Compute on `launch_photons`, LES field, one g-point:
+
+```
+ncu --kernel-name-base demangled --kernel-name regex:launch_photons \
+    --launch-count 1 --launch-skip 3 --section SpeedOfLight --section WarpStateStats \
+    python cases/user/run_case.py cases/les_cloudfield/les_cloudfield --photons-per-pixel 32
+```
+
+| | |
+|---|---|
+| L1/TEX throughput | **99.1%** |
+| DRAM throughput | 3.5% |
+| L2 throughput | 4.1% |
+| warp cycles per issued instruction | 24.6 |
+| — of which **LG throttle** | **18.2, or 74%** |
+| theoretical / achieved occupancy | 75% / 70.4%, register-limited |
+| average active threads per warp | 26.6 of 32 |
+| global load requests / local | 267.2M / 5.1M |
+
+**The kernel is bound by the L1 queue that load and store instructions sit in.** Not by
+bandwidth — DRAM is idle at 3.5 percent, the optics fit in cache. What costs is the
+*number of memory instructions issued*, and 74 percent of all stall cycles are spent
+waiting for that queue to drain.
+
+Everything that worked in §4 attacks that queue. Everything that failed does not.
+
+Two secondary limits, both real, neither yet touched: occupancy capped at 75 percent by
+registers, and warp efficiency at 83 percent — the divergence the thesis' remapping half
+chased and failed to profit from.
+
+---
+
+## 4. The nine items, measured
+
+Baseline is `d99169b`. Timings are the `sw ray tracer` line; percentages are against the
+line above.
+
+| # | thesis §4.1 item | outcome |
 |---|---|---|
-| 4.1.1 | Removal of the Sobol sequence | **Deferred by decision** — we keep Sobol for now |
-| 4.1.2 | Better reset locality in warp, and work stealing | Partly applicable (stealing only) |
-| 4.1.3 | Overall register / complexity reductions | Applicable — `fmod` is still in our hot loop |
-| 4.1.4 | Simplified scatter optics | Applicable, reduced payoff (no aerosols) |
-| 4.1.5 | Pre-calculated cell absorption and scattering | **Applicable — the main item** |
-| 4.1.6 | Improved caching (last fine cell in registers) | **Applicable, strong** |
-| 4.1.7 | Accumulation of atmospheric contributions | **Applicable, strong** |
-| 4.1.8 | Float-to-int simplification and fast approximation | Half applicable |
-| 4.1.9 | Mixed precision (fp16 storage) | Applicable, do last |
+| 4.1.1 | Removal of the Sobol sequence | **Priced and rejected** — costs 1.42× photons |
+| 4.1.2 | Reset locality, work stealing | Not attempted; see §5 |
+| 4.1.3 | Register / complexity reductions | **Done** (`dadcda3`) — CPU 1.56×, GPU ~0 |
+| 4.1.4 | Simplified scatter optics | Folded into §5 step 1, not yet done |
+| 4.1.5 | Pre-calculated cell absorption/scattering | **Partly superseded** by `6e1395a` |
+| 4.1.6 | Improved caching (last fine cell) | **Weak** — 6% hit rate on RCEMIP |
+| 4.1.7 | Accumulation of atmospheric contributions | **Done** (`2744af2`) — 11% RCEMIP, 0% LES |
+| 4.1.8 | Float-to-int and fast approximation | **Done** (`dadcda3`) — 5.5% CPU, ~0 GPU |
+| 4.1.9 | Mixed precision (fp16 storage) | Not attempted; caveats in §5 |
+| — | **Widen the optics load** *(not in the thesis)* | **Done** (`6e1395a`) — **22.9% RCEMIP** |
 
-### 4.1.1 — Removal of the Sobol sequence *(deferred by decision)*
+### The running totals
 
-The thesis replaced quasi-random Sobol photon launch positions with a plain uniform draw
-restricted to a per-thread-block sector of the domain. Three claimed gains: the Sobol
-state variables and grid logic free up registers (better occupancy); photons launched by
-one block stay in one region of the domain, so their paths are similar and cache better;
-and kernel arguments needed only for Sobol (notably a global per-cell photon counter,
-needed because a quasi-random draw does not guarantee an exact photon count per cell)
-disappear along with their atomics. The trade-off is less low-discrepancy structure at
-the start, which showed no significant effect on output.
+| commit | RCEMIP | LES (112 gpt) | CPU 64³ |
+|---|---|---|---|
+| `d99169b` baseline | 48729.7 ms | 2838.1 ms | 1234.2 ms |
+| `dadcda3` fmod + reciprocal | 48655.1 ms | 2778.0 ms | 750.9 ms |
+| `2744af2` accumulate deposits | 43363.9 ms | 2777.7 ms | 733.5 ms |
+| `6e1395a` one wide optics load | **33446.5 ms** | **2660.9 ms** | 735.2 ms |
+| | **1.46×** | **1.07×** | **1.68×** |
 
-**We are keeping Sobol.** Note for later, if that is ever revisited: our `Rand::Qrng_2d`
-holds two `curand` scrambled-Sobol states (32 direction vectors each), and `reset_photon`
-runs a **rejection loop** — draws that land outside a non-power-of-two grid are thrown
-away and redrawn — which is both wasted work and a divergence source. Also, each thread
-draws a contiguous slice of the *global* sequence, so a warp's photons are spread over the
-whole domain; the locality argument in 4.1.2 below depends on fixing that.
+The CPU and GPU columns disagree about which item mattered, completely. Anything decided
+from a CPU profile of this kernel will be decided wrong.
 
-### 4.1.2 — Reset locality and work stealing *(stealing only)*
+### 4.1.3 and 4.1.8 — `fmod` and the reciprocals *(done, `dadcda3`)*
 
-Two parts. The locality part depends on 4.1.1 and is therefore out.
+The cyclic boundary used `Kokkos::fmod`; a photon crosses at most one block per step, so
+the wrap is one subtraction. `coord_to_index` divided by the cell size; it now multiplies
+by a reciprocal carried in `Scene`.
 
-The **work-stealing** part stands alone: in the original, each thread was assigned a fixed
-number of photons, so the kernel's duration was set by whichever thread drew the longest
-photon paths. The thesis replaced this with a **block-wide atomic counter**: whenever a
-thread initializes a new photon it atomically increments the counter, so threads that
-finish early absorb work from threads that did not. The author notes the atomic is cheap
-in practice because it is hit sparsely — with a 64×64 grid each block processes roughly
-`256 * 6 * 6` photons (photons per cell × sector size), so contention on the counter is
-limited and the overhead negligible.
+On the **CPU this is the whole story**: `fmod` alone was 1234.2 → 793.5 ms (1.56×), a libm
+call gcc will not inline sitting on the block-transition path, and the reciprocal a further
+5.5 percent (776.7 → 733.7 ms with everything else equal). On the **GPU it is worth
+nothing** — 0.2 percent — because nvcc inlines the modulo and `-use_fast_math` had already
+taken the divide. It stays in: free on the GPU, large on the CPU.
 
-Our equivalent: `launch_photons` (`src/raytracer.cpp:187`) hands thread `n` a fixed
-`photons_per_thread`, with the remainder spread one each over the first `photons_extra`
-threads. Adopting the counter means moving from `Kokkos::RangePolicy` to a `TeamPolicy`
-with a team-scoped counter — a real structural change, hence last in the ordering below.
+Neither is bit-for-bit; both move where the rounding falls. The thesis' `__float2int_rz`
+buys nothing for us — `static_cast<int>` already emits a round-toward-zero convert — and
+`__fdividef` is out under convention 3 anyway.
 
-### 4.1.3 — Register and complexity reductions
+The optional `scatter()` frame simplification was not done. It changes the frame's
+numerics and its argument is register pressure, which is a second-order limit here.
 
-A grab-bag in the thesis: evaluate at compile time what was evaluated at runtime; shorten
-variable lifetimes; drop kernel arguments that only Sobol needed. Two concrete items
-transfer directly:
+### 4.1.6 and 4.1.7 — caching and accumulation *(done, `2744af2`)*
 
-- **The cyclic boundary.** The original used `fmod`, an expensive operation. Because a
-  photon moves at most one grid cell at a time, the wrap can be done with a single
-  subtraction or addition of the domain size instead.
-- **The scatter frame.** The original built two vector structs to compute the new
-  direction, keeping more registers live than necessary.
+Hold the last fine cell, the last photon kind, its optical properties and an accumulator
+in registers; add into the accumulator and flush with one atomic when the cell or the kind
+changes. A reset needs no flush of its own — the key is the cell and the kind, not the
+photon, so a deposit left standing can only be added to by a photon that would have
+written to the same place.
 
-Both are still present in our code — see §3.
+Worth **11.0 percent on RCEMIP and nothing at all on the LES field**. Instrumenting the
+kernel says why:
 
-### 4.1.4 — Simplified scatter optics
+| | same fine cell as previous collision | atomics issued |
+|---|---|---|
+| RCEMIP | 6.0% | 82.6% of collisions |
+| LES cumulus | 29.7% | 54.9% of collisions |
 
-The scattering *type* (gas / cloud / aerosol) is sampled from the individual scattering
-coefficients. Doing that in the kernel means reconstructing
+Read that carefully, because it inverts the thesis' reasoning. On the LES field the
+accumulator works *four times better* — it removes 45 percent of the atomics — and buys
+**zero**. On RCEMIP it removes 17 percent and buys 11. So the atomics were never the
+limit; §3 says the limit is the LG queue, and an atomic is one instruction in it like any
+other.
 
-```
-k_sca = k_sca_gas + k_sca_cld + k_sca_aer
-```
+Note also where the RCEMIP win really comes from: of the 17.4 points of atomics removed,
+only 6.0 are same-cell merges. The other ~11 are **cells that absorb nothing** — `k_abs`
+comes out exactly zero in single precision, so `flush_absorbed` issues no atomic at all.
+That case is not in the thesis. It is most of our gain from the item.
 
-and comparing a random number against normalized partial sums — three global loads, plus
-the asymmetry factor if the sampled type is cloud or aerosol, so **five loads worst case**.
+The cache costs **8 registers** (48 → 56), which drops theoretical occupancy from about 42
+resident warps to 36. On the LES field that cancels the item exactly.
 
-All three coefficients belong to the same grid position, so the probabilities can be built
-once, beforehand, in an optics pre-processing step. Instead of the raw coefficients, store
-two thresholds:
+**A trim that did not work.** Dropping the optics cache and keeping only the accumulator
+recovered **no registers at all** — still 56, they come from the accumulator state itself —
+and was 1.7 percent *slower* on RCEMIP. The four cached coefficients ride along free on
+registers already spent. Do not retry this.
 
-```
-p_aer     = k_sca_aer / k_sca
-p_nongas  = (k_sca_aer + k_sca_cld) / k_sca
-```
+### 4.1.1 — removing the Sobol sequence *(priced, rejected)*
 
-Then for a uniform `r ∈ [0,1)` the type is chosen by comparison alone:
+`Rand::Qrng_2d` holds two cuRAND scrambled-Sobol states, and they are **280 bytes of
+per-thread local memory**: stack is 328 B with Sobol and 48 B without, registers 56 and 50.
+That looks like the largest structural cost in the kernel, so it was worth pricing even
+though the doc had ruled it out.
 
-```
-r >= p_nongas  ->  gas scattering
-r <  p_aer     ->  aerosol scattering
-otherwise      ->  cloud scattering
-```
+A throwaway build replacing the quasi-random launch with a plain pseudo-random draw, which
+also deletes `reset_photon`'s rejection loop:
 
-Gas scattering now needs **one** load (the non-gas cutoff) instead of three; cloud and
-aerosol need **two** (threshold, then asymmetry factor), so the worst case drops from five
-to three. In the thesis' test workload the commonest case was cloud scattering, then gas,
-then aerosol (zero occurrences).
+| | with Sobol | without |
+|---|---|---|
+| RCEMIP | 43363.9 ms | 40603.7 ms (−6.4%) |
+| LES | 2774.3 ms | 2697.6 ms (−2.8%) |
 
-### 4.1.5 — Pre-calculated cell absorption and scattering *(the main item)*
+That is the **ceiling** for the whole item. Then what it costs, against a converged
+8192-photon reference on the LES field:
 
-The original ray-tracing kernel computes two quantities at every fine-grid evaluation:
-`f_noabs`, the fraction of photon weight surviving implicit absorption, and `f_scat`, the
-conditional probability that a non-absorbed candidate interaction is a *real* scattering
-event rather than a null collision. Computing them needs **four** cell-dependent optical
-properties from global memory, and because photons visit cells in an irregular order those
-loads are non-coalesced. The arithmetic is:
+| launch | sfc_dir rms | sfc_dif rms | tod_up rms |
+|---|---|---|---|
+| Sobol | **1.68%** | 4.06% | 3.99% |
+| pseudo-random | 2.01% | 4.08% | 4.01% |
 
-```
-k_sca_tot = k_sca_gas + k_sca_cld + k_sca_aer          (18)
-ssa       = k_sca_tot / k_ext                          (19)
-f_noabs   = 1 - (1 - ssa) * k_ext / k_ext_null         (20)
-f_scat    = ssa / (ssa - 1 + k_ext_null / k_ext)       (21)
-```
+Both unbiased to better than 0.07 percent. Sobol buys nothing on the diffuse or
+top-of-domain fluxes — those photons wander far from where they launched and the launch
+stratification washes out — but on the **direct beam** it cuts per-pixel rms by 16 percent.
+Noise goes as 1/√N, so matching that without Sobol costs **1.42× more photons**: 42 percent
+more work to buy back 3–6 percent. A clear loss.
 
-Both depend only on **cell-local** optical properties (plus `k_ext_null`, which is a
-property of the coarse block the cell sits in), so both can be pre-computed in an **optics
-pre-processing kernel**. That kernel traverses the grid **in memory order**, so its loads
-and stores are coalesced — which is the whole point: the same numbers, read irregularly by
-the photon walk, are instead produced once, in order.
+The thesis reports "no significant effect on output" for this change. On our
+direct-beam surface flux there is one, and that is the flux the cases care most about.
 
-The ray-tracing kernel then loads the two pre-computed values. Irregular global loads in
-the coarse-grid path go from **four raw coefficients to two probabilities**, and the
-repeated arithmetic for `k_sca_tot`, `ssa`, `f_noabs` and `f_scat` leaves the photon loop
-entirely.
+**Keep Sobol.** The local memory it costs is only ~2 percent of L1 requests (5.1M of
+272M), which is exactly why removing it gains so little.
 
-### 4.1.6 — Improved caching
+### The item that was not in the thesis — one wide optics load *(done, `6e1395a`)*
 
-During coarse-grid traversal, several consecutive steps can fall inside the *same* fine
-cell — in particular consecutive null collisions. In that case the fine cell's optical
-properties need not be reloaded. Keep the most recently used fine-grid index in registers;
-if the newly computed index equals the cached one, reuse the cached `f_noabs` and
-`f_scat`. Costs a few registers, saves repeated global loads and the memory stalls behind
-them.
+The SASS at `2744af2` had **440 `LDG.E` and not one wide load**. `k_ext` lived in its own
+array beside a twelve-byte `Optics_scat`, so every collision issued **four separate 32-bit
+loads** for four contiguous numbers of one cell — the exact pattern §3 says is the limit.
 
-### 4.1.7 — Accumulation of atmospheric contributions
+The two arrays became one array of a sixteen-byte aligned `Optics_cell`. The SASS now
+carries one `LDG.E.128` in each of the two `trace_photons` instantiations, which is the
+collision's fetch.
 
-At every fine-grid evaluation the photon deposits
+**RCEMIP 43400.9 → 33446.5 ms (22.9%), LES 2774.3 → 2660.9 ms (4.1%), CPU neutral.** The
+single largest win of the exercise, from a change that touches three files and alters no
+arithmetic.
 
-```
-contribution = w * (1 - f_noabs)                       (22)
-```
+It is numerically inert. The largest difference against the previous commit is 1.8e-4 on a
+surface flux of 700 — and two runs of the *same* build differ by exactly the same 1.8e-4,
+because the deposits are atomics and the GPU does not order them twice the same way.
 
-into the direct or diffuse atmospheric output for that cell. The original wrote this
-immediately with a **global atomic**, on every single evaluation — null collisions
-included.
-
-Instead, keep three extra registers: the last fine-grid index, the last photon kind, and
-an accumulator. Add into the accumulator while both the index and the kind are unchanged;
-when either changes, flush the accumulated total with a **single** read-modify-write, reset
-the accumulator, and adopt the new cell and kind as the cached state. A final flush after
-the traversal loop is required to write the last accumulation.
-
-The photon kind must be part of the key because direct and diffuse photons are written to
-separate output arrays.
-
-This turns many atomics per fine-cell crossing into one per crossing, for the price of
-three registers.
-
-### 4.1.8 — Float-to-int simplification and fast approximation
-
-Nsight Compute showed the float position → integer cell conversion accounting for **10% of
-total program cycles**. The original form:
-
-```
-integer position = static_cast<int>(f / cell_size);    (23)
-```
-
-was replaced by CUDA built-ins:
-
-```
-integer position = __float2int_rz(__fdividef(f, cell_size));   (24)
-```
-
-The trade-off is slightly reduced division accuracy, with no significant output difference
-observed.
-
-### 4.1.9 — Mixed precision
-
-Store `k_ext_null`, `f_scat` and the optical properties in **half precision**. Halving
-their footprint means more optics data fits in the same cache, increasing reuse when
-neighboring photons touch nearby cells, and reduces bytes moved from global memory. The
-thesis reports no significant impact on output. Beneficial when memory latency and
-bandwidth are the limiter.
+**Unresolved:** why RCEMIP gains five times what the LES field gains. The LES g-point
+profiled in §3 moved only 9.57 → 9.50 ms and its L1 request count barely changed, which
+fits the LES field's 4 percent but not RCEMIP's 23. The plausible mechanism is locality —
+the four values now share one 32-byte sector where they used to sit in two arrays — but
+that is a guess until a sector-level profile of an RCEMIP g-point says so.
 
 ---
 
-## 3. Where our code stands today
+## 5. What is left
 
-Facts about our implementation, so the plan below can be followed without re-reading the
-sources.
+### Step 1 — the hot/cold split *(what remains of thesis 4.1.5 and 4.1.4)*
 
-**The photon walk** is `Rt_kernels::trace_photons` in `include_kernels/raytracer_kernels.h`,
-one function, templated on `bool independent_column`. One thread walks
-`photons_to_shoot` photons in sequence, reusing registers.
+`6e1395a` took the load-width half of 4.1.5 without needing a pre-pass. What remains is
+narrowing the common path: a null collision needs only `f_no_abs` and `f_scat`, so a
+pre-pass writing a hot pair and a cold pair turns one 16-byte load into one 8-byte load.
+With no aerosols the 4.1.4 thresholds collapse to a single `p_cld = k_sca_cld/k_sca_tot`.
 
-**Per-collision work** (the `else` branch of `dn >= d_max`, around
-`raytracer_kernels.h:407-424`) currently does, every time:
+**Blocked, and the LES field is why.** The pre-computed values depend on `k_ext_null`,
+which is a property of the *coarse block*. `Grid::make` does not enforce `nx % kn_x == 0`,
+and this case does not have it: 128/48 and 200/32. Where a coarse face cuts through a fine
+cell, that cell has no single `k_ext_null` and the table is not well defined. Settle this
+first — enforce divisibility in `Grid::make`, or keep the in-kernel arithmetic as a
+fallback — before writing any pre-pass.
 
-- derive `i`, `j`, `k` from the position via `coord_to_index` (a divide plus a cast each);
-- load `Optics_scat scat` — an AoS struct of `{k_sca_gas, k_sca_cld, asy_cld}` — and
-  `k_ext`, so **four values**;
-- recompute `k_sca_tot`, `k_abs`, `f_abs`, `f_no_abs`, `k_ext_no_abs`;
-- `Kokkos::atomic_add` into `atmos_dir` or `atmos_dif` — **on every collision, null ones
-  included**;
-- Russian roulette;
-- decide real vs. null collision with `rng()*k_ext_no_abs >= k_sca_tot`;
-- on a real scatter, pick cloud vs. gas with `rng()*k_sca_tot < scat.k_sca_cld`, then
-  sample the phase function.
+Two smaller notes for whoever writes it. The pre-pass must derive the block index the way
+`coord_to_index` does on the kn grid, **not** the way `create_knull_grid`'s overlapping
+`i0..i1` loop does. And the `f_scat` clamp the original plan called for is **unnecessary**:
+in a conservative cell that is its own block's maximum, `k_abs` is exactly zero and
+`f_scat = k_sca_tot/k_ext_null` is `x/x`, which IEEE gives as exactly 1.0. The `8826bde`
+concern was a *systematic* multiplicative shortfall in `weight`, which applies to
+`f_no_abs`; an `f_scat` one ulp short only causes a spurious null collision with
+probability ~1e-7, which costs work, not accuracy.
 
-**Already done** (recent commits, do not redo):
+### Step 2 — mixed precision *(thesis 4.1.9)*
 
-- `8826bde` — the collision test was rewritten as a product, `rng()*k_ext_no_abs >=
-  k_sca_tot`, rather than the ratio it came from. This deliberately removes a division
-  *and* the cancellation the ratio suffers in a cell that is its own block's maximum.
-  `f_abs` is written as `k_abs*k_ext_null_inv`, not the algebraically equal
-  `(k_ext_null - k_abs)/k_ext_null`, so a conservative cell leaves the weight exactly
-  alone.
-- `afa23e1` — the quasi-random launch uses a shift, not a division, onto the lattice.
-- `1fc242b`, `02b6741` — single-precision GPU builds carry no double-precision
-  instructions; fast math is enabled for the ray tracer and nothing else.
-- `373b237` — rays are traced once, not four times.
+Now better motivated than when it was written: §3 says instruction count in the LG queue
+is the limit, and a narrower load is fewer sectors per instruction.
 
-**Still present, and matching a thesis item:**
+Two corrections to the original plan, both of which would otherwise produce wrong answers:
 
-- `Kokkos::fmod` for the cyclic boundary, at `raytracer_kernels.h:378-384` — thesis 4.1.3.
-- The two-vector scatter frame `t1`, `t2` in `scatter()`, `raytracer_kernels.h:218-236` —
-  thesis 4.1.3.
-- `coord_to_index` divides by `ds` — thesis 4.1.8.
-- Unconditional atomics into `atmos_dir`/`atmos_dif` — thesis 4.1.7.
-- No fine-cell caching at all — thesis 4.1.6.
-- Static work split in `launch_photons`, `src/raytracer.cpp:187` — thesis 4.1.2.
+- Store **`f_abs`, not `f_no_abs`**. fp16 spacing at 1.0 is 9.8e-4, and an optically thin
+  cell has `f_abs` of order 1e-4 — storing a number just below 1 quantizes the absorption
+  to nothing and `weight *= f_no_abs` accumulates the error over hundreds of collisions.
+  Near zero, fp16 has ample relative precision. Reconstruct `1 - f_abs` in the kernel.
+- Round **`k_null` toward +∞**. Round-to-nearest can put it below the true block maximum,
+  which breaks the majorant: `k_abs > k_ext_null`, negative `f_no_abs`, and a biased result
+  rather than a noisy one.
 
-**The optics pipeline** already runs per g-point, inside `Raytracer::trace`:
+### Step 3 — work stealing *(thesis 4.1.2, partial)*
 
-```
-src/raytracer.cpp:340   bundle_optics(...)        -> k_ext, scat  (per fine cell)
-src/raytracer.cpp:342   bundle_optics_tod(...)    -> the lumped top cell
-src/raytracer.cpp:345   create_knull_grid(...)    -> k_null       (per coarse block)
-src/raytracer.cpp:419   launch_photons<...>(...)
-```
+Still unmeasured, and still the item I would expect least from: with hundreds of photons
+per thread the per-thread path length concentrates as 1/√N, so the tail the thesis'
+block-wide atomic counter removes is small for us. Instrument max-versus-mean steps per
+thread before committing to a `TeamPolicy` rewrite. If it is done, the constraint is the
+Sobol stream, not the counter — `qrng_offset` must still give each photon a contiguous,
+non-overlapping slice.
 
-A pre-processing kernel therefore slots in as a fourth call, **after** `create_knull_grid`
-and before `launch_photons`, with no restructuring of the call sequence.
+### Dead
 
-**Three differences from the thesis' code** that shape the port:
-
-1. **No aerosols.** `Optics_scat` is `{k_sca_gas, k_sca_cld, asy_cld}`. The two thresholds
-   of 4.1.4 collapse to a single `p_cld = k_sca_cld / k_sca_tot`. Smaller win than the
-   thesis reports.
-
-2. **Storage does not shrink — the hot path does.** We load four values per collision
-   today. The pre-computed table is also four values per cell
-   (`f_no_abs`, `f_scat`, `p_cld`, `asy_cld`), but the **null-collision path, by far the
-   most common, needs only the first two**, and `asy_cld` is touched only on a cloud
-   scatter, the rarest branch. The gain comes from **splitting the arrays along the right
-   line**: a hot pair (8 bytes in single precision, one 64-bit load) plus a cold pair —
-   rather than today's `{k_ext} + {k_sca_gas, k_sca_cld, asy_cld}` split, which forces the
-   kernel to touch both.
-
-3. **`f_scat` reintroduces the division that `8826bde` removed.** Pre-computing
-   `f_scat = k_sca_tot / (k_ext_null - k_abs)` moves that division into a coalesced
-   pre-pass where it can be done carefully — fine in itself — but a conservative cell that
-   *is* its block's maximum should give exactly `1.0` and will instead land a rounding
-   short, and that shortfall accumulates over a scattering photon's many collisions.
-   Guard it (see step 2 below). `f_no_abs` is safe to pre-compute in the form we already
-   use.
-
-**One coupling to respect:** `f_no_abs` and `f_scat` depend on `k_ext_null`, i.e. on the
-coarse block. Each fine cell sits in exactly one block, so the table is well defined — but
-it is invalidated by any change to the `kn` grid, and the pre-pass must run *after*
-`create_knull_grid`, never before. The lumped top-of-domain cell from `bundle_optics_tod`
-must go through the same pre-pass.
+- **§4.1.1, Sobol.** Priced at 3–6 percent, costs 42 percent more photons. Closed.
+- **§4.1.6 as a cache.** 6 percent hit rate on RCEMIP. The registers it costs are already
+  spent on the accumulator, so it stays in the code, but there is nothing more here.
+- **Trimming the accumulator's registers.** Measured, slower. See §4.
+- **§4.2–4.7, remapping.** Lost in the thesis, and collides with convention 3.
 
 ---
 
-## 4. The plan
+## 6. Against rte-rrtmgp-cpp
 
-Ordered so that each step is independently verifiable with `pytest tests`, and so that no
-step has to be undone by a later one.
+Same field, same 112 g-points, same sun, same GPU:
 
-### Step 1 — Fine-cell caching and contribution accumulation *(thesis 4.1.6 + 4.1.7)*
+| | best of 3 |
+|---|---|
+| `rte-rrtmgp-cpp` `test_rte_rrtmgp_rt` | 3352.1 ms |
+| rte3d `d99169b` | 2838.1 ms |
+| rte3d `6e1395a` | ~2660.9 ms |
 
-Do these two together: they key off the same test, "did the fine cell change?".
+The port was already ~15 percent ahead of the original before this exercise and is ~26
+percent ahead after — while carrying the single-frontend constraint, with no separate
+`src_cuda_rt` tree.
 
-- In `trace_photons`, hold in registers: the last fine-cell linear index, the last
-  `Photon_kind`, an absorption accumulator, and the last cell's optical values.
-- After computing `i`, `j`, `k`, compare the linear index with the cached one. If equal,
-  skip the loads and reuse the cached values.
-- Accumulate `weight*f_abs` into the accumulator instead of calling `Kokkos::atomic_add`.
-  Flush with one atomic when **either** the fine index **or** the photon kind changes.
-- Flush once more after the traversal loop, and — importantly for us — **on every photon
-  reset**, since `reset_photon` is called from three places (surface, top-of-domain,
-  roulette death) and a photon's last deposit must not leak into the next photon's cell.
-- Invalidate the cached index on reset as well.
+Fluxes agree to 0.001–0.07 percent on surface direct, surface diffuse, surface up and
+top-of-domain up, and the absorption profile agrees to 0.00 percent in the mean over the
+200 shared cells. rte3d reports one cell more: index 200 holds the layers above the box,
+lumped.
 
-No interface change, no new arrays. Expected to be the largest single win, since it
-removes atomics from the null-collision path.
-
-### Step 2 — The optics pre-pass *(thesis 4.1.5 + 4.1.4)*
-
-- Add a kernel — `precompute_collision_optics`, say — over `(nz, ncol)` in memory order,
-  called from `Raytracer::trace` **after** `create_knull_grid` (`src/raytracer.cpp:345`).
-- For each fine cell, find its coarse block, read `k_ext_null`, and write:
-  - **hot pair:** `f_no_abs` (in the `8826bde` form, i.e. built from `k_abs/k_ext_null`,
-    not `(k_ext_null - k_abs)/k_ext_null`) and `f_scat`;
-  - **cold pair:** `p_cld = k_sca_cld/k_sca_tot` and `asy_cld`.
-- Store the hot pair as one array of a 2-wide struct and the cold pair as another, so the
-  common path issues one load of 8 bytes.
-- Clamp `f_scat` to exactly `1` when the cell is its own block's maximum and conservative,
-  so the rounding-short case from §3 point 3 cannot bias a long scattering history. Verify
-  against the pre-`8826bde` behaviour, not just against the tests.
-- Handle the lumped top cell from `bundle_optics_tod` in the same pass.
-- In the kernel, replace the arithmetic block with two loads plus `rng() < f_scat` and
-  `rng() < p_cld`.
-- Decide at implementation time whether the pre-pass writes new `Scratch` arrays or
-  overwrites `k_ext`/`scat` in place. New arrays are clearer and let the raw coefficients
-  stay available for debugging; in-place saves memory. **Open question — ask before
-  choosing.**
-
-### Step 3 — `fmod` and the reciprocals *(thesis 4.1.3, 4.1.8)*
-
-Small, local, independent of steps 1–2.
-
-- Replace `Kokkos::fmod` at `raytracer_kernels.h:378-384` with a subtract/add: a photon
-  crosses at most one coarse block per step, so a single conditional correction suffices.
-- Put `1/grid_d` and `1/kn_grid_d` in `Scene` and have `coord_to_index` multiply.
-  **Note:** `static_cast<int>` already emits a round-toward-zero convert, so the thesis'
-  `__float2int_rz` buys nothing — only the division is worth attacking. And it must be
-  done portably: no `__fdividef` in physics code (convention 3). `02b6741` already enabled
-  fast math for this kernel, so measure before and after — part of this may already be
-  had.
-- Optionally simplify the `scatter()` frame construction to drop one of the two vectors.
-
-### Step 4 — Work stealing *(thesis 4.1.2, partial)*
-
-Structural, so it goes last among the algorithmic items.
-
-- Move `launch_photons` from `Kokkos::RangePolicy` to a `TeamPolicy`.
-- Replace the static `photons_per_thread` / `photons_extra` split with a team-scoped
-  atomic counter incremented on each photon launch.
-- Keep the Sobol offset correct: today `qrng_offset` is derived from the thread's static
-  slice of the sequence (`src/raytracer.cpp:192-205`). With a counter, the offset must
-  come from the counter value instead, so that the g-point's photons still cover a
-  contiguous, non-overlapping range of the sequence. **This is the part to get right** —
-  the Sobol stream, not the counter, is the constraint.
-
-### Step 5 — Mixed precision *(thesis 4.1.9)*
-
-Only after step 2, since step 2 decides what is stored.
-
-- Store the hot pair, and `k_null`, as fp16.
-- Needs a storage-type split in `include/types.h` (compute type stays `TF`), which is the
-  one place backend differences are allowed to live.
-- Validate against the Fortran reference, not only against the tests.
+**Set `sza` and `azi` explicitly in the reference's `test.ini`** — `sza = 30`,
+`azi = 108.8975` for this input. Its documented fallback, "mu0 from input file is used if
+sza < 0", does the opposite in the build tested: the conditional is inverted
+(`test_rte_rrtmgp_rt.cu:464`, `:467`, `:1224`, `:1227`, and `test_rte_rrtmgp_bw.cu:584`,
+`:587` — all `if (input_sza < 0)` where `>= 0` is meant), so the file's `mu0` is read and
+then overwritten with `cos(input_sza)` of the negative value. At the default `sza = -1`
+that is `cos(-1°) = 0.9998`, a sun overhead. The whole solve then transmits 15 percent more
+direct beam and runs 6 percent faster, silently. This cost a full investigation before a
+single-g-point check pinned it; do not repeat it.
 
 ---
 
-## 5. Verification
+## 7. Verification
 
-- `cmake --build build && pytest tests` after every step.
-- The ray tracer is stochastic: a step that changes the random stream (step 4 certainly,
-  step 2 possibly) changes results within noise, not bit-for-bit. Compare converged
-  statistics, and against `rte-rrtmgp/` as the correctness oracle, not against the previous
-  build's exact numbers.
-- Steps 1 and 3 should be bit-for-bit identical apart from float summation order in the
-  accumulator — the accumulator changes the *order* of the atomic adds, so small
-  differences there are expected and benign.
-- Commit at the end of each step, once it builds and the tests pass.
-
----
-
-## 6. Open questions
-
-1. **Pre-pass output:** new `Scratch` arrays, or overwrite `k_ext`/`scat` in place?
-2. **`f_scat` exactness:** is the clamp in step 2 acceptable, or should the collision test
-   keep the product form of `8826bde` and pre-compute only `f_no_abs` and the scatter
-   thresholds? The latter is safer and gives up perhaps a third of the item's benefit.
-3. **Step 4 and Sobol:** confirm the intended mapping from the team counter to
-   `qrng_offset` before implementing, since it determines reproducibility.
+- `cmake --build build && pytest tests`, and the same for `build_cuda`, after every step.
+- The tracer is stochastic and the deposits are atomics, so nothing on the GPU is
+  bit-for-bit, not even a build against itself. Establish the run-to-run scatter of one
+  build first, then compare against it — that is how `6e1395a` was shown to be inert.
+- The pytest suite does not catch a wrong sun or wrong optics on a real field. The LES
+  case against rte-rrtmgp-cpp (§6) is the only end-to-end check we have; use it whenever
+  the physics could have moved.
