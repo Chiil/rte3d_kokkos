@@ -95,11 +95,15 @@ namespace Rt_kernels
     }
 
 
-    // Which cell a coordinate falls in, clamped to the last one.
+    // Which cell a coordinate falls in, clamped to the last one. Takes the reciprocal
+    // of the cell size rather than the size itself: the walk asks this question at
+    // every collision, and a multiplication is what a division would be lowered to
+    // anyway, but only where the compiler can see the divisor is loop-invariant.
+    // The cast rounds toward zero, which is the rounding this wants.
     KOKKOS_INLINE_FUNCTION
-    int coord_to_index(const TF s, const TF ds, const int ntot)
+    int coord_to_index(const TF s, const TF ds_inv, const int ntot)
     {
-        const int n = static_cast<int>(s/ds);
+        const int n = static_cast<int>(s*ds_inv);
         return n < ntot ? n : ntot - 1;
     }
 
@@ -130,9 +134,11 @@ namespace Rt_kernels
 
         Vector<int> grid_cells;
         Vector<TF> grid_d;
+        Vector<TF> grid_d_inv;
         Vector<TF> grid_size;
         Vector<int> kn_grid;
         Vector<TF> kn_grid_d;
+        Vector<TF> kn_grid_d_inv;
 
         Vector<TF> sun_direction;
         TF inc_dir = TF(0.);
@@ -282,9 +288,9 @@ namespace Rt_kernels
             // the photon may go before it has to be looked up again.
             if (d_max == TF(0.))
             {
-                i_n = coord_to_index(photon.position.x, s.kn_grid_d.x, s.kn_grid.x);
-                j_n = coord_to_index(photon.position.y, s.kn_grid_d.y, s.kn_grid.y);
-                k_n = coord_to_index(photon.position.z, s.kn_grid_d.z, s.kn_grid.z);
+                i_n = coord_to_index(photon.position.x, s.kn_grid_d_inv.x, s.kn_grid.x);
+                j_n = coord_to_index(photon.position.y, s.kn_grid_d_inv.y, s.kn_grid.y);
+                k_n = coord_to_index(photon.position.z, s.kn_grid_d_inv.z, s.kn_grid.z);
 
                 const TF sx = Kokkos::abs((photon.direction.x > 0
                         ? (i_n+1)*s.kn_grid_d.x - photon.position.x
@@ -325,8 +331,8 @@ namespace Rt_kernels
                     photon.position.z = eps();
                     d_max = TF(0.);
 
-                    const int i = coord_to_index(photon.position.x, s.grid_d.x, s.grid_cells.x);
-                    const int j = coord_to_index(photon.position.y, s.grid_d.y, s.grid_cells.y);
+                    const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
+                    const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
                     const int ij = s.column(i, j);
 
                     if (photon.kind == Photon_kind::Direct)
@@ -359,8 +365,8 @@ namespace Rt_kernels
                     // Out of the top: score it and start a new photon.
                     d_max = TF(0.);
 
-                    const int i = coord_to_index(photon.position.x, s.grid_d.x, s.grid_cells.x);
-                    const int j = coord_to_index(photon.position.y, s.grid_d.y, s.grid_cells.y);
+                    const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
+                    const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
                     Kokkos::atomic_add(&s.tod_up(s.column(i, j)), weight);
 
                     reset_photon(photon, weight, photons_shot, photons_to_shoot, s, qrng, rng);
@@ -376,12 +382,17 @@ namespace Rt_kernels
                         photon.position.x += photon.direction.x > 0 ? s_min : -s_min;
                         photon.position.y += photon.direction.y > 0 ? s_min : -s_min;
 
-                        photon.position.x = Kokkos::fmod(photon.position.x, s.grid_size.x);
-                        if (photon.position.x < TF(0.))
+                        // A step ends on the face of the block it started in, so a
+                        // photon leaves the domain by at most one nudge and the wrap
+                        // is one subtraction or one addition, not a modulo.
+                        if (photon.position.x >= s.grid_size.x)
+                            photon.position.x -= s.grid_size.x;
+                        else if (photon.position.x < TF(0.))
                             photon.position.x += s.grid_size.x;
 
-                        photon.position.y = Kokkos::fmod(photon.position.y, s.grid_size.y);
-                        if (photon.position.y < TF(0.))
+                        if (photon.position.y >= s.grid_size.y)
+                            photon.position.y -= s.grid_size.y;
+                        else if (photon.position.y < TF(0.))
                             photon.position.y += s.grid_size.y;
                     }
 
@@ -411,9 +422,9 @@ namespace Rt_kernels
                             : Kokkos::max(photon.position.y + dy, j_n*s.kn_grid_d.y + s_min);
                 }
 
-                const int i = coord_to_index(photon.position.x, s.grid_d.x, s.grid_cells.x);
-                const int j = coord_to_index(photon.position.y, s.grid_d.y, s.grid_cells.y);
-                const int k = coord_to_index(photon.position.z, s.grid_d.z, s.grid_cells.z);
+                const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
+                const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
+                const int k = coord_to_index(photon.position.z, s.grid_d_inv.z, s.grid_cells.z);
                 const int ij = s.column(i, j);
 
                 const Optics_scat scat = s.scat(k, ij);

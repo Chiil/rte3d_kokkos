@@ -378,6 +378,14 @@ void Raytracer::trace_rays(
                                  scene.grid_size.y/grid.kn_y,
                                  scene.grid_size.z/grid.kn_z};
 
+    // The walk indexes cells by multiplying with these rather than dividing.
+    scene.grid_d_inv = Vector<TF>{TF(1.)/scene.grid_d.x,
+                                  TF(1.)/scene.grid_d.y,
+                                  TF(1.)/scene.grid_d.z};
+    scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,
+                                     TF(1.)/scene.kn_grid_d.y,
+                                     TF(1.)/scene.kn_grid_d.z};
+
     // The sun's direction of travel. The azimuth is measured from north and increases
     // clockwise, as the case files give it, so it turns into the mathematical
     // convention by the quarter turn below. Reference: raytracer_sw.cu.
