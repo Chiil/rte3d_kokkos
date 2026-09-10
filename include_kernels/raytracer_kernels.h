@@ -272,6 +272,7 @@ namespace Rt_kernels
         TF tau = TF(0.);
         TF d_max = TF(0.);
         TF k_ext_null = TF(0.);
+        TF k_ext_null_inv = TF(0.);
         bool transition = false;
         int i_n = 0, j_n = 0, k_n = 0;
 
@@ -297,6 +298,7 @@ namespace Rt_kernels
 
                 d_max = independent_column ? sz : Kokkos::min(sx, Kokkos::min(sy, sz));
                 k_ext_null = s.k_null(k_n, j_n, i_n);
+                k_ext_null_inv = TF(1.)/k_ext_null;
             }
 
             // A photon that crossed a block face keeps the optical depth it had left.
@@ -304,7 +306,7 @@ namespace Rt_kernels
                 tau = sample_tau(rng());
             transition = false;
 
-            const TF dn = Kokkos::max(eps(), tau / k_ext_null);
+            const TF dn = Kokkos::max(eps(), tau*k_ext_null_inv);
 
             if (dn >= d_max)
             {
@@ -417,17 +419,31 @@ namespace Rt_kernels
                 const Optics_scat scat = s.scat(k, ij);
                 const TF k_ext = s.k_ext(k, ij);
                 const TF k_sca_tot = scat.k_sca_gas + scat.k_sca_cld;
-                const TF ssa_tot = k_sca_tot / k_ext;
 
                 // Absorption is taken out of the weight rather than sampled, which is
                 // the variance reduction of Iwabuchi (2006). The null part of the
-                // extinction absorbs nothing, hence the k_ext/k_ext_null factor.
-                const TF f_no_abs = TF(1.) - (TF(1.) - ssa_tot)*(k_ext/k_ext_null);
+                // extinction absorbs nothing, so of the extinction the transport
+                // marches on, only this cell's absorption takes anything out of the
+                // weight.
+                //
+                // The fraction absorbed is written as k_abs/k_ext_null rather than
+                // the algebraically equal (k_ext_null - k_abs)/k_ext_null, so that a
+                // conservative cell, where k_abs is exactly zero, leaves the weight
+                // exactly alone: the second form would multiply k_ext_null by its own
+                // rounded reciprocal and come back a rounding short of one, and that
+                // shortfall accumulates over a scattering photon's many collisions.
+                const TF k_abs = k_ext - k_sca_tot;
+                const TF f_abs = k_abs*k_ext_null_inv;
+                const TF f_no_abs = TF(1.) - f_abs;
+
+                // What the extinction leaves once the absorption is out of it. Never
+                // negative, k_ext_null being the largest extinction in the block.
+                const TF k_ext_no_abs = k_ext_null - k_abs;
 
                 if (photon.kind == Photon_kind::Direct)
-                    Kokkos::atomic_add(&s.atmos_dir(k, ij), weight*(TF(1.) - f_no_abs));
+                    Kokkos::atomic_add(&s.atmos_dir(k, ij), weight*f_abs);
                 else
-                    Kokkos::atomic_add(&s.atmos_dif(k, ij), weight*(TF(1.) - f_no_abs));
+                    Kokkos::atomic_add(&s.atmos_dif(k, ij), weight*f_abs);
 
                 weight *= f_no_abs;
                 if (weight < w_thres())
@@ -435,8 +451,12 @@ namespace Rt_kernels
 
                 if (weight > TF(0.))
                 {
-                    // Null collision, or a real one.
-                    if (rng() >= ssa_tot / (ssa_tot - TF(1.) + k_ext_null/k_ext))
+                    // Null collision, or a real one: of the extinction that did
+                    // not absorb, the scattering part is what deflects the photon.
+                    // Written as a product rather than the ratio it came from, which
+                    // spares the division and, in a cell that is the block's own
+                    // maximum, the cancellation that ratio suffers.
+                    if (rng()*k_ext_no_abs >= k_sca_tot)
                     {
                         d_max -= dn;
                     }
