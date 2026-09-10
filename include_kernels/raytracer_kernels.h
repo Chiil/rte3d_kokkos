@@ -138,11 +138,15 @@ namespace Rt_kernels
         TF inc_dir = TF(0.);
         TF inc_dif = TF(0.);
 
-        // The horizontal extent the quasi-random sequence covers: the next power of
+        // The horizontal extent the quasi-random sequence covers is the next power of
         // two above the grid, since a Sobol pair maps onto a power-of-two lattice.
         // Draws that land outside the grid are thrown away, which is what makes the
         // photon count per pixel come out right for a grid that is not a power of two.
-        unsigned int qrng_nx = 1, qrng_ny = 1;
+        //
+        // Held as the shift that takes a 32-bit draw onto that lattice rather than as
+        // the extent itself: the extent is a power of two, so the mapping is a shift,
+        // and integer division is the one thing fast math does not help with.
+        unsigned int qrng_shift_x = 31, qrng_shift_y = 31;
 
         Rand::Qrng_vectors qrng;
 
@@ -165,8 +169,8 @@ namespace Rt_kernels
         while (true)
         {
             qrng.next(rx, ry);
-            i = static_cast<int>(rx / (0xffffffffu/s.qrng_nx + 1));
-            j = static_cast<int>(ry / (0xffffffffu/s.qrng_ny + 1));
+            i = static_cast<int>(rx >> s.qrng_shift_x);
+            j = static_cast<int>(ry >> s.qrng_shift_y);
 
             ++photons_shot;
             if (i < s.grid_cells.x && j < s.grid_cells.y)

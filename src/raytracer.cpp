@@ -46,6 +46,19 @@ namespace
     }
 
 
+    // The shift that maps a 32-bit draw onto a lattice of p columns, p a power of two:
+    // dividing by 0xffffffff/p + 1 is exactly a shift by 32 - log2(p), and the walk
+    // takes the shift so that no integer division sits in the photon launch.
+    unsigned int pow2_shift(const unsigned int p)
+    {
+        unsigned int shift = 32;
+        for (unsigned int q=1; q<p; q *= 2)
+            --shift;
+
+        return shift;
+    }
+
+
     // Extinction and the two scattering coefficients per cell, from the optical depths
     // of one g-point. Gas and cloud stay apart: a scattering event has to pick which
     // of the two did it, and each has its own phase function.
@@ -376,15 +389,18 @@ void Raytracer::trace_rays(
 
     scene.inc_dir = inc_dir;
     scene.inc_dif = inc_dif;
-    scene.qrng_nx = next_pow2(grid.nx);
-    scene.qrng_ny = next_pow2(grid.ny);
+    const unsigned int qrng_nx = next_pow2(grid.nx);
+    const unsigned int qrng_ny = next_pow2(grid.ny);
+
+    scene.qrng_shift_x = pow2_shift(qrng_nx);
+    scene.qrng_shift_y = pow2_shift(qrng_ny);
     scene.qrng = scratch.qrng.view();
 
     // Photons are drawn over the power-of-two lattice the quasi-random sequence
     // covers, and the ones that land outside the grid are thrown away, which is what
     // leaves photons_per_pixel of them in every pixel that exists.
     const long long photons_total =
-            static_cast<long long>(photons_per_pixel)*scene.qrng_nx*scene.qrng_ny;
+            static_cast<long long>(photons_per_pixel)*qrng_nx*qrng_ny;
 
     // Enough threads to fill the machine, but never more than there are photons.
     #ifdef USEGPU
