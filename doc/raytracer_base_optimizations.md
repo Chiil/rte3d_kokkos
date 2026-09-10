@@ -86,36 +86,52 @@ cuobjdump -res-usage build_cuda/src/CMakeFiles/rte3d_core.dir/raytracer.cpp.o \
 
 ---
 
-## 3. Where the time goes
-
-Nsight Compute on `launch_photons`, LES field, one g-point:
+## 3. Where the time goes — and it is two different places
 
 ```
 ncu --kernel-name-base demangled --kernel-name regex:launch_photons \
-    --launch-count 1 --launch-skip 3 --section SpeedOfLight --section WarpStateStats \
-    python cases/user/run_case.py cases/les_cloudfield/les_cloudfield --photons-per-pixel 32
+    --launch-count 1 --launch-skip 3 --metrics <...> \
+    python cases/user/run_case.py <case>
 ```
 
-| | |
-|---|---|
-| L1/TEX throughput | **99.1%** |
-| DRAM throughput | 3.5% |
-| L2 throughput | 4.1% |
-| warp cycles per issued instruction | 24.6 |
-| — of which **LG throttle** | **18.2, or 74%** |
-| theoretical / achieved occupancy | 75% / 70.4%, register-limited |
-| average active threads per warp | 26.6 of 32 |
-| global load requests / local | 267.2M / 5.1M |
+**The two cases are in different regimes, and a profile of one says nothing about the
+other.** This is the single most important thing in this file; the first version of it was
+written from the LES field alone and drew the wrong general conclusion.
 
-**The kernel is bound by the L1 queue that load and store instructions sit in.** Not by
-bandwidth — DRAM is idle at 3.5 percent, the optics fit in cache. What costs is the
-*number of memory instructions issued*, and 74 percent of all stall cycles are spent
-waiting for that queue to drain.
+At production settings, 256 photons per pixel, on `6e1395a`:
 
-Everything that worked in §4 attacks that queue. Everything that failed does not.
+| | LES cumulus | RCEMIP |
+|---|---|---|
+| L1 hit rate | **93.0%** | **43.9%** |
+| L2 hit rate | 99.0% | 49.6% |
+| L1/TEX throughput | **98.5%** | 28.6% |
+| DRAM throughput | 3.4% | **35.8%** |
+| LG throttle, cycles per issue | **17.0** | 0.30 |
 
-Two secondary limits, both real, neither yet touched: occupancy capped at 75 percent by
-registers, and warp efficiency at 83 percent — the divergence the thesis' remapping half
+**LES cumulus is L1-queue bound.** 20 m cells mean a photon's free path spans few cells, so
+consecutive collisions keep hitting the same lines: the optics stay resident, DRAM idles,
+and what costs is the *number of memory instructions issued* — 17 of the 24.6 cycles
+between issues are spent waiting for the load/store queue to drain.
+
+**RCEMIP is DRAM-latency bound.** 100 m cells over a deep domain scatter the photons, the
+working set stops fitting, and the L1 hit rate halves. DRAM sits at 36 percent of peak, so
+it is not bandwidth-saturated — it is the *latency* of those misses, with only 36 resident
+warps to hide it.
+
+Two consequences worth internalizing:
+
+- An item that removes memory *instructions* pays on the LES field. An item that removes
+  memory *traffic* pays on RCEMIP. `6e1395a` does both, which is why it is the only item
+  that won on both cases.
+- **Photon count does not change the regime; the scene does.** The LES field profiles the
+  same at 32 and 256 photons per pixel (LG throttle 18.2 and 17.0). Do not conclude from a
+  cheap low-photon profile — but do not assume the difference is the photon count either.
+
+Also note the synthetic scene in the throwaway `bench_rt.py` harness lands in the RCEMIP
+regime (L1 hit 31%), not the LES one. It is not a substitute for either case.
+
+Two secondary limits, on both cases, neither yet touched: occupancy capped at 75 percent
+by registers, and warp efficiency at 83 percent — the divergence the thesis' remapping half
 chased and failed to profit from.
 
 ---
@@ -136,7 +152,7 @@ line above.
 | 4.1.7 | Accumulation of atmospheric contributions | **Done** (`2744af2`) — 11% RCEMIP, 0% LES |
 | 4.1.8 | Float-to-int and fast approximation | **Done** (`dadcda3`) — 5.5% CPU, ~0 GPU |
 | 4.1.9 | Mixed precision (fp16 storage) | Not attempted; caveats in §5 |
-| — | **Widen the optics load** *(not in the thesis)* | **Done** (`6e1395a`) — **22.9% RCEMIP** |
+| — | **One sector per collision, not two** *(not in the thesis)* | **Done** (`6e1395a`) — **22.9% RCEMIP** |
 
 ### The running totals
 
@@ -238,9 +254,10 @@ The thesis reports "no significant effect on output" for this change. On our
 direct-beam surface flux there is one, and that is the flux the cases care most about.
 
 **Keep Sobol.** The local memory it costs is only ~2 percent of L1 requests (5.1M of
-272M), which is exactly why removing it gains so little.
+272M, measured on the LES field), which is exactly why removing it gains so little even
+where the L1 queue is the limit.
 
-### The item that was not in the thesis — one wide optics load *(done, `6e1395a`)*
+### The item that was not in the thesis — one sector per collision *(done, `6e1395a`)*
 
 The SASS at `2744af2` had **440 `LDG.E` and not one wide load**. `k_ext` lived in its own
 array beside a twelve-byte `Optics_scat`, so every collision issued **four separate 32-bit
@@ -258,11 +275,25 @@ It is numerically inert. The largest difference against the previous commit is 1
 surface flux of 700 — and two runs of the *same* build differ by exactly the same 1.8e-4,
 because the deposits are atomics and the GPU does not order them twice the same way.
 
-**Unresolved:** why RCEMIP gains five times what the LES field gains. The LES g-point
-profiled in §3 moved only 9.57 → 9.50 ms and its L1 request count barely changed, which
-fits the LES field's 4 percent but not RCEMIP's 23. The plausible mechanism is locality —
-the four values now share one 32-byte sector where they used to sit in two arrays — but
-that is a guess until a sector-level profile of an RCEMIP g-point says so.
+**Why RCEMIP gains five times what the LES field gains**, measured at 256 photons per
+pixel on the real case, one g-point:
+
+| | pre-merge | merged | |
+|---|---|---|---|
+| kernel duration | 102.49 ms | 76.06 ms | −25.8% |
+| L1 sectors, global loads | 1190.8M | 766.7M | **−35.6%** |
+| DRAM bytes read | 15.81 GB | 10.04 GB | **−36.5%** |
+| L2 hit rate | 44.8% | 49.6% | +4.9 pts |
+
+One collision used to touch **two** sectors, one in each array; it now touches **one**. The
+sector count and the DRAM traffic fall together, one for one, and the runtime follows.
+RCEMIP is where that matters because RCEMIP is the case that misses in L1 (§3); the LES
+field already had its optics resident, so it only collected the fewer-instructions half of
+the change, and got 4 percent.
+
+So this item is not really "one instruction instead of four" — that is what it looks like
+in the SASS. It is **one cache sector instead of two**, which is why it is worth five times
+more where the cache is under pressure.
 
 ---
 
@@ -293,8 +324,12 @@ probability ~1e-7, which costs work, not accuracy.
 
 ### Step 2 — mixed precision *(thesis 4.1.9)*
 
-Now better motivated than when it was written: §3 says instruction count in the LG queue
-is the limit, and a narrower load is fewer sectors per instruction.
+**This is now the strongest item left, and §3 says why.** RCEMIP is bound by DRAM traffic,
+and `6e1395a` bought 26 percent on that case purely by halving the sectors a collision
+touches. Halving the stored width does the same thing again: an `Optics_cell` in fp16 is
+8 bytes, so two cells share one 32-byte sector where one cell needs one now. It also cuts
+the instruction count on the LES field's L1 queue. It is the one remaining change that
+pays in both regimes.
 
 Two corrections to the original plan, both of which would otherwise produce wrong answers:
 
