@@ -4,10 +4,6 @@
 #include <vector>
 
 #include "gas_concs.h"
-#include "raytracer.h"
-#include "raytracer_lw.h"
-#include "rte_lw.h"
-#include "rte_sw.h"
 #include "source_functions.h"
 #include "types.h"
 
@@ -201,6 +197,14 @@ namespace Gas_optics
             const Array_3d<const TF>& col_gas,      // (ngas+1, nlay, ncol)
             const Interp_state& state);
 
+    // The same, taking its arguments from a loaded k-distribution and allocating the
+    // state. Every caller that has a Kdist_gas in hand wants this one.
+    Interp_state interpolate(
+            const Kdist_gas& k,
+            const Array_2d<const TF>& play,      // (nlay, ncol)
+            const Array_2d<const TF>& tlay,      // (nlay, ncol)
+            const Array_3d<const TF>& col_gas);  // (ngas+1, nlay, ncol)
+
     // Absorption optical depth from major and minor gases, for one g-point.
     // Overwrites tau. The reference accumulates into it, but every caller here gives
     // the kernel a g-point slice of its own, so the accumulation only ever bought a
@@ -276,235 +280,9 @@ namespace Gas_optics
     // Everything in the result is 0-based, unlike the reference.
     Kdist_gas load(const Kdist_file& file, const Gas_concs& available_gases);
 
-    // ---- the fused per-g-point solve --------------------------------------------
-    //
-    // solve_lw and solve_sw run gas optics, the cloud increment and transport for one
-    // g-point at a time and accumulate the fluxes, so no array in the whole pipeline
-    // carries a g-point dimension. The loop body is public as solve_lw_gpt /
-    // solve_sw_gpt, for callers that want a single g-point -- the Monte Carlo ray
-    // tracer, and the tests.
-
-    // The atmosphere a solve sees. col_dry may be empty, in which case it is derived
-    // from plev and the water vapour, as the reference does. tlev and tsfc are
-    // longwave only.
-    struct Atmosphere
-    {
-        Array_2d<const TF> play;     // (nlay, ncol)
-        Array_2d<const TF> plev;     // (nlev, ncol)
-        Array_2d<const TF> tlay;     // (nlay, ncol)
-        Array_2d<const TF> tlev;     // (nlev, ncol)
-        Array_1d<const TF> tsfc;     // (ncol)
-        Array_2d<const TF> col_dry;  // (nlay, ncol), may be empty
-    };
-
-    // Cloud (or aerosol) optical properties, resolved by band. Band-resolved rather
-    // than by g-point because that is how the lookup tables give them; the g-point
-    // loop takes the slice for its own band. Empty tau means no clouds. ssa and g are
-    // empty for an absorption-only set, as the longwave all-sky case uses.
-    struct Band_props
-    {
-        Array_3d<const TF> tau;   // (nbnd, nlay, ncol)
-        Array_3d<const TF> ssa;   // (nbnd, nlay, ncol), may be empty
-        Array_3d<const TF> g;     // (nbnd, nlay, ncol), may be empty
-    };
-
-    // Everything a per-g-point solve needs that does not depend on the g-point, plus
-    // the one g-point's working set that every iteration reuses. Built by prepare().
-    struct Solve_state
-    {
-        Array_3d<TF> col_gas;   // (ngas+1, nlay, ncol)
-        Interp_state interp;
-        int sfc_lay = 0;        // 0-based layer adjacent to the surface
-
-        // One g-point's optical properties and Planck sources, overwritten each
-        // iteration. This is the whole point: (nlay, ncol), never (ngpt, nlay, ncol).
-        Array_2d<TF> tau, ssa, g;
-        Array_2d<TF> lay_source, lev_source, pfrac;
-        Array_1d<TF> sfc_source, sfc_source_jac;
-
-        // This g-point's fluxes, before they are accumulated.
-        Array_2d<TF> flux_up, flux_dn, flux_dir;
-
-        // The transport solvers' own working set, likewise reused every iteration.
-        // Only the one the band in question uses is allocated.
-        Rte_lw::Noscat_scratch lw_noscat;
-        Rte_lw::Two_stream_scratch lw_2stream;
-        Rte_sw::Two_stream_scratch sw_2stream;
-
-        Source_func_lw sources() const
-        { return Source_func_lw{lay_source, lev_source, sfc_source, sfc_source_jac}; }
-    };
-
-    // Column gas amounts and the table interpolation, once for the whole spectrum,
-    // plus every array the per-g-point loop reuses. do_lw allocates the Planck
-    // sources and finds the surface layer; weights is the longwave quadrature, whose
-    // host mirror the no-scattering solver needs, and is ignored otherwise.
-    // lw_scattering allocates the two-stream working set instead of the quadrature's.
-    Solve_state prepare(
-            const Kdist_gas& k,
-            const Gas_concs& gas_concs,
-            const Atmosphere& atm,
-            const bool do_lw,
-            const bool do_jacobian = false,
-            const Array_1d<const TF>& weights = Array_1d<const TF>(),
-            const bool lw_scattering = false);
-
-    // Where the accumulated fluxes go. The broadband views are required; the by-band
-    // ones may be empty, in which case no by-band reduction is done. dir is shortwave
-    // only, and up_jac longwave only.
-    struct Fluxes_out
-    {
-        Array_2d<TF> up;          // (nlev, ncol)
-        Array_2d<TF> dn;          // (nlev, ncol)
-        Array_2d<TF> dir;         // (nlev, ncol), shortwave only
-        Array_2d<TF> up_jac;      // (nlev, ncol), longwave only, may be empty
-
-        Array_3d<TF> up_byband;   // (nbnd, nlev, ncol), may be empty
-        Array_3d<TF> dn_byband;
-        Array_3d<TF> dir_byband;
-    };
-
-    // One g-point, end to end: absorption optical depth, Planck sources, the cloud
-    // increment, and transport. The fluxes go wherever the sinks say: a caller after a
-    // single g-point points them at state.flux_up / flux_dn, while solve_lw below
-    // points them straight at the spectral totals, so that no per-g-point flux is ever
-    // written and read back. flux_up_jac is accumulated into if it is not empty.
-    //
-    // secants is (nmus, ncol) and shared by every g-point, as the reference's
-    // rte_lw fills it. sfc_emis and inc_flux are (ngpt, ncol); this takes their
-    // g-point slices.
-    void solve_lw_gpt(
-            const Kdist_gas& k,
-            const Solve_state& state,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const int igpt,
-            const Array_map_2d<const TF>& secants,   // (nmus, ncol)
-            const Array_1d<const TF>& weights,       // (nmus)
-            const Array_map_1d<const TF>& sfc_emis,  // (ncol)
-            const Array_map_1d<const TF>& inc_flux,  // (ncol), may be empty
-            const Band_props& clouds,
-            const bool scattering,
-            const Flux_sink& flux_up,
-            const Flux_sink& flux_dn,
-            const Array_2d<TF>& flux_up_jac);        // (nlev, ncol), may be empty
-
-    // As above for the shortwave. flux_dn and flux_dir need their g-point arrays: the
-    // adding sweep and the direct beam both read back what they wrote a level before.
-    void solve_sw_gpt(
-            const Kdist_gas& k,
-            const Solve_state& state,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const int igpt,
-            const Array_2d<const TF>& mu0,               // (nlay, ncol)
-            const Array_map_1d<const TF>& sfc_alb_dir,   // (ncol)
-            const Array_map_1d<const TF>& sfc_alb_dif,   // (ncol)
-            const Array_map_1d<const TF>& inc_flux_dir,  // (ncol)
-            const Array_map_1d<const TF>& inc_flux_dif,  // (ncol), may be empty
-            const Band_props& clouds,
-            const Flux_sink& flux_up,
-            const Flux_sink& flux_dn,
-            const Flux_sink& flux_dir);
-
-    // The whole spectrum: prepare, then loop the above and accumulate.
-    void solve_lw(
-            const Kdist_gas& k,
-            const Gas_concs& gas_concs,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const Array_2d<const TF>& secants,     // (nmus, ncol)
-            const Array_1d<const TF>& weights,     // (nmus)
-            const Array_2d<const TF>& sfc_emis,    // (ngpt, ncol)
-            const Array_2d<const TF>& inc_flux,    // (ngpt, ncol), may be empty
-            const Band_props& clouds,
-            const bool scattering,                 // solve with scattering, not by quadrature
-            const Fluxes_out& fluxes);
-
-    void solve_sw(
-            const Kdist_gas& k,
-            const Gas_concs& gas_concs,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const Array_2d<const TF>& mu0,             // (nlay, ncol)
-            const Array_2d<const TF>& sfc_alb_dir,     // (ngpt, ncol)
-            const Array_2d<const TF>& sfc_alb_dif,     // (ngpt, ncol)
-            const Array_2d<const TF>& inc_flux_dir,    // (ngpt, ncol)
-            const Array_2d<const TF>& inc_flux_dif,    // (ngpt, ncol), may be empty
-            const Band_props& clouds,
-            const Fluxes_out& fluxes);
-
-    // The whole shortwave spectrum through the Monte Carlo ray tracer instead of the
-    // two-stream solver. Same gas optics and the same cloud properties; only the
-    // transport differs, and with it the shape of what comes out -- three-dimensional
-    // absorption and boundary fluxes rather than a profile per column.
-    //
-    // The columns are the ray tracer's horizontal grid, ncol = grid.nx*grid.ny with
-    // the column index i + j*nx. The sun is one direction for the whole domain, so
-    // mu0 and azi are scalars, and toa_src is the solar irradiance per g-point on the
-    // host, since the tracer needs it as a number rather than an array.
-    //
-    // Cloud properties are handed to the tracer separately rather than incremented
-    // into the gas ones: a scattering event has to know whether a cloud droplet or a
-    // molecule did it, and the two have different phase functions.
-    void solve_sw_rt(
-            const Kdist_gas& k,
-            const Gas_concs& gas_concs,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const Raytracer::Grid& grid,
-            const int photons_per_pixel,
-            const bool independent_column,
-            const TF mu0,
-            const TF azi,
-            const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
-            const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
-            const Band_props& clouds,
-            const Raytracer::Fluxes_rt& fluxes);
-
-    // The whole longwave spectrum through the Monte Carlo ray tracer instead of the
-    // no-scattering solver, as solve_sw_rt is for the shortwave.
-    //
-    // The columns are the ray tracer's horizontal grid, ncol = grid.nx*grid.ny with
-    // the column index i + j*nx. Clouds are handed to the tracer separately rather
-    // than incremented into the gas optical depth, so that a scattering event can tell
-    // which of the two deflected the photon; clouds.ssa and clouds.g may be empty,
-    // which is a cloud that only absorbs, and is what a longwave case without
-    // scattering wants.
-    //
-    // Layers above the box are lumped into its top cell, emission included. The
-    // reference instead runs the plane-parallel solver over the whole column and feeds
-    // its downward flux at the top of the box in as a scalar; see the note in
-    // raytracer_lw.h.
-    // min_mfp_grid_ratio makes the tracer skip the g-points it cannot learn anything
-    // from. Where the gas is opaque on the scale of a grid cell -- the shortest gas
-    // mean free path in the box below min_mfp_grid_ratio times the horizontal grid
-    // spacing -- a photon is absorbed before it can cross a cell, so there is no
-    // horizontal transport to resolve and the plane-parallel solve is the same answer,
-    // reached with no photons and no Monte Carlo noise. Returns how many g-points were
-    // actually traced. Zero traces everything; the reference's default is 1.
-    //
-    // The fallback solve follows the caller's own scattering switch, so it is the same
-    // solver a plane-parallel run of the case would have used.
-    int solve_lw_rt(
-            const Kdist_gas& k,
-            const Gas_concs& gas_concs,
-            const Atmosphere& atm,
-            const bool top_at_1,
-            const Raytracer_lw::Grid& grid,
-            const int photons_per_pixel,
-            const bool independent_column,
-            const Array_2d<const TF>& sfc_emis,   // (ngpt, ncol)
-            const Array_2d<const TF>& secants,    // (nmus, ncol) for the fallback
-            const Array_1d<const TF>& weights,    // (nmus)
-            const TF min_mfp_grid_ratio,
-            const Band_props& clouds,
-            const bool scattering,
-            const Raytracer_lw::Fluxes_lw& fluxes);
-
     // Full longwave gas optics: interpolation, absorption optical depth and the
     // Planck sources. Reference: ty_gas_optics_rrtmgp%gas_optics for the longwave.
-    // Kept for the kernel-by-kernel tests; the solve above is the way to run a case.
+    // Kept for the kernel-by-kernel tests; Solver::solve_lw is the way to run a case.
     void gas_optics_lw(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -574,5 +352,4 @@ namespace Gas_optics
 
     void init_python_bindings(py::module_& m);
     void init_load_python_bindings(py::module_& m);
-    void init_frontend_python_bindings(py::module_& m);
 }

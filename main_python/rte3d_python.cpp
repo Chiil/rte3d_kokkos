@@ -8,6 +8,7 @@
 #include "fluxes.h"
 #include "gas_optics.h"
 #include "gas_concs.h"
+#include "solver.h"
 #include "cloud_optics.h"
 #include "raytracer.h"
 #include "raytracer_lw.h"
@@ -24,8 +25,8 @@ PYBIND11_MODULE(rte3d_python, m)
     Fluxes::init_python_bindings(m);
     Gas_optics::init_python_bindings(m);
     Gas_optics::init_load_python_bindings(m);
-    Gas_optics::init_frontend_python_bindings(m);
     Gas_concs::init_python_bindings(m);
+    Solver::init_python_bindings(m);
     Clouds::init_python_bindings(m);
     Raytracer::init_python_bindings(m);
     Raytracer_lw::init_python_bindings(m);

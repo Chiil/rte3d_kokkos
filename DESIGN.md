@@ -32,7 +32,8 @@ Two things in `rte-kernels/` are deliberately not ported: `lw_transport_1rescl`,
 approximate-scattering rescaling of Tang et al. 2018 (see the note at the top of
 `src/rte_lw.cpp`), and `zero_array_*`, which `Kokkos::deep_copy` already covers. The
 `rte-frontend/` layer is replaced rather than ported: its class hierarchy becomes the
-plain structs above.
+plain structs above, and the driver that runs a case with them is `include/solver.h`
+(`namespace Solver`), described under *One g-point at a time*.
 
 **Step 2, gas optics — complete.**
 
@@ -61,7 +62,7 @@ coefficient file contains them. Aerosol optics is not started.
 | `include/random.h` | the backend's generators, behind one interface |
 
 A forward, three-dimensional, null-collision tracer, after `raytracer_sw.cu` in
-rte-rrtmgp-cpp. `Gas_optics::solve_sw_rt` drives it the way `solve_sw` drives the
+rte-rrtmgp-cpp. `Solver::solve_sw_rt` drives it the way `solve_sw` drives the
 two-stream solver: same gas optics, same cloud properties, one g-point at a time, only
 the transport differs. Aerosols and the Mie phase function are left out — clouds
 scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP tables give,
@@ -175,7 +176,7 @@ the physics once.
 
 ## One g-point at a time
 
-`Gas_optics::solve_lw` and `solve_sw` are the way to run a case. They loop g-points,
+`Solver::solve_lw` and `solve_sw` are the way to run a case. They loop g-points,
 and for each one compute the optical properties, increment the clouds for that
 g-point's band, run transport, and accumulate the flux. Nothing in that pipeline
 carries a g-point dimension, so the working set is the same whether the
@@ -186,6 +187,11 @@ The loop body is public as `solve_lw_gpt` / `solve_sw_gpt`, for callers that wan
 single g-point — the Monte Carlo ray tracer, and the tests. `Solve_state` holds what
 does not depend on the g-point (the column gas amounts, the table interpolation) plus
 the one working set every iteration reuses.
+
+This driver is its own module, `namespace Solver` in `include/solver.h` and
+`src/solver.cpp`. It is neither gas optics nor transport but the thing that runs both,
+so it sits above `Gas_optics`, which hands it one g-point's optical properties, and
+above `Rte_lw` / `Rte_sw`, whose kernels it drives.
 
 Doing it this way is also why the solvers are fast on a CPU: the vertical recurrences
 become sweeps over layers with the column loop inside them, which is the structure the

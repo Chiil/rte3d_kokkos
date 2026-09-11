@@ -15,6 +15,8 @@ file(GLOB sourcefiles
     "gas_concs_python.cpp"
     "gas_optics_load.cpp"
     "gas_optics_load_python.cpp"
+    "solver.cpp"
+    "solver_python.cpp"
     "cloud_optics.cpp"
     "cloud_optics_python.cpp"
     "random.cpp"

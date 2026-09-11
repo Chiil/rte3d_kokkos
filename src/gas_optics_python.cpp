@@ -1,3 +1,5 @@
+#include <optional>
+
 #include <pybind11/stl.h>
 
 #include "gas_optics.h"
@@ -322,4 +324,80 @@ void Gas_optics::init_python_bindings(py::module_& m)
         "Interpolate and compute the Planck sources. sfc_lay is 0-based. Returns a "
         "dict with lay_source, lev_source, sfc_source and sfc_source_jac, in the "
         "layouts Source_func_lw_spectral uses.");
+
+    m.def("gas_optics_lw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev,
+           const Numpy::In<TF>& tlay, const Numpy::In<TF>& tlev,
+           const Numpy::In<TF>& tsfc,
+           const std::optional<Numpy::In<TF>>& col_dry) -> py::dict
+        {
+            Runtime::get();
+
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+            const auto no_init = Kokkos::WithoutInitializing;
+            Array_3d<TF> tau(Kokkos::view_alloc("tau", no_init), ngpt, nlay, ncol);
+
+            const auto sources = Source_func_lw_spectral::create(ngpt, nlay, ncol, true);
+
+            Gas_optics::gas_optics_lw(
+                    k, gas_concs, play_d,
+                    Numpy::to_device_2d<TF>(plev, "plev"),
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    Numpy::to_device_2d<TF>(tlev, "tlev"),
+                    Numpy::to_device_1d<TF>(tsfc, "tsfc"),
+                    col_dry.has_value() ? Numpy::to_device_2d<TF>(*col_dry, "col_dry")
+                                        : Array_2d<TF>(),
+                    tau, sources);
+            Kokkos::fence();
+
+            py::dict out;
+            out["tau"] = Numpy::from_device(tau);
+            out["lay_source"] = Numpy::from_device(sources.lay_source);
+            out["lev_source"] = Numpy::from_device(sources.lev_source);
+            out["sfc_source"] = Numpy::from_device(sources.sfc_source);
+            out["sfc_source_jac"] = Numpy::from_device(sources.sfc_source_jac);
+
+            return out;
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("play"), py::arg("plev"),
+        py::arg("tlay"), py::arg("tlev"), py::arg("tsfc"), py::arg("col_dry") = py::none(),
+        "Longwave gas optics. Returns tau and the Planck sources, in the layouts the "
+        "longwave solvers take.");
+
+    m.def("gas_optics_sw",
+        [](const Kdist_gas& k, const Gas_concs& gas_concs,
+           const Numpy::In<TF>& play, const Numpy::In<TF>& plev, const Numpy::In<TF>& tlay,
+           const std::optional<Numpy::In<TF>>& col_dry) -> py::tuple
+        {
+            Runtime::get();
+
+            auto play_d = Numpy::to_device_2d<TF>(play, "play");
+            const int nlay = static_cast<int>(play_d.extent(0));
+            const int ncol = static_cast<int>(play_d.extent(1));
+            const int ngpt = static_cast<int>(k.kmajor.extent(0));
+
+            const auto no_init = Kokkos::WithoutInitializing;
+            Array_3d<TF> tau(Kokkos::view_alloc("tau", no_init), ngpt, nlay, ncol);
+            Array_3d<TF> ssa(Kokkos::view_alloc("ssa", no_init), ngpt, nlay, ncol);
+
+            Gas_optics::gas_optics_sw(
+                    k, gas_concs, play_d,
+                    Numpy::to_device_2d<TF>(plev, "plev"),
+                    Numpy::to_device_2d<TF>(tlay, "tlay"),
+                    col_dry.has_value() ? Numpy::to_device_2d<TF>(*col_dry, "col_dry")
+                                        : Array_2d<TF>(),
+                    tau, ssa);
+            Kokkos::fence();
+
+            return py::make_tuple(Numpy::from_device(tau), Numpy::from_device(ssa));
+        },
+        py::arg("kdist"), py::arg("gas_concs"), py::arg("play"), py::arg("plev"),
+        py::arg("tlay"), py::arg("col_dry") = py::none(),
+        "Shortwave gas optics. Returns (tau, ssa), where tau is the total extinction "
+        "and ssa the Rayleigh fraction of it.");
 }
