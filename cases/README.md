@@ -379,18 +379,36 @@ instead of being written per g-point and read straight back. `git log` has the
 measurement for each.
 
 What is left is the column sweeps. Against `rte-rrtmgp-cpp`'s CUDA solver on its own
-RCEMIP case --- the same input file, 4096 columns, both single precision --- that is
-now the whole of the gap:
+RCEMIP case --- the same input file, 4096 columns, plane-parallel, clear sky, both
+single precision on one RTX A4500 --- that is now the whole of the gap:
 
-| stage | rte3d | rte-rrtmgp-cpp |
-|---|---|---|
-| longwave, optical depth + Planck | 35.3 ms | 33.3 ms |
-| longwave, transport | **70.1 ms** | **38.3 ms** |
-| shortwave, optical depth + Rayleigh | 22.5 ms | 19.0 ms |
-| shortwave, transport | **156 ms** | **40.5 ms** |
-| total, longwave / shortwave | 120 / 198 ms | 74 / 75 ms |
+| stage | rte3d | rte-rrtmgp-cpp | ratio |
+|---|---|---|---|
+| longwave, optical depth + Planck | 34.5 ms | 28.0 ms | 1.23 |
+| longwave, transport | **68.3 ms** | **42.0 ms** | **1.63** |
+| shortwave, optical depth + Rayleigh | 22.7 ms | 28.4 ms | 0.80 |
+| shortwave, transport | **155 ms** | **45.2 ms** | **3.42** |
+| GPU kernel time, longwave / shortwave | 103 / 177 ms | 70 / 74 ms | |
+| what the driver's own timer reports | 120 / 198 ms | 73 / 74 ms | |
 
-Gas optics is at parity. The sweeps are not, and the launch geometry says why: it
+Neither driver times a stage on its own, so the split is GPU kernel time from an `nsys`
+kernel summary, attributed by kernel name: gas optics is rte3d's `compute_tau`,
+`compute_planck_source` and `interpolation` against the reference's
+`interpolation_kernel`, `gas_optical_depths_*`, `Planck_source_kernel`,
+`compute_tau_rayleigh_kernel`, `combine_abs_and_rayleigh_kernel` and the
+`zero_array_kernel` that clears their output; transport is everything in the solver, and the reference's `sum_broadband_kernel` counts with it since rte3d
+accumulates the fluxes inside its sweeps rather than afterwards. The two runs agree on
+the fluxes to 6e-5 W/m2 in the longwave and 2e-2 in the shortwave, which is
+single-precision round-off over two summation orders, so they are solving the same
+problem. Note that `test_rte_rrtmgp` autotunes its launch configurations on first
+encounter and saves them beside the case; the timed run has to be the second one.
+
+The staged `--breakdown` above cannot be used for this. It writes the whole
+`(ngpt, nlay, ncol)` spectrum between the two stages, which is the memory traffic the
+fused path exists to avoid, and it reports gas optics thirty times slower as a result.
+
+Gas optics is at parity --- a quarter more expensive in the longwave, a fifth cheaper in
+the shortwave. The sweeps are not, and the launch geometry says why: it
 solves four column blocks with every g-point resolved, so its `sw_adding` runs 229376
 threads and its `lw_solver_noscat_step_2` 262144, where ours run `ncol` --- 4096. Same
 work, 64x the parallelism, and at 4096 columns ours reach about 15% of peak bandwidth
