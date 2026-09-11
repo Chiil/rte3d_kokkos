@@ -52,8 +52,13 @@ namespace Rt_lw_kernels
 
         // Photon counts. Written with atomics, since photons from any thread may land
         // in any cell.
-        Array_map_1d<TF> tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
-        Array_map_2d<TF> atmos;                            // (nz, ncol)
+        Array_map_1d<TF> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
+        Array_map_2d<TF> atmos;                                            // (nz, ncol)
+
+        // Where the resolved domain ends: the bottom face of the box's top cell, which
+        // stands in for every layer above it. Zero when nothing was lumped, and then
+        // the crossing is never scored -- the box top already is the domain top.
+        TF z_dom = TF(0.);
 
         Vector<int> grid_cells;
         Vector<TF> grid_d;
@@ -141,7 +146,46 @@ namespace Rt_lw_kernels
         else if (photon.source == Source::Surface)
             Kokkos::atomic_add(&s.sfc_up(photon.source_idx), photon.emitted);
         else
-            Kokkos::atomic_add(&s.tod_dn(photon.source_idx), photon.emitted);
+            Kokkos::atomic_add(&s.toa_dn(photon.source_idx), photon.emitted);
+    }
+
+
+    // Score a photon crossing the level where the resolved domain ends.
+    //
+    // A flux through a horizontal plane is the weight that crosses it, counted once per
+    // crossing and signed by the direction: each photon carries the same power, so
+    // carrying it over the plane is what transfers that power. The column is the one
+    // the photon is over *at the crossing*, interpolated between the step's ends, since
+    // a single step may travel a long way sideways.
+    //
+    // Only steps that actually straddle the level pay for the atomic, and only photons
+    // that climb that high pay for the interpolation.
+    RTE3D_DEVICE_FUNCTION
+    void score_domain_top(
+            const Scene& s, const Vector<TF>& p_old, const Vector<TF>& p_new,
+            const TF weight)
+    {
+        const bool up = p_old.z <= s.z_dom && p_new.z > s.z_dom;
+        const bool down = p_old.z > s.z_dom && p_new.z <= s.z_dom;
+
+        if (!(up || down))
+            return;
+
+        const TF dz = p_new.z - p_old.z;
+        const TF f = dz != TF(0.) ? (s.z_dom - p_old.z)/dz : TF(0.);
+
+        const TF x = p_old.x + f*(p_new.x - p_old.x);
+        const TF y = p_old.y + f*(p_new.y - p_old.y);
+
+        // The interpolated point can fall a hair outside after the periodic wrap, so
+        // it goes through the same clamping index the rest of the walk uses.
+        const int i = coord_to_index(x < TF(0.) ? x + s.grid_size.x : x,
+                                     s.grid_d_inv.x, s.grid_cells.x);
+        const int j = coord_to_index(y < TF(0.) ? y + s.grid_size.y : y,
+                                     s.grid_d_inv.y, s.grid_cells.y);
+
+        Kokkos::atomic_add(up ? &s.tod_up(s.column(i, j)) : &s.tod_dn(s.column(i, j)),
+                           weight);
     }
 
 
@@ -306,12 +350,17 @@ namespace Rt_lw_kernels
             if (dn >= d_max)
             {
                 // The collision is beyond this block: move to its face instead.
+                const Vector<TF> p_old = photon.position;
+
                 if (!independent_column)
                 {
                     photon.position.x += photon.direction.x*(s_min + d_max);
                     photon.position.y += photon.direction.y*(s_min + d_max);
                 }
                 photon.position.z += photon.direction.z*(s_min + d_max);
+
+                if (s.z_dom > TF(0.))
+                    score_domain_top(s, p_old, photon.position, weight);
 
                 if (photon.position.z < eps())
                 {
@@ -352,7 +401,7 @@ namespace Rt_lw_kernels
 
                     const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                     const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
-                    Kokkos::atomic_add(&s.tod_up(s.column(i, j)), weight);
+                    Kokkos::atomic_add(&s.toa_up(s.column(i, j)), weight);
 
                     photon.emitted += weight;
 
@@ -393,6 +442,7 @@ namespace Rt_lw_kernels
             else
             {
                 // A collision inside this block. Move there, staying inside it.
+                const Vector<TF> p_old = photon.position;
                 const TF dz = photon.direction.z*dn;
                 photon.position.z = dz > 0
                         ? Kokkos::min(photon.position.z + dz, (k_n+1)*s.kn_grid_d.z - s_min)
@@ -410,6 +460,9 @@ namespace Rt_lw_kernels
                             ? Kokkos::min(photon.position.y + dy, (j_n+1)*s.kn_grid_d.y - s_min)
                             : Kokkos::max(photon.position.y + dy, j_n*s.kn_grid_d.y + s_min);
                 }
+
+                if (s.z_dom > TF(0.))
+                    score_domain_top(s, p_old, photon.position, weight);
 
                 const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                 const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);

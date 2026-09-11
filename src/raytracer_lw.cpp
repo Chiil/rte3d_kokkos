@@ -137,7 +137,7 @@ namespace
     // to the host to scale a launch parameter. The net flux is per unit height, so it
     // is divided by the cell depth as well.
     void count_to_flux(
-            const Grid& grid, const double photons_total,
+            const Grid& grid, const double photons_total, const bool lumped,
             const Raytracer_lw::Scratch& s, const Raytracer_lw::Fluxes_lw& f)
     {
         const int ncol = grid.ncol();
@@ -146,10 +146,12 @@ namespace
         const auto cdf = s.cdf;
         const int nslot = static_cast<int>(cdf.extent(0));
 
+        const auto toa_dn = s.toa_dn, toa_up = s.toa_up;
         const auto tod_dn = s.tod_dn, tod_up = s.tod_up;
         const auto sfc_dn = s.sfc_dn, sfc_up = s.sfc_up;
         const auto atmos = s.atmos;
 
+        const auto f_toa_dn = f.toa_dn, f_toa_up = f.toa_up;
         const auto f_tod_dn = f.tod_dn, f_tod_up = f.tod_up;
         const auto f_sfc_dn = f.sfc_dn, f_sfc_up = f.sfc_up;
         const auto f_net = f.flux_net;
@@ -159,8 +161,10 @@ namespace
             {
                 const TF per_photon = TF(cdf(nslot - 1)/photons_total);
 
-                f_tod_dn(icol) += tod_dn(icol)*per_photon;
-                f_tod_up(icol) += tod_up(icol)*per_photon;
+                f_toa_dn(icol) += toa_dn(icol)*per_photon;
+                f_toa_up(icol) += toa_up(icol)*per_photon;
+                f_tod_dn(icol) += (lumped ? tod_dn(icol) : toa_dn(icol))*per_photon;
+                f_tod_up(icol) += (lumped ? tod_up(icol) : toa_up(icol))*per_photon;
                 f_sfc_dn(icol) += sfc_dn(icol)*per_photon;
                 f_sfc_up(icol) += sfc_up(icol)*per_photon;
             });
@@ -181,6 +185,8 @@ Raytracer_lw::Fluxes_lw Raytracer_lw::Fluxes_lw::make(const Grid& grid)
     const int ncol = grid.ncol();
 
     return Fluxes_lw{
+            Array_1d<TF>("rt_lw_toa_dn", ncol),
+            Array_1d<TF>("rt_lw_toa_up", ncol),
             Array_1d<TF>("rt_lw_tod_dn", ncol),
             Array_1d<TF>("rt_lw_tod_up", ncol),
             Array_1d<TF>("rt_lw_sfc_dn", ncol),
@@ -191,6 +197,8 @@ Raytracer_lw::Fluxes_lw Raytracer_lw::Fluxes_lw::make(const Grid& grid)
 
 void Raytracer_lw::Fluxes_lw::zero() const
 {
+    Kokkos::deep_copy(toa_dn, TF(0.));
+    Kokkos::deep_copy(toa_up, TF(0.));
     Kokkos::deep_copy(tod_dn, TF(0.));
     Kokkos::deep_copy(tod_up, TF(0.));
     Kokkos::deep_copy(sfc_dn, TF(0.));
@@ -215,6 +223,8 @@ Raytracer_lw::Scratch Raytracer_lw::Scratch::make(const Grid& grid)
     s.cdf = Array_1d<double>(Kokkos::view_alloc("rt_lw_cdf", no_init),
                              std::size_t(grid.nz + 2)*ncol);
 
+    s.toa_dn = Array_1d<TF>("rt_lw_toa_dn_count", ncol);
+    s.toa_up = Array_1d<TF>("rt_lw_toa_up_count", ncol);
     s.tod_dn = Array_1d<TF>("rt_lw_tod_dn_count", ncol);
     s.tod_up = Array_1d<TF>("rt_lw_tod_up_count", ncol);
     s.sfc_dn = Array_1d<TF>("rt_lw_sfc_dn_count", ncol);
@@ -229,6 +239,7 @@ void Raytracer_lw::add_plane_parallel(
         const Grid& grid,
         const bool top_at_1,
         const int nlay,
+        const bool lumped,
         const Array_map_2d<const TF>& flux_up,
         const Array_map_2d<const TF>& flux_dn,
         const Fluxes_lw& fluxes)
@@ -243,8 +254,16 @@ void Raytracer_lw::add_plane_parallel(
     const auto level_of = [=](const int kc) { return top_at_1 ? nlay - kc : kc; };
 
     const int lev_sfc = level_of(0);
+
     const int lev_tod = level_of(nz);
 
+    // The level between the box's top cell and the cell below it, which is where the
+    // resolved domain ends once that cell stands in for the atmosphere above. With
+    // nothing lumped the box's top cell is a resolved cell like any other and the two
+    // levels are the same one.
+    const int lev_dom = lumped ? level_of(nz - 1) : lev_tod;
+
+    const auto f_toa_dn = fluxes.toa_dn, f_toa_up = fluxes.toa_up;
     const auto f_tod_dn = fluxes.tod_dn, f_tod_up = fluxes.tod_up;
     const auto f_sfc_dn = fluxes.sfc_dn, f_sfc_up = fluxes.sfc_up;
     const auto f_net = fluxes.flux_net;
@@ -254,8 +273,10 @@ void Raytracer_lw::add_plane_parallel(
         {
             f_sfc_dn(icol) += flux_dn(lev_sfc, icol);
             f_sfc_up(icol) += flux_up(lev_sfc, icol);
-            f_tod_dn(icol) += flux_dn(lev_tod, icol);
-            f_tod_up(icol) += flux_up(lev_tod, icol);
+            f_toa_dn(icol) += flux_dn(lev_tod, icol);
+            f_toa_up(icol) += flux_up(lev_tod, icol);
+            f_tod_dn(icol) += flux_dn(lev_dom, icol);
+            f_tod_up(icol) += flux_up(lev_dom, icol);
         });
 
     // What a cell absorbs is what the net downward flux loses across it, which is the
@@ -323,6 +344,8 @@ void Raytracer_lw::trace_rays(
                 cdf(i) = running;
         });
 
+    Kokkos::deep_copy(scratch.toa_dn, TF(0.));
+    Kokkos::deep_copy(scratch.toa_up, TF(0.));
     Kokkos::deep_copy(scratch.tod_dn, TF(0.));
     Kokkos::deep_copy(scratch.tod_up, TF(0.));
     Kokkos::deep_copy(scratch.sfc_dn, TF(0.));
@@ -338,6 +361,8 @@ void Raytracer_lw::trace_rays(
     scene.cdf = Array_map_1d<const double>(scratch.cdf.data(), nslot);
     scene.nslot = nslot;
 
+    scene.toa_dn = Array_map_1d<TF>(scratch.toa_dn.data(), ncol);
+    scene.toa_up = Array_map_1d<TF>(scratch.toa_up.data(), ncol);
     scene.tod_dn = Array_map_1d<TF>(scratch.tod_dn.data(), ncol);
     scene.tod_up = Array_map_1d<TF>(scratch.tod_up.data(), ncol);
     scene.sfc_dn = Array_map_1d<TF>(scratch.sfc_dn.data(), ncol);
@@ -356,6 +381,12 @@ void Raytracer_lw::trace_rays(
     scene.grid_d_inv = Vector<TF>{TF(1.)/scene.grid_d.x,
                                   TF(1.)/scene.grid_d.y,
                                   TF(1.)/scene.grid_d.z};
+    // Where the resolved domain ends. With nothing lumped the box's top cell is a
+    // resolved cell like any other and the box top already is the domain top, so the
+    // crossing is not scored at all -- the two pairs are made equal after the trace.
+    const bool lumped = nlay > grid.nz;
+    scene.z_dom = lumped ? (grid.nz - 1)*grid.dz : TF(0.);
+
     scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,
                                      TF(1.)/scene.kn_grid_d.y,
                                      TF(1.)/scene.kn_grid_d.z};
@@ -388,5 +419,5 @@ void Raytracer_lw::trace_rays(
         launch_photons<false>(scene, nthread, photons_per_thread, photons_extra,
                               gpt_offset, du);
 
-    count_to_flux(grid, static_cast<double>(photons_total), scratch, fluxes);
+    count_to_flux(grid, static_cast<double>(photons_total), lumped, scratch, fluxes);
 }

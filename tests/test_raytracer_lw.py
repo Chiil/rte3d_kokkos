@@ -275,8 +275,33 @@ def test_layers_above_the_box_are_lumped_into_its_top_cell(rte3d, nlay):
     out = trace(rte3d, uniform(tau_tot/nlay, nlay), uniform(B, nlay),
                 np.zeros(NCOL), np.ones(NCOL), ppp=32768)
 
+    # toa_up is at the top of the lumped cell, which is the top of the atmosphere.
     expected = np.pi*B*(1. - 2.*exp_int_3(tau_tot))
-    assert out['tod_up'].mean() == pytest.approx(expected, rel=0.01)
+    assert out['toa_up'].mean() == pytest.approx(expected, rel=0.01)
+
+    # Nothing comes down from space in the longwave.
+    assert out['toa_dn'].mean() == pytest.approx(0., abs=1e-6*expected)
+
+    if nlay == NZ:
+        # Nothing was lumped: the box's top cell is a resolved cell like any other, so
+        # the two levels are the same level.
+        np.testing.assert_allclose(out['tod_up'], out['toa_up'], rtol=exact_rtol(rte3d))
+        np.testing.assert_allclose(out['tod_dn'], out['toa_dn'], rtol=exact_rtol(rte3d),
+                                   atol=1e-9*expected)
+        return
+
+    # tod_dn is at the *bottom* of the lumped cell, where the resolved domain ends, so
+    # it is what that slab radiates down into the box. The slab is isothermal with
+    # nothing above it, so that is the same closed form over its own optical depth --
+    # the check a single reported level could not make, and the flux a host model
+    # coupled to the resolved field needs.
+    tau_lump = tau_tot*(nlay - NZ + 1)/nlay
+    from_above = np.pi*B*(1. - 2.*exp_int_3(tau_lump))
+
+    assert out['tod_dn'].mean() == pytest.approx(from_above, rel=0.02)
+
+    # And it really is a different level from the top of the atmosphere.
+    assert out['tod_dn'].mean() > 0.1*expected
 
 
 def test_uniform_atmosphere_matches_the_plane_parallel_solver(rte3d):

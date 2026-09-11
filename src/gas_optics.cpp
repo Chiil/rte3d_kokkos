@@ -1440,7 +1440,7 @@ int Gas_optics::solve_lw_rt(
             // The solve covered the box and nothing else, so as far as the conversion
             // is concerned the atmosphere is exactly nz layers deep.
             Raytracer_lw::add_plane_parallel(
-                    grid, top_at_1, nz,
+                    grid, top_at_1, nz, nlay > nz,
                     Array_map_2d<const TF>(state.flux_up.data() + lay_off*ncol, nz + 1, ncol),
                     Array_map_2d<const TF>(state.flux_dn.data() + lay_off*ncol, nz + 1, ncol),
                     fluxes);

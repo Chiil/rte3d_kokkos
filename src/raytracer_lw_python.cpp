@@ -76,6 +76,8 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
             Kokkos::fence();
 
             py::dict out;
+            out["toa_dn"] = Numpy::from_device(fluxes.toa_dn);
+            out["toa_up"] = Numpy::from_device(fluxes.toa_up);
             out["tod_dn"] = Numpy::from_device(fluxes.tod_dn);
             out["tod_up"] = Numpy::from_device(fluxes.tod_up);
             out["sfc_dn"] = Numpy::from_device(fluxes.sfc_dn);

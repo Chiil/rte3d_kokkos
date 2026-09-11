@@ -35,10 +35,19 @@ namespace Raytracer_lw
     // Where the fluxes go, accumulated over g-points by the caller. flux_net is per
     // unit height [W/m3] and signed: positive where the cell absorbs more than it
     // emits.
+    // Two levels are reported above the surface, and with layers lumped they are not
+    // the same level. The box's top cell stands in for the whole atmosphere above, so
+    // the top of the box is the top of the *atmosphere* -- toa_dn is zero there, as it
+    // should be, and toa_up is the outgoing longwave. What a host model coupled to the
+    // resolved field wants is the pair at the bottom of that cell, where the resolved
+    // domain actually ends: tod_dn is the flux the air above sends down into it. With
+    // nothing lumped the two levels coincide and both pairs carry the same numbers.
     struct Fluxes_lw
     {
-        Array_1d<TF> tod_dn;    // (ncol) downward at the top of the domain
-        Array_1d<TF> tod_up;    // (ncol) upward at the top of the domain
+        Array_1d<TF> toa_dn;    // (ncol) downward at the top of the atmosphere
+        Array_1d<TF> toa_up;    // (ncol) upward at the top of the atmosphere
+        Array_1d<TF> tod_dn;    // (ncol) downward at the top of the resolved domain
+        Array_1d<TF> tod_up;    // (ncol) upward at the top of the resolved domain
         Array_1d<TF> sfc_dn;    // (ncol) downward at the surface
         Array_1d<TF> sfc_up;    // (ncol) upward at the surface
         Array_2d<TF> flux_net;  // (nz, ncol) absorbed minus emitted
@@ -71,7 +80,7 @@ namespace Raytracer_lw
         Array_1d<double> cdf;           // ((nz+2)*ncol)
 
         // Photon counts, zeroed at the start of every trace.
-        Array_1d<TF> tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
+        Array_1d<TF> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
         Array_2d<TF> atmos;                            // (nz, ncol)
 
         static Scratch make(const Grid& grid);
@@ -127,11 +136,14 @@ namespace Raytracer_lw
     // reference reaches through min_mfp_grid_ratio.
     //
     // flux_up and flux_dn are one g-point's profiles, (nlev, ncol), in the caller's own
-    // vertical orientation. Only the levels bounding the box are read.
+    // vertical orientation. Only the levels bounding the box are read, plus the one
+    // between its top cell and the cell below, which is where the resolved domain ends
+    // when the caller has lumped the atmosphere above into that cell.
     void add_plane_parallel(
             const Grid& grid,
             const bool top_at_1,
             const int nlay,
+            const bool lumped,
             const Array_map_2d<const TF>& flux_up,   // (nlev, ncol)
             const Array_map_2d<const TF>& flux_dn,   // (nlev, ncol)
             const Fluxes_lw& fluxes);

@@ -510,6 +510,8 @@ void Gas_optics::init_frontend_python_bindings(py::module_& m)
             // Named as rte-rrtmgp-cpp names them in its own output, so that a run
             // here and a run of test_rte_rrtmgp_rt can be compared variable for
             // variable. Its "abs" is this net flux, not gross absorption.
+            out["rt_lw_flux_toa_dn"] = Numpy::from_device(fluxes.toa_dn);
+            out["rt_lw_flux_toa_up"] = Numpy::from_device(fluxes.toa_up);
             out["rt_lw_flux_tod_dn"] = Numpy::from_device(fluxes.tod_dn);
             out["rt_lw_flux_tod_up"] = Numpy::from_device(fluxes.tod_up);
             out["rt_lw_flux_sfc_dn"] = Numpy::from_device(fluxes.sfc_dn);
