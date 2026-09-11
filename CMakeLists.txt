@@ -34,6 +34,13 @@ if (USEGPU)
         # The counterpart of cuRAND above.
         find_package(hiprand REQUIRED)
         set(LIBS ${LIBS} hip::hiprand)
+        # A target with both CXX and HIP sources links the implicit libraries of
+        # both languages. On Cray the CXX wrapper reports LLVM's libunwind, while
+        # HIP reports GNU libgcc_s, so the module ends up with two _Unwind_*
+        # implementations and a throw lands in whichever the loader resolved first:
+        # import numpy before rte3d and the first C++ exception segfaults. Keep the
+        # GNU unwinder, which the libstdc++ being linked was built against.
+        list(REMOVE_ITEM CMAKE_CXX_IMPLICIT_LINK_LIBRARIES unwind)
         message(STATUS "GPU: Enabled (HIP)")
     else()
         message(FATAL_ERROR "USEGPU set but config enables neither Kokkos_ENABLE_CUDA nor Kokkos_ENABLE_HIP")
