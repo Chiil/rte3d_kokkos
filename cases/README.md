@@ -190,7 +190,50 @@ the first pays for warm-up and lands about a third high:
 | longwave, 62 of 128 g-points traced | 3045 ms | 186 us |
 | shortwave, 112 g-points | 7950 ms | 485 us |
 
-Aerosols are in the input file and are not read: rte3d has no aerosol optics.
+### The reference fluxes, and what they can check
+
+The same record holds `rte-rrtmgp-cpp`'s own fluxes for this field.
+`--reference` fetches them, as `les_cloudfield_reference.nc`:
+
+```bash
+python cases/fetch_data.py les_cloudfield --reference     # 149 MB
+```
+
+They are worth having, but they check less than they look like they do, and it is
+worth knowing which half is which before reading anything into a difference.
+
+**The longwave surface fluxes are a real check**, and they pass:
+
+| domain mean | reference | rte3d |
+|---|---|---|
+| `rt_lw_flux_sfc_up` | 456.951 | 456.959 (+0.00%) |
+| `rt_lw_flux_sfc_dn` | 403.273 | 401.750 (-0.38%) |
+
+**The top-of-domain fluxes are not comparable at all.** The reference discards the
+132 layers above the ray-tracing box; rte3d lumps them into one more cell on top, so
+it sees air the reference does not. That is the difference the note in
+`include/raytracer_lw.h` is about, and it is large -- `rt_lw_flux_tod_up` is 374.2
+against 331.8 -- but it is not an error on either side. To compare these, truncate the
+input to the 200 resolved layers so both codes see the same air.
+
+**The shortwave is not comparable either, because of aerosols.** The input carries
+eleven aerosol mixing ratios, the reference reads them and rte3d has no aerosol optics
+at all, so it solves a cleaner atmosphere:
+
+| domain mean | reference | rte3d |
+|---|---|---|
+| `rt_flux_sfc_dir` | 660.19 | 718.10 (+8.77%) |
+| `rt_flux_sfc_dif` | 194.98 | 143.67 (-26.31%) |
+| the two together | 855.16 | 861.78 (+0.77%) |
+
+Which is the signature of scattering moved from the direct beam into the diffuse rather
+than of two codes disagreeing: the split moves by a quarter and the total by under a
+percent. It also rules out the sun being the cause -- the solar zenith angle these
+fluxes were made at is the input file's own 30 degrees, since the 45 degrees that
+`test.ini` ships would have cut the total by 18% rather than 0.77%.
+
+The record holds a third file, the backward camera's output. rte3d has no backward
+tracer, so it is not fetched.
 
 ---
 
