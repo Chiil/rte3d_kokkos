@@ -3,6 +3,9 @@
 Runnable end-to-end scripts, in the spirit of `rte-rrtmgp-cpp`'s `rfmip/`, `allsky/`
 and `rcemip/` directories. Two of them validate against reference fluxes, the third is
 a performance benchmark, and `user/` runs whatever case you give it.
+[`les_cloudfield/`](#les_cloudfield--a-three-dimensional-cloud-field) is a case rather
+than a script: it is the field the ray tracer was validated on, and `user/run_case.py`
+runs it.
 
 ## Before you start
 
@@ -18,6 +21,17 @@ In full:
 |---|---|---|
 | `RTE3D_PYTHON_PATH` | all four, always | the directory holding `rte3d_python*.so` |
 | `RTE3D_FORTRAN_REF` | `run_rcemip.py --compare-fortran` only | `./tests/build_reference.sh` |
+
+One case needs an input file too large to keep in git. `fetch_data.py` downloads it
+from the archive it is published in, checks it against the checksum published with it,
+and does nothing if it is already here:
+
+```bash
+python cases/fetch_data.py                 # what there is to fetch
+python cases/fetch_data.py les_cloudfield  # 26 MB
+```
+
+It is a step of its own rather than something a run script does behind your back.
 
 Plotting needs `matplotlib`. It is not a dependency of rte3d: without it the two
 validation scripts still run and still write their NetCDF output, and `--plot` reports what to install.
@@ -138,6 +152,45 @@ top-first -- the orientation is read from `p_lay` rather than assumed.
 
 Aerosols are not read: rte3d has no aerosol optics yet. Cloud coefficients must be the
 band-resolved `-bnd` files, since the solvers take cloud properties by band.
+
+---
+
+## `les_cloudfield/` — a three-dimensional cloud field
+
+The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
+2560 x 2560 x 4000 m RICO cumulus field at 20 m resolution. 128 x 128 columns, 200
+ray-tracing cells in the vertical and 332 layers, of which the 132 above the box are
+lumped into one cell on top. Cloud is liquid-only and thin: 1.3% of cells, 19% of
+columns.
+
+```bash
+python cases/fetch_data.py les_cloudfield
+python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
+```
+
+The input is the same `test_input.nc` that `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt`
+reads, published at [10.5281/zenodo.18757088](https://doi.org/10.5281/zenodo.18757088)
+(CC BY 4.0). Fetching it writes `les_cloudfield_input.nc` beside the settings, which is
+the name `run_case.py` derives from the case prefix; the fluxes go to
+`les_cloudfield_output.nc` in the input's own `(z, y, x)` layout.
+
+Both bands are traced, with the g-point counts the reference case uses -- 112 shortwave
+and 128 longwave -- so that a run here and a run of `test_rte_rrtmgp_rt` cover the same
+spectrum. [`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the
+settings and, at length, what was checked against the reference and the two traps that
+make the comparison come out wrong if you skip them: the sun has to be set explicitly
+in the reference's `test.ini`, and `min_mfp_grid_ratio` has to match, since the ini
+misspells the key and the built-in default applies instead of what it says.
+
+On one MI250X GCD, double precision, 256 photons per pixel, best of three runs --
+the first pays for warm-up and lands about a third high:
+
+| | time | per column |
+|---|---|---|
+| longwave, 62 of 128 g-points traced | 3045 ms | 186 us |
+| shortwave, 112 g-points | 7950 ms | 485 us |
+
+Aerosols are in the input file and are not read: rte3d has no aerosol optics.
 
 ---
 

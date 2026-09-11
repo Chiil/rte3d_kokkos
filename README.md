@@ -103,6 +103,9 @@ python cases/rfmip/run_rfmip.py   --plot     # clear-sky, 100 sites, vs referenc
 python cases/allsky/run_allsky.py --plot     # cloudy, 24 columns, vs reference
 python cases/rcemip/run_rcemip.py --ncol 512 --compare-fortran   # benchmark
 python cases/user/run_case.py mycase         # your own case, from NetCDF
+
+python cases/fetch_data.py les_cloudfield    # the LES cloud field, 26 MB from Zenodo
+python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
 ```
 
 The last is the general one: it reads a case you supply as `mycase_input.nc`, with the
