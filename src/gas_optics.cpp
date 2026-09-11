@@ -1214,7 +1214,10 @@ namespace
     // paths the same physical problem rather than two approximations of it.
     void lump_column_into_box(
             const int nz, const int nlay, const int ncol, const bool top_at_1,
+            const bool scattering,
             const Array_2d<TF>& tau,
+            const Array_2d<TF>& ssa,
+            const Array_2d<TF>& g,
             const Array_2d<TF>& lay_source,
             const Array_2d<TF>& lev_source)
     {
@@ -1226,30 +1229,59 @@ namespace
             {
                 TF tau_sum = TF(0.);
                 TF src_sum = TF(0.);
+                TF sca_sum = TF(0.);
+                TF scag_sum = TF(0.);
 
                 for (int k=nz-1; k<nlay; ++k)
                 {
                     const int ilay = Raytracer::layer_of(k, nlay, top_at_1);
+                    const TF t = tau(ilay, icol);
 
-                    tau_sum += tau(ilay, icol);
-                    src_sum += tau(ilay, icol)*lay_source(ilay, icol);
+                    tau_sum += t;
+                    src_sum += t*lay_source(ilay, icol);
+
+                    if (scattering)
+                    {
+                        // Optical depth adds, but the other two are weighted means:
+                        // the albedo by optical depth and the asymmetry by the part of
+                        // it that scatters. The same weighting bundle_optics_tod gives
+                        // the tracer's own top cell.
+                        const TF sca = t*ssa(ilay, icol);
+
+                        sca_sum += sca;
+                        scag_sum += sca*g(ilay, icol);
+                    }
                 }
 
                 tau(ilump, icol) = tau_sum;
                 lay_source(ilump, icol) = tau_sum > TF(0.) ? src_sum/tau_sum : TF(0.);
+
+                if (scattering)
+                {
+                    ssa(ilump, icol) = tau_sum > TF(0.) ? sca_sum/tau_sum : TF(0.);
+                    g(ilump, icol) = sca_sum > TF(0.) ? scag_sum/sca_sum : TF(0.);
+                }
 
                 // The collapsed layer is one homogeneous slab, exactly as the tracer
                 // treats it, so both its edges carry the same source. Its lower edge is
                 // shared with the resolved layer below, whose top source this therefore
                 // also sets -- see the note in solve_lw_rt.
                 // The solvers take the source as linear in optical depth between a
-                // layer's two edges. The collapsed layer is opaque many times over, so
-                // only the edge facing space is ever read out of that profile -- put
-                // the same weighted source there and the slab radiates as the tracer's
-                // homogeneous top cell does. Its other edge is shared with the resolved
-                // layer below and is left alone; setting that too was measured to
-                // change nothing, which is the same statement about its opacity.
+                // layer's two edges. Give both edges the weighted source and the
+                // collapsed layer radiates as one isothermal slab, which is what the
+                // tracer's homogeneous top cell is; leave the profile alone and it
+                // runs from the air at the top of the box to the top of the atmosphere,
+                // radiating to space at stratospheric temperature and 52 W/m2 short.
+                //
+                // The inner edge is shared with the resolved layer below, so setting it
+                // costs that layer its own top source. The trade is worth taking and
+                // was measured either way: what leaves through the top does not depend
+                // on the inner edge at all -- a slab this opaque never shows it to
+                // space -- but what the slab sends *down* does, and leaving it true put
+                // 15 W/m2 of the cooling in the wrong cells just under the box's top.
+                // Setting it cuts that to 5.
                 lev_source(off + nz, icol) = lay_source(ilump, icol);
+                lev_source(off + nz - 1, icol) = lay_source(ilump, icol);
             });
     }
 }
@@ -1274,13 +1306,6 @@ int Gas_optics::solve_lw_rt(
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
     const int nlay = static_cast<int>(atm.play.extent(0));
     const int ncol = static_cast<int>(atm.play.extent(1));
-
-    if (min_mfp_grid_ratio > TF(0.) && scattering && nlay > grid.nz)
-        throw std::invalid_argument(
-                "Lumping the atmosphere above the box into its top cell for the "
-                "plane-parallel fallback does not yet combine the single-scattering "
-                "albedo and the asymmetry. Resolve the whole atmosphere, or set "
-                "min_mfp_grid_ratio or scattering to zero.");
 
     const Solve_state state = prepare(
             k, gas_concs, atm, true, false, weights, scattering);
@@ -1380,45 +1405,44 @@ int Gas_optics::solve_lw_rt(
                     Optical_props::increment_2stream_by_2stream(
                             state.tau, state.ssa, state.g, cloud_tau,
                             band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+            }
+            else if (cloud_tau.size() > 0)
+                Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
 
+            // Clouds first, then the collapse, so that what weights the lumped Planck
+            // source is the total absorption -- the same quantity bundle_emission
+            // weights the tracer's own emission by -- and so that the albedo and the
+            // asymmetry being combined are the ones the solver will read.
+            if (nlay > nz)
+                lump_column_into_box(nz, nlay, ncol, top_at_1, scattering,
+                                     state.tau, state.ssa, state.g,
+                                     state.lay_source, state.lev_source);
+
+            const auto box_2d = [=](const Array_2d<TF>& v, const int rows)
+            { return Array_map_2d<TF>(v.data() + lay_off*ncol, rows, ncol); };
+
+            const Source_func_lw box_sources{
+                    box_2d(state.lay_source, nz), box_2d(state.lev_source, nz + 1),
+                    state.sfc_source, Array_map_1d<TF>()};
+
+            if (scattering)
                 Rte_lw::solver_2stream(
-                        top_at_1, state.tau, state.ssa, state.g, state.sources(),
+                        top_at_1, box_2d(state.tau, nz), box_2d(state.ssa, nz),
+                        box_2d(state.g, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, state.lw_2stream);
-            }
             else
-            {
-                if (cloud_tau.size() > 0)
-                    Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
-
-                // Clouds first, then the collapse, so that what weights the lumped
-                // Planck source is the total absorption -- the same quantity
-                // bundle_emission weights the tracer's own emission by.
-                if (nlay > nz)
-                    lump_column_into_box(nz, nlay, ncol, top_at_1,
-                                         state.tau, state.lay_source, state.lev_source);
-
                 Rte_lw::solver_noscat(
-                        top_at_1, secants, weights,
-                        Array_map_2d<const TF>(state.tau.data() + lay_off*ncol, nz, ncol),
-                        Source_func_lw{
-                                Array_map_2d<TF>(state.lay_source.data() + lay_off*ncol, nz, ncol),
-                                Array_map_2d<TF>(state.lev_source.data() + lay_off*ncol, nz + 1, ncol),
-                                state.sfc_source, Array_map_1d<TF>()},
+                        top_at_1, secants, weights, box_2d(state.tau, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, Array_2d<TF>(), state.lw_noscat);
-            }
 
             // The solve covered the box and nothing else, so as far as the conversion
             // is concerned the atmosphere is exactly nz layers deep.
-            const int nlay_solved = scattering ? nlay : nz;
-
             Raytracer_lw::add_plane_parallel(
-                    grid, top_at_1, nlay_solved,
-                    Array_map_2d<const TF>(state.flux_up.data() + (scattering ? 0 : lay_off)*ncol,
-                                           nlay_solved + 1, ncol),
-                    Array_map_2d<const TF>(state.flux_dn.data() + (scattering ? 0 : lay_off)*ncol,
-                                           nlay_solved + 1, ncol),
+                    grid, top_at_1, nz,
+                    Array_map_2d<const TF>(state.flux_up.data() + lay_off*ncol, nz + 1, ncol),
+                    Array_map_2d<const TF>(state.flux_dn.data() + lay_off*ncol, nz + 1, ncol),
                     fluxes);
         }
     }
