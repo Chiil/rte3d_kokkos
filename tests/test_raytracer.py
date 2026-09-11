@@ -66,7 +66,15 @@ def test_direct_beam_is_beer_lambert(rte3d, mu0, independent_column):
     three-dimensional and the independent-column transport agree.
     """
     tau_lay = 0.05
-    out = trace(rte3d, uniform(tau_lay), uniform(0.0), np.zeros(NCOL), mu0,
+
+    # What is scored at the surface is the part of the beam that survives the column,
+    # and the noise on it goes as the inverse square root of that part. A grazing sun
+    # loses far more of it -- at mu0 = 0.25 an eleventh as much arrives as at mu0 = 1
+    # -- so it needs proportionally more photons to land inside the same tolerance.
+    # The scaling holds PHOTONS at mu0 = 1, where it is already enough.
+    ppp = int(PHOTONS*np.exp(-tau_lay*NZ)/np.exp(-tau_lay*NZ/mu0))
+
+    out = trace(rte3d, uniform(tau_lay), uniform(0.0), np.zeros(NCOL), mu0, ppp=ppp,
                 independent_column=independent_column)
 
     expected = TSI*mu0*np.exp(-tau_lay*NZ/mu0)
@@ -74,7 +82,7 @@ def test_direct_beam_is_beer_lambert(rte3d, mu0, independent_column):
     assert out['sfc_dir'].mean() == pytest.approx(expected, rel=0.02)
     assert out['sfc_dif'].mean() == 0.0
     assert out['tod_up'].mean() == 0.0
-    assert out['tod_dn'].mean() == pytest.approx(TSI*mu0, rel=1e-12)
+    assert out['tod_dn'].mean() == pytest.approx(TSI*mu0, rel=exact_rtol(rte3d))
 
 
 def test_layers_above_the_box_are_lumped_into_its_top_cell(rte3d):

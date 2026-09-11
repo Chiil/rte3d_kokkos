@@ -78,9 +78,15 @@ def test_cloud_optics_is_physical(rte3d):
 
     tau, ssa, g = rte3d.cloud_optics(c, **a)
 
+    # The bounds are physical, but ssa is a ratio of two interpolated sums and g comes
+    # off the same tables, so either can land an ulp outside. Allow that much: in
+    # single precision the tables put ssa at 1 + 6e-8 for the most conservative
+    # droplets, which is round-off and not a table read gone wrong.
+    eps = np.finfo(ssa.dtype).eps
+
     assert tau.min() > 0.0, 'every layer here is cloudy'
-    assert 0.0 <= ssa.min() and ssa.max() <= 1.0
-    assert -1.0 <= g.min() and g.max() <= 1.0
+    assert -eps <= ssa.min() and ssa.max() <= 1.0 + eps
+    assert -1.0 - eps <= g.min() and g.max() <= 1.0 + eps
 
     # In the shortwave, cloud droplets scatter far more than they absorb.
     assert ssa.mean() > 0.8
