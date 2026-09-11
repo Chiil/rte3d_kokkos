@@ -1234,7 +1234,14 @@ int Gas_optics::solve_lw_rt(
             : std::numeric_limits<TF>::infinity();
 
     const auto tau = state.tau;
-    const int nz = grid.nz;
+
+    // The cells the threshold may ask about: those that stand for one layer each. When
+    // the atmosphere runs deeper than the box the top cell is not one of them -- it
+    // holds every layer above the box at once, so neither the single layer that shares
+    // its index nor its own summed optical depth says anything about whether a photon
+    // could cross a *resolved* cell sideways. Leaving it in made the choice of
+    // g-points depend on how much atmosphere was handed in above the same box.
+    const int nz_scan = nlay > grid.nz ? grid.nz - 1 : grid.nz;
 
     fluxes.zero();
 
@@ -1262,7 +1269,7 @@ int Gas_optics::solve_lw_rt(
         if (min_mfp_grid_ratio > TF(0.))
         {
             Kokkos::parallel_reduce("lw_rt_max_tau",
-                Kokkos::MDRangePolicy<Default_exec, Kokkos::Rank<2>>({0, 0}, {nz, ncol}),
+                Kokkos::MDRangePolicy<Default_exec, Kokkos::Rank<2>>({0, 0}, {nz_scan, ncol}),
                 KOKKOS_LAMBDA(const int kc, const int icol, TF& acc)
                 {
                     const TF t = tau(Raytracer::layer_of(kc, nlay, top_at_1), icol);
