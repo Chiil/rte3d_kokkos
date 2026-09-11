@@ -10,20 +10,21 @@ Rand::Qrng_table Rand::Qrng_table::make()
     constexpr int ndim = 2;         // the launch pixel is two-dimensional
     constexpr int nbit = 32;        // direction numbers per dimension
 
-    unsigned int* vectors_h = nullptr;
-    unsigned int* constants_h = nullptr;
-
+    // cuRAND hands the scramble constants back as unsigned int**, hipRAND as
+    // const unsigned int**, so the pointer is declared where it is filled.
     #if defined(USECUDA)
     curandDirectionVectors32_t* v = nullptr;
+    unsigned int* constants_h = nullptr;
     curandGetDirectionVectors32(&v, CURAND_SCRAMBLED_DIRECTION_VECTORS_32_JOEKUO6);
     curandGetScrambleConstants32(&constants_h);
     #else
     hiprandDirectionVectors32_t* v = nullptr;
+    const unsigned int* constants_h = nullptr;
     hiprandGetDirectionVectors32(&v, HIPRAND_SCRAMBLED_DIRECTION_VECTORS_32_JOEKUO6);
     hiprandGetScrambleConstants32(&constants_h);
     #endif
 
-    vectors_h = reinterpret_cast<unsigned int*>(v);
+    const unsigned int* vectors_h = reinterpret_cast<const unsigned int*>(v);
 
     Qrng_table table;
     table.vectors = Array_1d<unsigned int>(
