@@ -80,7 +80,7 @@ namespace Rt_kernels
     RTE3D_DEVICE_FUNCTION
     void reset_photon(
             Photon& photon, TF& weight, int& photons_shot, const int photons_to_shoot,
-            const Scene& s, Rand::Qrng_2d& qrng, Rand::Rng& rng)
+            const Scene& s, const TF s_min, Rand::Qrng_2d& qrng, Rand::Rng& rng)
     {
         unsigned int rx, ry;
         int i, j;
@@ -101,7 +101,14 @@ namespace Rt_kernels
 
         photon.position.x = (i + rng())*s.grid_d.x;
         photon.position.y = (j + rng())*s.grid_d.y;
-        photon.position.z = s.grid_size.z;
+        // Just inside the domain, as the longwave tracer launches too. Starting on
+        // the face itself is degenerate: a photon that also lands on a block face in
+        // x or y has nothing to travel before the next one, and the nudge that has to
+        // carry it off the top is a whole ulp of grid_size.z there, so a grazing sun
+        // shortens it to less than that and z rounds straight back. The photon then
+        // tests as having left through the top, and is scored going up with the full
+        // weight it was launched with.
+        photon.position.z = s.grid_size.z - s_min;
 
         const TF diffuse_fraction = s.inc_dif / (s.inc_dir + s.inc_dif);
         if (rng() >= diffuse_fraction)
@@ -176,7 +183,7 @@ namespace Rt_kernels
         TF weight = TF(0.);
         int photons_shot = -1;
 
-        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, qrng, rng);
+        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
 
         TF tau = TF(0.);
         TF d_max = TF(0.);
@@ -267,7 +274,7 @@ namespace Rt_kernels
                         photon.kind = Photon_kind::Diffuse;
                     }
                     else
-                        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, qrng, rng);
+                        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
                 }
                 else if (photon.position.z >= s.grid_size.z)
                 {
@@ -278,7 +285,7 @@ namespace Rt_kernels
                     const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
                     Kokkos::atomic_add(&s.tod_up(s.column(i, j)), weight);
 
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, qrng, rng);
+                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
                 }
                 else
                 {
@@ -405,7 +412,7 @@ namespace Rt_kernels
                 else
                 {
                     d_max = TF(0.);
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, qrng, rng);
+                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
                 }
             }
         }
