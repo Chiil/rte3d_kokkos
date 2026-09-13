@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 """Run a user-supplied case from a NetCDF file.
 
-    python cases/user/run_case.py CASE [--no-shortwave] [--cloud-optics] [-o out.nc]
+    python cases/user/run_case.py CASE
 
 CASE names the case: settings are read from CASE.toml, the atmosphere from
 CASE_input.nc, and the fluxes are written to CASE_output.nc. This is the flow of
 rte-rrtmgp-cpp's test executable, which is also where the input file layout comes
 from, so cases written for it run here unchanged. rte3d.case documents that layout.
 
-The settings file is optional; without one every switch takes its default. Command
-line flags override the file, so a case stays reproducible from CASE.toml alone while
-a single run can still be varied. See example.toml for the full set.
+CASE.toml is the only place a setting lives, so a case is reproducible from the two
+files that carry its name and nothing else. The file is optional; without one every
+switch takes its default. See example.toml for the full set.
 """
 import argparse
 import os
@@ -207,37 +207,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('case', help='case name: CASE.toml, CASE_input.nc, CASE_output.nc')
-    p.add_argument('--settings', help='settings file (default: CASE.toml)')
-    p.add_argument('-i', '--input', help='input file (default: CASE_input.nc)')
-    p.add_argument('-o', '--output', help='output file (default: CASE_output.nc)')
-
-    flag = argparse.BooleanOptionalAction
-    p.add_argument('--longwave', action=flag, default=None, help='solve the longwave')
-    p.add_argument('--shortwave', action=flag, default=None, help='solve the shortwave')
-    p.add_argument('--cloud-optics', action=flag, default=None,
-                   help='read lwp, iwp, rel and dei and include clouds')
-    p.add_argument('--delta-cloud', action=flag, default=None,
-                   help='delta-scale the shortwave cloud properties (default: on)')
-    p.add_argument('--output-bnd-fluxes', action=flag, default=None,
-                   help='also write the fluxes resolved by band')
-
-    p.add_argument('--plane-parallel', action=flag, default=None,
-                   help='solve the shortwave with the two-stream solver (default: on)')
-    p.add_argument('--raytracing', action=flag, default=None,
-                   help='solve the shortwave with the Monte Carlo ray tracer; needs '
-                        'the Cartesian grid in the input file (default: off)')
-    p.add_argument('--photons-per-pixel', type=int, default=None,
-                   help='ray tracer photons per column per g-point (default: 256)')
-    p.add_argument('--independent-column', action=flag, default=None,
-                   help='trace rays without horizontal transport (default: off)')
     args = p.parse_args()
 
-    switches, files, shortwave, longwave = read_settings(
-            args.settings or f'{args.case}.toml')
-    for target in (switches, shortwave):
-        for key in target:
-            if getattr(args, key, None) is not None:
-                target[key] = getattr(args, key)
+    switches, files, shortwave, longwave = read_settings(f'{args.case}.toml')
 
     if switches['shortwave'] and not (shortwave['plane_parallel']
                                       or shortwave['raytracing']):
@@ -246,7 +218,7 @@ def main():
                                      or longwave['raytracing']):
         raise SystemExit('The longwave is on but neither solver is.')
 
-    atm = read_case(args.input or f'{args.case}_input.nc')
+    atm = read_case(f'{args.case}_input.nc')
     print(f'{atm["ncol"]} columns, {atm["nlay"]} layers, '
           f'{"top" if atm["top_at_1"] else "surface"} at index 0')
 
@@ -259,7 +231,7 @@ def main():
     if not results and not rt_results:
         raise SystemExit('Nothing to do: both the longwave and the shortwave are off.')
 
-    write_output(args.output or f'{args.case}_output.nc', atm, results, rt_results, nbnd)
+    write_output(f'{args.case}_output.nc', atm, results, rt_results, nbnd)
 
     return 0
 

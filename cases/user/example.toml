@@ -1,5 +1,7 @@
-# Settings for a user case, read by run_case.py as CASE.toml. Everything here is
-# optional; the values shown are the defaults.
+# Settings for a user case, read by run_case.py as CASE.toml. This file is the only
+# place a setting lives -- the runner takes the case name and nothing else -- so a case
+# is reproducible from it alone. Everything here is optional; the values shown are the
+# defaults.
 
 [switches]
 longwave = true
@@ -36,6 +38,24 @@ photons-per-pixel = 256
 # Trace without horizontal transport, which makes the tracer an expensive but exact
 # column solver. Useful for telling the two-stream's error from the third dimension's.
 independent-column = false
+
+[longwave]
+# The same two solvers for the longwave, chosen the same way.
+plane-parallel = true
+raytracing = false
+photons-per-pixel = 256
+independent-column = false
+
+# Let clouds deflect a photon and not only absorb and emit it. Follows lw-scattering
+# in rte-rrtmgp-cpp's ini files.
+scattering = false
+
+# Skip the g-points whose gas is opaque within a grid cell and solve those
+# plane-parallel instead: a photon cannot cross a cell before it is absorbed, so there
+# is no horizontal transport to resolve. The threshold is the mean free path as a
+# fraction of the cell size; 0 traces the whole spectrum, 1 is what rte-rrtmgp-cpp
+# uses. Ray tracer only.
+min-mfp-grid-ratio = 0.0
 
 [files]
 # Bare names are looked up in extern/rrtmgp-data; anything with a separator in it is

@@ -311,9 +311,16 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     make_input.make_input('rtcase_input.nc', nx=NX, ny=NY, nlay=NLAY)
 
-    monkeypatch.setattr(sys, 'argv', [
-        'run_case.py', 'rtcase', '--no-longwave', '--raytracing',
-        '--photons-per-pixel', '1024'])
+    (tmp_path/'rtcase.toml').write_text(
+        '[switches]\n'
+        'longwave = false\n'
+        '\n'
+        '[shortwave]\n'
+        'plane-parallel = true\n'
+        'raytracing = true\n'
+        'photons-per-pixel = 1024\n')
+
+    monkeypatch.setattr(sys, 'argv', ['run_case.py', 'rtcase'])
     assert run_case.main() == 0
 
     out = xr.open_dataset(tmp_path/'rtcase_output.nc')
@@ -357,7 +364,13 @@ def test_run_case_end_to_end(rte3d, tmp_path, monkeypatch):
     make_input.make_input('mycase_input.nc', nx=NX, ny=NY, nlay=NLAY, clouds=True)
     make_input.make_settings('mycase.toml', clouds=True)
 
-    monkeypatch.setattr(sys, 'argv', ['run_case.py', 'mycase', '--output-bnd-fluxes'])
+    # The band fluxes are what this test looks at, and the settings file is the only
+    # place to ask for them.
+    settings = tmp_path/'mycase.toml'
+    settings.write_text(settings.read_text().replace(
+        '[switches]\n', '[switches]\noutput-bnd-fluxes = true\n', 1))
+
+    monkeypatch.setattr(sys, 'argv', ['run_case.py', 'mycase'])
     assert run_case.main() == 0
 
     out = xr.open_dataset(tmp_path/'mycase_output.nc')

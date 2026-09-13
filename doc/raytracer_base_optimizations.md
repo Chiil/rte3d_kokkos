@@ -68,8 +68,13 @@ that the two codes can be compared directly; see §6.
 
 ```
 python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
-python cases/user/run_case.py cases/user/rcemip --no-longwave --raytracing --no-plane-parallel
+python cases/user/run_case.py cases/user/rcemip
 ```
+
+The runner takes the case name and nothing else, so the configuration comes from the
+case's `.toml`. For the ray-traced shortwave timings here, set `longwave = false` under
+`[switches]` and `raytracing = true`, `plane-parallel = false` under `[shortwave]` in
+`cases/user/rcemip.toml`.
 
 **Read the timer correctly.** `run_case.py`'s `sw ray tracer` line is `repeats=1,
 warmup=0` — a **single shot**, not a best-of-three like the other solvers. Run-to-run

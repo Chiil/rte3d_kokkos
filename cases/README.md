@@ -56,18 +56,11 @@ python cases/user/run_case.py mycase
 `CASE_input.nc`, and the fluxes go to `CASE_output.nc`, folded back into the input's
 own `(lev, y, x)` layout.
 
-| flag | meaning |
-|---|---|
-| `--settings F`, `-i F`, `-o F` | override the three paths derived from `CASE` |
-| `--longwave` / `--no-longwave` | solve the longwave (default: on) |
-| `--shortwave` / `--no-shortwave` | solve the shortwave (default: on) |
-| `--cloud-optics` | read `lwp`, `iwp`, `rel`, `dei` and include clouds (default: off) |
-| `--no-delta-cloud` | do not delta-scale the shortwave cloud properties |
-| `--output-bnd-fluxes` | also write the fluxes resolved by band |
-
-Flags override the settings file, so a case stays reproducible from its `.toml` alone
-while a single run can still be varied. See [`user/example.toml`](user/example.toml)
-for the switches and the coefficient-file paths.
+The case name is the only argument: every switch lives in `CASE.toml` and nowhere else,
+so a case is reproducible from the two files that carry its name.
+See [`user/example.toml`](user/example.toml) for the full set -- which bands and which
+solvers to run, whether to read clouds, whether to write the fluxes by band, and the
+coefficient files to read them all with.
 
 ### Two shortwave solvers
 
