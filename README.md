@@ -17,7 +17,7 @@ cmake --build .
 cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
-pytest tests                                     # 180 tests
+pytest tests                                     # 214 tests
 python cases/rfmip_rte/run_rfmip_rte.py --plot           # a case, end to end
 ```
 
@@ -83,6 +83,15 @@ only — deprecated, never linked, and not needed to build or use rte3d.
 
 The shim exists because two of the reference's entry points are not `bind(C)`; see
 [the note in `DESIGN.md`](DESIGN.md#why-the-test-shim-exists).
+
+One more group skips on data rather than on the Fortran: `test_all_solvers.py` runs
+every solver — both plane-parallel ones and the ray tracer in one and in three
+dimensions, in both bands — over the two cases in `cases/`, and the half of it that
+uses the LES cloud field needs that field fetched first:
+
+```bash
+python cases/fetch_data.py les_cloudfield
+```
 
 ## Cases
 
