@@ -1,0 +1,24 @@
+# The RCEMIP radiative-convective-equilibrium sounding of Wing et al. (2018) at a
+# 300 K sea surface, with a liquid and an ice cloud layer, over a 64 x 64 x 256 domain
+# at 100 m horizontal spacing. Every column holds the same profile.
+#
+# The sounding is analytic, so the input is generated rather than fetched, and only
+# this file is kept in git:
+#
+#     python cases/make_input.py cases/rcemip/rcemip --clouds --no-settings
+#     python cases/run_case.py cases/rcemip/rcemip
+#
+# A different size is a different case: pass --nx, --ny, --nlay or --rt-nz and put the
+# result in a folder of its own rather than here.
+
+[switches]
+longwave = true
+shortwave = true
+cloud-optics = true
+
+# Which shortwave solver, or both. The ray tracer reads the Cartesian
+# grid this file was written with; see ../example.toml for the rest.
+[shortwave]
+plane-parallel = true
+raytracing = false
+photons-per-pixel = 256

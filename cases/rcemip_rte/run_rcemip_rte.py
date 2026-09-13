@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """RCEMIP: a large-problem benchmark, optionally against the Fortran reference.
 
-    python cases/rcemip/run_rcemip.py [--ncol 4096] [--band lw|sw|both]
-    python cases/rcemip/run_rcemip.py --compare-fortran
+    python cases/rcemip_rte/run_rcemip_rte.py [--ncol 4096] [--band lw|sw|both]
+    python cases/rcemip_rte/run_rcemip_rte.py --compare-fortran
 
 The RCEMIP input from rte-rrtmgp-cpp is a single radiative-convective-equilibrium
 profile of 256 layers replicated over a 64x64 domain, so --ncol tiles that profile to

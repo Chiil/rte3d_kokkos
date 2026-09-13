@@ -59,7 +59,7 @@ export PATH=/opt/nvidia/hpc_sdk/Linux_x86_64/25.3/compilers/bin:$PATH
 
 | | cells | g-points | columns | photons/pixel |
 |---|---|---|---|---|
-| `cases/user/rcemip` | 256×256×65 | 224 | 65536 | 256 |
+| `cases/rcemip` | 256×256×65 | 224 | 65536 | 256 |
 | `cases/les_cloudfield` | 128×128×201 | 112 | 16384 | 256 |
 
 `cases/les_cloudfield` is rte-rrtmgp-cpp's own `les_cloudfield` — a RICO cumulus field at
@@ -67,14 +67,14 @@ export PATH=/opt/nvidia/hpc_sdk/Linux_x86_64/25.3/compilers/bin:$PATH
 that the two codes can be compared directly; see §6.
 
 ```
-python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
-python cases/user/run_case.py cases/user/rcemip
+python cases/run_case.py cases/les_cloudfield/les_cloudfield
+python cases/run_case.py cases/rcemip/rcemip
 ```
 
 The runner takes the case name and nothing else, so the configuration comes from the
 case's `.toml`. For the ray-traced shortwave timings here, set `longwave = false` under
 `[switches]` and `raytracing = true`, `plane-parallel = false` under `[shortwave]` in
-`cases/user/rcemip.toml`.
+`cases/rcemip/rcemip.toml`.
 
 **Read the timer correctly.** `run_case.py`'s `sw ray tracer` line is `repeats=1,
 warmup=0` — a **single shot**, not a best-of-three like the other solvers. Run-to-run
@@ -96,7 +96,7 @@ cuobjdump -res-usage build_cuda/src/CMakeFiles/rte3d_core.dir/raytracer.cpp.o \
 ```
 ncu --kernel-name-base demangled --kernel-name regex:launch_photons \
     --launch-count 1 --launch-skip 3 --metrics <...> \
-    python cases/user/run_case.py <case>
+    python cases/run_case.py <case>
 ```
 
 **The two cases are in different regimes, and a profile of one says nothing about the

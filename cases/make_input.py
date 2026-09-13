@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Write a case input file, and its settings, for run_case.py.
 
-    python cases/user/make_input.py mycase [--nx 64] [--ny 64] [--clouds]
+    python cases/make_input.py mycase [--nx 64] [--ny 64] [--clouds]
 
 The atmosphere is the RCEMIP radiative-convective-equilibrium profile of Wing et al.
 (2018), for a 300 K sea surface: an analytic sounding, so this needs no input data of
@@ -225,7 +225,7 @@ def main():
         print(f'wrote {settings}' if settings
               else f'{args.case}.toml exists already; left as it is')
 
-    print(f'\n    python cases/user/run_case.py {args.case}')
+    print(f'\n    python cases/run_case.py {args.case}')
 
     return 0
 

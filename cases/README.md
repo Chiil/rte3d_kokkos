@@ -1,13 +1,22 @@
 # Cases
 
-Runnable end-to-end scripts, in the spirit of `rte-rrtmgp-cpp`'s `rfmip/`, `allsky/`
-and `rcemip/` directories. Two of them validate against reference fluxes, the third is
-a performance benchmark, and `user/` runs whatever case you give it.
-[`les_cloudfield/`](#les_cloudfield--a-three-dimensional-cloud-field) is a case rather
-than a script: it is the field the ray tracer was validated on, and `user/run_case.py`
-runs it.
+Runnable end-to-end cases. [`run_case.py`](#run_casepy--the-general-runner) is the way
+in: give it a case and it solves it, with the settings in the case's own `.toml` and the
+atmosphere in its own NetCDF file. Every case written from here on is one of those --
+a folder holding a `.toml` and nothing else that has to be code. Two are here already:
 
-This file is how to run them. [`RESULTS.md`](RESULTS.md) is what they produce: the
+| case | what it is |
+|---|---|
+| [`rcemip/`](#rcemip--a-radiative-convective-equilibrium-sounding) | an analytic RCEMIP sounding over a 64x64 domain, generated on the spot |
+| [`les_cloudfield/`](#les_cloudfield--a-three-dimensional-cloud-field) | the LES cumulus field the ray tracer was validated on |
+
+The three `_rte` directories are the exception, and the suffix is what marks them: they
+are the fixed comparisons against the reference implementations -- `rte-rrtmgp`'s own
+RFMIP and all-sky examples and `rte-rrtmgp-cpp`'s RCEMIP benchmark -- so each carries a
+script of its own that reads that case's file layout and checks against that case's
+reference numbers. They are tests, not a template to copy.
+
+This file is how to run all of it. [`RESULTS.md`](RESULTS.md) is what they produce: the
 timings, the comparisons against the reference, and what those comparisons can and
 cannot check.
 
@@ -23,8 +32,8 @@ In full:
 
 | variable | needed by | how to get it |
 |---|---|---|
-| `RTE3D_PYTHON_PATH` | all four, always | the directory holding `rte3d_python*.so` |
-| `RTE3D_FORTRAN_REF` | `run_rcemip.py --compare-fortran` only | `./tests/build_reference.sh` |
+| `RTE3D_PYTHON_PATH` | everything here, always | the directory holding `rte3d_python*.so` |
+| `RTE3D_FORTRAN_REF` | `run_rcemip_rte.py --compare-fortran` only | `./tests/build_reference.sh` |
 
 One case needs an input file too large to keep in git. `fetch_data.py` downloads it
 from the archive it is published in, checks it against the checksum published with it,
@@ -42,14 +51,14 @@ validation scripts still run and still write their NetCDF output, and `--plot` r
 
 ---
 
-## `user/run_case.py` — your own case
+## `run_case.py` — the general runner
 
 The general runner: an arbitrary atmosphere from a NetCDF file, no reference to compare
 against. It is the Python counterpart of `test_rte_rrtmgp.cpp` in rte-rrtmgp-cpp and
 reads the same input layout, so a case written for that executable runs here unchanged.
 
 ```bash
-python cases/user/run_case.py mycase
+python cases/run_case.py mycase
 ```
 
 `CASE` names the case: settings come from `CASE.toml`, the atmosphere from
@@ -58,7 +67,7 @@ own `(lev, y, x)` layout.
 
 The case name is the only argument: every switch lives in `CASE.toml` and nowhere else,
 so a case is reproducible from the two files that carry its name.
-See [`user/example.toml`](user/example.toml) for the full set -- which bands and which
+See [`example.toml`](example.toml) for the full set -- which bands and which
 solvers to run, whether to read clouds, whether to write the fluxes by band, and the
 coefficient files to read them all with.
 
@@ -91,12 +100,12 @@ such thing as a flux profile per column once photons move sideways:
 
 ### Making an input file
 
-[`user/make_input.py`](user/make_input.py) writes one, so there is something to run
+[`make_input.py`](make_input.py) writes one, so there is something to run
 before you have written your own reader:
 
 ```bash
-python cases/user/make_input.py mycase --nx 64 --ny 64 --clouds
-python cases/user/run_case.py mycase
+python cases/make_input.py mycase --nx 64 --ny 64 --clouds
+python cases/run_case.py mycase
 ```
 
 The atmosphere is the RCEMIP radiative-convective-equilibrium sounding of Wing et al.
@@ -152,6 +161,30 @@ band-resolved `-bnd` files, since the solvers take cloud properties by band.
 
 ---
 
+## `rcemip/` — a radiative-convective-equilibrium sounding
+
+The RCEMIP sounding of Wing et al. (2018) at a 300 K sea surface, with the two cloud
+layers, over a 64x64 domain at 100 m spacing and 256 layers. Every column holds the
+same profile, so it says nothing a single column would not, but it is a full
+three-dimensional field of a realistic size and it is the case the ray tracer's
+optimizations were measured on -- see
+[`doc/raytracer_base_optimizations.md`](../doc/raytracer_base_optimizations.md).
+
+The sounding is analytic, so there is no input file to fetch: `make_input.py` writes
+one, and only [`rcemip.toml`](rcemip/rcemip.toml) is kept in git.
+
+```bash
+python cases/make_input.py cases/rcemip/rcemip --clouds --no-settings
+python cases/run_case.py cases/rcemip/rcemip
+```
+
+`--no-settings` because the settings are the committed half of the case; without it
+`make_input.py` would offer to write a `.toml` and leave the existing one alone anyway.
+Any of its flags changes the field -- `--nx`, `--ny`, `--nlay`, `--rt-nz` -- so a run at
+a different size is a different case and belongs in a folder of its own.
+
+---
+
 ## `les_cloudfield/` — a three-dimensional cloud field
 
 The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
@@ -162,7 +195,7 @@ columns.
 
 ```bash
 python cases/fetch_data.py les_cloudfield
-python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
+python cases/run_case.py cases/les_cloudfield/les_cloudfield
 ```
 
 The input is the same `test_input.nc` that `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt`
@@ -184,14 +217,14 @@ this field, see [`RESULTS.md`](RESULTS.md#les_cloudfield).
 
 ---
 
-## `rfmip/run_rfmip.py` — clear-sky validation
+## `rfmip_rte/run_rfmip_rte.py` — clear-sky validation against rte-rrtmgp
 
 100 sites, 60 layers, no clouds. Runs longwave and shortwave, writes the broadband
 fluxes, and prints the largest difference from the reference for each of the four
 quantities `rlu`, `rld`, `rsu`, `rsd`.
 
 ```bash
-python cases/rfmip/run_rfmip.py --plot
+python cases/rfmip_rte/run_rfmip_rte.py --plot
 ```
 
 | flag | default | meaning |
@@ -205,14 +238,14 @@ Exits non-zero if any quantity exceeds RFMIP's own acceptance threshold of
 
 ---
 
-## `allsky/run_allsky.py` — cloudy validation
+## `allsky_rte/run_allsky_rte.py` — cloudy validation against rte-rrtmgp
 
 24 columns, 72 layers, clouds in 16 of them. Exercises cloud optics and the by-band
 increments, and is stored surface-first where RFMIP is top-first, so between them the
 two cases cover both vertical orientations.
 
 ```bash
-python cases/allsky/run_allsky.py --plot
+python cases/allsky_rte/run_allsky_rte.py --plot
 ```
 
 | flag | default | meaning |
@@ -226,16 +259,16 @@ where RFMIP's date from 2018, so this one agrees to round-off and is checked aga
 
 ---
 
-## `rcemip/run_rcemip.py` — performance
+## `rcemip_rte/run_rcemip_rte.py` — performance against the references
 
 A single radiative-convective-equilibrium profile of 256 layers, replicated over a
 64x64 domain. All 4096 columns are identical, so `--ncol` tiles the profile to any
 count you want and the case scales cleanly.
 
 ```bash
-python cases/rcemip/run_rcemip.py --ncol 512 --breakdown
-python cases/rcemip/run_rcemip.py --ncol 512 --compare-fortran
-OMP_NUM_THREADS=1 python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran
+python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --breakdown
+python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --compare-fortran
+OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran
 ```
 
 | flag | default | meaning |

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Run a user-supplied case from a NetCDF file.
 
-    python cases/user/run_case.py CASE
+    python cases/run_case.py CASE
 
 CASE names the case: settings are read from CASE.toml, the atmosphere from
 CASE_input.nc, and the fluxes are written to CASE_output.nc. This is the flow of
@@ -20,7 +20,7 @@ import tomllib
 import numpy as np
 import xarray as xr
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import DATA, Timer  # noqa: E402
 
 import rte3d  # noqa: E402

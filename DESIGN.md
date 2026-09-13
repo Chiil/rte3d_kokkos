@@ -96,7 +96,7 @@ one reaches round-off.
 
 On performance, rte3d is within about 20% of the reference Fortran per thread, and the
 remaining gap is entirely gas optics. Typical result on 256 columns x 256 layers,
-longwave, from `run_rcemip.py --compare-fortran --breakdown`:
+longwave, from `run_rcemip_rte.py --compare-fortran --breakdown`:
 
 ```
                        rte3d      reference    ratio

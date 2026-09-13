@@ -8,7 +8,7 @@ in extern/rrtmgp-data or generate it. The download is a deliberate step rather t
 something a run script does behind your back, since these files are tens of megabytes.
 
 Nothing here is a dependency of rte3d: it is the standard library, and the files it
-writes are ordinary NetCDF that cases/user/run_case.py and xarray read.
+writes are ordinary NetCDF that cases/run_case.py and xarray read.
 """
 import argparse
 import hashlib

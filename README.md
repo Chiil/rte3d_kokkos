@@ -18,7 +18,7 @@ cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
 pytest tests                                     # 180 tests
-python cases/rfmip/run_rfmip.py --plot           # a case, end to end
+python cases/rfmip_rte/run_rfmip_rte.py --plot           # a case, end to end
 ```
 
 The reference-comparison tests skip unless the Fortran oracle is built; see
@@ -86,24 +86,34 @@ The shim exists because two of the reference's entry points are not `bind(C)`; s
 
 ## Cases
 
-Four runnable end-to-end scripts live in [`cases/`](cases/README.md), which documents
-every flag:
+[`cases/`](cases/README.md) holds the runnable end-to-end cases and documents every
+flag. `run_case.py` is the general way in and the shape every new case takes: it reads a
+case you supply as `mycase_input.nc`, with the switches in `mycase.toml`, and writes
+`mycase_output.nc`.
 
 ```bash
-python cases/rfmip/run_rfmip.py   --plot     # clear-sky, 100 sites, vs reference
-python cases/allsky/run_allsky.py --plot     # cloudy, 24 columns, vs reference
-python cases/rcemip/run_rcemip.py --ncol 512 --compare-fortran   # benchmark
-python cases/user/run_case.py mycase         # your own case, from NetCDF
+python cases/run_case.py mycase                        # your own case, from NetCDF
 
-python cases/fetch_data.py les_cloudfield    # the LES cloud field, 26 MB from Zenodo
-python cases/user/run_case.py cases/les_cloudfield/les_cloudfield
+python cases/make_input.py cases/rcemip/rcemip --clouds --no-settings
+python cases/run_case.py cases/rcemip/rcemip           # RCEMIP, 64x64, generated
+
+python cases/fetch_data.py les_cloudfield              # the LES cloud field, 26 MB from Zenodo
+python cases/run_case.py cases/les_cloudfield/les_cloudfield
 ```
 
-The last is the general one: it reads a case you supply as `mycase_input.nc`, with the
-switches in `mycase.toml`, and writes `mycase_output.nc`. The file layout is the one
-rte-rrtmgp-cpp's test executable reads, so cases written for that run here unchanged;
-`cases/user/make_input.py` writes an example one, an analytic RCEMIP sounding, so there
-is something to run before you have written your own.
+The file layout is the one rte-rrtmgp-cpp's test executable reads, so cases written for
+that run here unchanged; `cases/make_input.py` writes an example one, an analytic RCEMIP
+sounding, so there is something to run before you have written your own.
+
+The three `_rte` cases are the exception: each is a fixed comparison against a reference
+implementation, with a script of its own that reads that case's layout and checks its
+reference numbers.
+
+```bash
+python cases/rfmip_rte/run_rfmip_rte.py   --plot     # clear-sky, 100 sites, vs reference
+python cases/allsky_rte/run_allsky_rte.py --plot     # cloudy, 24 columns, vs reference
+python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --compare-fortran   # benchmark
+```
 
 For how they validate and how fast they run, see
 [`DESIGN.md`](DESIGN.md#validation) and [`cases/RESULTS.md`](cases/RESULTS.md).
@@ -119,10 +129,10 @@ export RTE3D_PYTHON_PATH=$PWD/build/main_python
 export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
 
 # like for like: one thread each. This is the number that matters.
-OMP_NUM_THREADS=1 python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran --breakdown
+OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran --breakdown
 
 # all cores, against serial Fortran
-python cases/rcemip/run_rcemip.py --ncol 256 --compare-fortran
+python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran
 ```
 
 Raise `--ncol` for a bigger problem: nothing in the solve grows with the number of

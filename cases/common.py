@@ -9,7 +9,8 @@ import time
 
 import numpy as np
 
-# The case scripts live in cases/<name>/, so rte3d is two levels up.
+# This file lives in cases/, so rte3d is one level up. Every path here is built from
+# this file and not from the caller's, so a script in cases/<name>/ reaches it too.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 'main_python'))
 

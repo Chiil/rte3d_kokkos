@@ -12,6 +12,8 @@ rte-rrtmgp-cpp
 microhh_simple
 
 # Case data: inputs and outputs are hundreds of megabytes and belong beside the case,
-# not in the history. Every case's .toml says where its input comes from.
+# not in the history. Every case's .toml says where its input comes from, and the
+# figures the validation scripts draw are output too.
 *.nc
-cases/user/ref/
+cases/**/*.png
+cases/**/ref/

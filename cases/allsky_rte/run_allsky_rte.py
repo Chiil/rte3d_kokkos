@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Run the all-sky cloudy case end to end and compare against the reference fluxes.
 
-    python cases/allsky/run_allsky.py [--plot] [-o out.nc]
+    python cases/allsky_rte/run_allsky_rte.py [--plot] [-o out.nc]
 
 Unlike RFMIP this reference was generated with the coefficient data that ships beside
 it, so agreement is to round-off rather than to RFMIP's 5.8e-2 W/m2 threshold.

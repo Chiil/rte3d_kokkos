@@ -5,7 +5,7 @@ re-emitted in that layout here and solved through the generic path, which has to
 reproduce what rte3d.allsky computes from the same numbers: same gases, same clouds,
 same boundary conditions, only a different way in.
 
-The generated case goes the other way round: cases/user/make_input.py writes the file
+The generated case goes the other way round: cases/make_input.py writes the file
 and run_case.py reads it back and solves it, which is the path a user of this repository
 actually walks. That case has what the all-sky one does not -- well-mixed gases stored
 as scalars, surface conditions resolved by band, an absolute solar irradiance per
@@ -36,10 +36,10 @@ SIGMA = 5.670374419e-8
 
 
 def case_scripts():
-    """cases/user on the path: the scripts a user runs, imported as modules."""
+    """cases/ on the path: the scripts a user runs, imported as modules."""
     import sys
 
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'cases', 'user'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'cases'))
 
     import make_input
     import run_case
@@ -198,7 +198,7 @@ def test_case_gas_ranks(rte3d, tmp_path):
     assert np.allclose(expanded, np.broadcast_to(profile[:, None], (nlay, ncol)))
 
 def generated_case(tmp_path, name='mycase', clouds=False):
-    """Write a case with cases/user/make_input.py and read it back with rte3d.case."""
+    """Write a case with cases/make_input.py and read it back with rte3d.case."""
     from rte3d.case import read_case
 
     make_input, _ = case_scripts()

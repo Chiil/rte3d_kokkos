@@ -26,7 +26,7 @@ output-bnd-fluxes = false
 plane-parallel = true
 
 # The three-dimensional Monte Carlo ray tracer. Needs the Cartesian grid -- x, xh, y,
-# yh, z, zh -- in the input file; cases/user/make_input.py writes it. Its output is
+# yh, z, zh -- in the input file; cases/make_input.py writes it. Its output is
 # rt_flux_sfc_dir, rt_flux_sfc_dif, rt_flux_sfc_up and rt_flux_tod_dn / rt_flux_tod_up
 # as (y, x), and rt_flux_abs_dir / rt_flux_abs_dif, the absorbed flux per unit height,
 # as (z, y, x).

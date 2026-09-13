@@ -291,7 +291,7 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     if atm.get('grid') is None:
         raise SystemExit(
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
-            'the input file. cases/user/make_input.py writes them.')
+            'the input file. cases/make_input.py writes them.')
 
     clouds = (cloud_props(rte3d, cloud_optics, atm, scattering)
               if cloud_optics else {})
@@ -322,7 +322,7 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     if atm.get('grid') is None:
         raise SystemExit(
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
-            'the input file. cases/user/make_input.py writes them.')
+            'the input file. cases/make_input.py writes them.')
 
     clouds = (cloud_props(rte3d, cloud_optics, atm, True, delta_cloud)
               if cloud_optics else {})

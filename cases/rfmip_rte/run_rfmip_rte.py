@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Run the RFMIP clear-sky case end to end and compare against the reference fluxes.
 
-    python cases/rfmip/run_rfmip.py [--expt 0] [--plot] [-o out.nc]
+    python cases/rfmip_rte/run_rfmip_rte.py [--expt 0] [--plot] [-o out.nc]
 
 Writes broadband up, down and (shortwave) direct fluxes for all 100 RFMIP sites, and
 reports the largest difference from the reference. RFMIP's own acceptance threshold,
