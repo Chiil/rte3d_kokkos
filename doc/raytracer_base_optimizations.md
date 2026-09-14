@@ -158,6 +158,7 @@ line above.
 | 4.1.8 | Float-to-int and fast approximation | **Done** (`dadcda3`) — 5.5% CPU, ~0 GPU |
 | 4.1.9 | Mixed precision (fp16 storage) | Not attempted; caveats in §5 |
 | — | **One sector per collision, not two** *(not in the thesis)* | **Done** (`6e1395a`) — **22.9% RCEMIP** |
+| — | **Photons spent by solar weight** *(not in the thesis)* | **Done, off by default** — 1.5x on the fluxes, a loss on absorption; see §4b |
 
 ### The running totals
 
@@ -301,6 +302,97 @@ in the SASS. It is **one cache sector instead of two**, which is why it is worth
 more where the cache is under pressure.
 
 ---
+
+---
+
+## 4b. Spending the photons over the spectrum — *(not in the thesis)*
+
+Every item above makes a photon cheaper. This one asks a different question: how many
+photons each g-point should get. `solve_sw_rt` gave every one the same
+`photons_per_pixel` while `toa_src` varies over four orders of magnitude, and the noise
+of the broadband sum is `sum_i w_i^2/n_i`, which at a fixed total is minimized by
+`n_i ∝ w_i`, not by `n_i` constant. On paper that is worth **5.0x on g112 and 5.2x on
+g224** — more than everything in §4 put together, for no kernel work at all.
+
+It is worth **about 1.5x**, on the boundary fluxes only, and it is a **loss on the
+absorption field**. Both halves of that are measured, on both cases, and the reason for
+the gap is the interesting part.
+
+`spectral_photons` is the power the allocation takes: zero is equal shares, one is
+proportional to the flux. It defaults to zero. The floor is one photon per pixel —
+below that the quasi-random launch stops reaching every pixel, and the field, not just
+its sum, is what the tracer is for. At power one that floor binds on 7 of the 112
+g-points and 38 of the 224.
+
+### What it buys, at equal photons
+
+LES cumulus, 112 g-points, against a converged uniform 8192-photon reference, rms per
+column in percent of the reference's own rms:
+
+| power | time | sfc_dir | sfc_dif | tod_up | abs_dir | abs_dif |
+|---|---|---|---|---|---|---|
+| 0 (uniform) | 2.68 s | 1.554% | 3.925% | 3.989% | 1.318% | 5.670% |
+| 0.5 | 3.73 s | 0.814% | 2.125% | 2.155% | 1.016% | 4.045% |
+| 1 | 4.19 s | **0.647%** | **1.737%** | **1.785%** | 1.200% | 4.484% |
+
+The theory is confirmed exactly where it applies: at the same photon count the
+boundary-flux noise falls by 2.4x, which is **5.8x in photons**, against the 5.4x
+predicted for this k-distribution.
+
+### Why the 5x does not become 5x of runtime
+
+**The photons it moves are the expensive ones.** Fitting the timings against the budget
+separates the fixed cost per g-point from the cost per photon:
+
+| | LES, uniform | LES, power 1 | RCEMIP, uniform | RCEMIP, power 1 |
+|---|---|---|---|---|
+| fixed | 1.54 s | 1.24 s | 3.7 s | 3.9 s |
+| per photon per pixel | 4.33 ms | **11.20 ms** | 143 ms | **341 ms** |
+
+A photon in a bright visible g-point scatters many times before its weight runs out; one
+in an absorbing near-infrared g-point dies quickly. Weighting by flux is therefore also
+weighting towards long photon histories, and each photon bought costs **2.4x to 2.6x**
+more. Of the 5.8x in photons, that leaves about 2.2x — and on the LES field the fixed
+per-g-point cost, 1.5 s of 2.7 s, eats most of what is left.
+
+**And absorption is not where the flux is.** The absorption field's noise lives in the
+near-infrared g-points that absorb, which are exactly the ones the solar weighting
+starves. Speed-up at equal noise, against uniform at 256 photons per pixel:
+
+| | sfc_dif | tod_up | abs_dir | abs_dif |
+|---|---|---|---|---|
+| LES, power 0.5 | 1.29x | 1.29x | 0.96x | 1.04x |
+| LES, power 1 | 1.51x | 1.50x | **0.73x** | **0.87x** |
+| RCEMIP, power 0.5 | 1.48x | 1.43x | 0.74x | 0.93x |
+| RCEMIP, power 1 | 1.56x | 1.52x | **0.32x** | **0.56x** |
+
+RCEMIP is the case where photon work dominates — 40.3 s against 3.7 s of fixed cost at
+256 photons per pixel — and it still only reaches 1.56x, because there the per-photon
+cost penalty is at its largest. The two cases disagree about almost everything else in
+this file and agree closely here.
+
+`sfc_dir` is absent from the RCEMIP rows because it is exactly zero there: the field is
+thick enough that no direct beam reaches the ground. `sfc_up` is omitted from both
+because the surface albedo is a constant, so it carries the same relative noise as
+`sfc_dif` to the digit.
+
+### What to do with it
+
+**Keep it off by default**, which is what `spectral-photons = 0.0` in the case files
+does. A run that wants boundary fluxes and does not care about heating rates can set
+0.5 for ~1.3–1.5x, or 1.0 for ~1.5x and a materially noisier absorption field. The
+allocation is unbiased either way: the mean flux moves by less than 0.03 percent, which
+is the same scatter two uniform runs show.
+
+Two things that would lift the ceiling, neither attempted:
+
+- **Weight by cost as well as by flux.** With unequal per-photon cost the optimum is
+  `n_i ∝ w_i/sqrt(c_i)`, and `c_i` is measurable — one cheap pilot pass would give it.
+  The powers between 0 and 1 measured above are a crude proxy for exactly this, which is
+  why 0.5 beats 1 on the absorption field and nearly matches it on the fluxes.
+- **Weight per output.** The boundary fluxes and the absorption field want different
+  allocations, and no single `n_i` serves both. A run that only wants one of them could
+  say so.
 
 ## 5. What is left
 

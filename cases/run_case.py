@@ -34,7 +34,8 @@ SWITCHES = dict(longwave=True, shortwave=True, cloud_optics=False,
 # Which shortwave solver, or both. Named as in rte-rrtmgp-cpp's ini files, whose
 # [shortwave] section this is.
 SHORTWAVE = dict(plane_parallel=True, raytracing=False,
-                 photons_per_pixel=256, independent_column=False)
+                 photons_per_pixel=256, independent_column=False,
+                 spectral_photons=0.0)
 
 # The same for the longwave. scattering follows lw-scattering in those ini files:
 # without it clouds absorb and emit but do not deflect a photon.
@@ -153,8 +154,12 @@ def run_band(band, atm, switches, files, shortwave, longwave,
 
         if shortwave['raytracing']:
             grid = atm['grid']
+            budget = ('photons per pixel spread over the spectrum by solar '
+                      f'irradiance^{shortwave["spectral_photons"]:g} through'
+                      if shortwave['spectral_photons'] > 0
+                      else 'photons per pixel through')
             print(f'sw ray tracer                tracing '
-                  f'{shortwave["photons_per_pixel"]} photons per pixel through '
+                  f'{shortwave["photons_per_pixel"]} {budget} '
                   f'{grid["nx"]}x{grid["ny"]}x{grid["nz"]} cells, '
                   f'{kdist.ngpt} g-points', flush=True)
 
@@ -165,7 +170,8 @@ def run_band(band, atm, switches, files, shortwave, longwave,
                 lambda: solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band,
                                     cloud_optics, switches['delta_cloud'],
                                     shortwave['photons_per_pixel'],
-                                    shortwave['independent_column']),
+                                    shortwave['independent_column'],
+                                    shortwave['spectral_photons']),
                 repeats=1, warmup=0))
             print(rt_timer.report(ncol=atm['ncol']))
 

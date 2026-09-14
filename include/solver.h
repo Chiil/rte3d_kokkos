@@ -184,6 +184,14 @@ namespace Solver
     // Cloud properties are handed to the tracer separately rather than incremented
     // into the gas ones: a scattering event has to know whether a cloud droplet or a
     // molecule did it, and the two have different phase functions.
+    //
+    // spectral_photons divides the photon budget over the g-points as toa_src to this
+    // power rather than equally, the total unchanged. Zero is equal shares. One is
+    // proportional to the flux each g-point carries, which is what minimizes the noise
+    // of the broadband sum at a fixed number of photons: a g-point holding a
+    // thousandth of the flux contributes a thousandth of its own noise to that sum.
+    // Between the two is a compromise -- the boundary fluxes want the full weighting,
+    // the absorption field less of it, since absorption sits where the flux is not.
     void solve_sw_rt(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -192,6 +200,7 @@ namespace Solver
             const Raytracer::Grid& grid,
             const int photons_per_pixel,
             const bool independent_column,
+            const TF spectral_photons,
             const TF mu0,
             const TF azi,
             const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host

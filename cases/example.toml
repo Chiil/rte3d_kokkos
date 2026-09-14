@@ -39,6 +39,16 @@ photons-per-pixel = 256
 # column solver. Useful for telling the two-stream's error from the third dimension's.
 independent-column = false
 
+# Divide the photon budget over the g-points as the solar irradiance to this power
+# rather than equally, the total unchanged. Zero is equal shares. One spends in
+# proportion to the flux each g-point carries, which is what minimizes the noise of
+# the broadband boundary fluxes per photon -- but photons in the bright visible
+# g-points scatter longer before they die, so each of them also costs more. Measured
+# on two real fields, one is worth about 1.5x at equal boundary-flux noise and is a
+# loss on the absorption field; 0.5 is the better compromise. See
+# doc/raytracer_base_optimizations.md.
+spectral-photons = 0.0
+
 [longwave]
 # The same two solvers for the longwave, chosen the same way.
 plane-parallel = true

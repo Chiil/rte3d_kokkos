@@ -1,4 +1,7 @@
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
+#include <vector>
 
 #include "fluxes.h"
 #include "gas_optics.h"
@@ -310,6 +313,7 @@ void Solver::solve_sw_rt(
         const Raytracer::Grid& grid,
         const int photons_per_pixel,
         const bool independent_column,
+        const TF spectral_photons,
         const TF mu0,
         const TF azi,
         const Array_1d_h<const TF>& toa_src,
@@ -324,6 +328,35 @@ void Solver::solve_sw_rt(
 
     fluxes.zero();
 
+    // How the budget is divided over the spectrum: as the solar irradiance to the
+    // power asked for, scaled so that the total is the same budget an equal division
+    // would have spent. A g-point gets at least one photon per pixel -- below that the
+    // quasi-random launch no longer reaches every pixel, and the field, not just its
+    // sum, is what the tracer is for -- which is why the sum is taken over the floored
+    // counts and not assumed.
+    std::vector<int> photons(ngpt, photons_per_pixel);
+
+    if (spectral_photons > TF(0.))
+    {
+        std::vector<TF> share(ngpt);
+        TF share_sum = TF(0.);
+
+        for (int igpt=0; igpt<ngpt; ++igpt)
+        {
+            share[igpt] = std::pow(std::max(TF(0.), toa_src(igpt)), spectral_photons);
+            share_sum += share[igpt];
+        }
+
+        if (share_sum > TF(0.))
+            for (int igpt=0; igpt<ngpt; ++igpt)
+                photons[igpt] = std::max(1, static_cast<int>(std::lround(
+                        photons_per_pixel*ngpt*share[igpt]/share_sum)));
+    }
+
+    // Where each g-point starts in the quasi-random sequence, so that no two of them
+    // draw the same lattice points.
+    unsigned int photon_offset = 0;
+
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
         const int ibnd = k.gpt_band_h(igpt);
@@ -336,13 +369,15 @@ void Solver::solve_sw_rt(
                 state.tau, state.ssa, Array_map_2d<TF>());
 
         Raytracer::trace_rays(
-                grid, top_at_1, independent_column, photons_per_pixel, igpt,
+                grid, top_at_1, independent_column, photons[igpt], photon_offset,
                 state.tau, state.ssa,
                 band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
                 band_slice(clouds.g, ibnd),
                 slice_1d(sfc_alb_dir, igpt),
                 mu0, azi, toa_src(igpt)*mu0, TF(0.),
                 fluxes, scratch);
+
+        photon_offset += Raytracer::photons_spent(grid, photons[igpt]);
     }
 }
 

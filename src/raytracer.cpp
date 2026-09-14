@@ -180,7 +180,7 @@ namespace
     void launch_photons(
             const Rt_kernels::Scene& scene, const int nthread,
             const int photons_per_thread, const int photons_extra,
-            const unsigned int gpt_offset)
+            const unsigned int photon_offset)
     {
         Kokkos::parallel_for("rt_trace_photons",
             Kokkos::RangePolicy<Default_exec>(0, nthread),
@@ -193,7 +193,7 @@ namespace
                         + static_cast<unsigned int>(n < photons_extra ? n : photons_extra);
 
                 Rt_kernels::trace_photons<independent_column>(
-                        scene, nshoot, gpt_offset + start, gpt_offset + start);
+                        scene, nshoot, photon_offset + start, photon_offset + start);
             });
     }
 
@@ -233,6 +233,13 @@ namespace
                 f_abs_dif(k, icol) += atmos_dif(k, icol)*per_volume;
             });
     }
+}
+
+
+unsigned int Raytracer::photons_spent(const Grid& grid, const int photons_per_pixel)
+{
+    return static_cast<unsigned int>(photons_per_pixel)
+            *next_pow2(grid.nx)*next_pow2(grid.ny);
 }
 
 
@@ -311,7 +318,7 @@ void Raytracer::trace_rays(
         const bool top_at_1,
         const bool independent_column,
         const int photons_per_pixel,
-        const int igpt,
+        const unsigned int photon_offset,
         const Array_map_2d<const TF>& tau_gas,
         const Array_map_2d<const TF>& ssa_gas,
         const Array_map_2d<const TF>& tau_cld,
@@ -411,12 +418,10 @@ void Raytracer::trace_rays(
     const int photons_per_thread = static_cast<int>(photons_total/nthread);
     const int photons_extra = static_cast<int>(photons_total % nthread);
 
-    const unsigned int gpt_offset = static_cast<unsigned int>(igpt*photons_total);
-
     if (independent_column)
-        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra, photon_offset);
     else
-        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, photon_offset);
 
     count_to_flux(grid, (inc_dir + inc_dif)/photons_per_pixel, scratch, fluxes);
 }
