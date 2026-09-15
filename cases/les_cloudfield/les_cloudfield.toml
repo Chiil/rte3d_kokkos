@@ -26,6 +26,13 @@ plane-parallel = true
 raytracing = true
 photons-per-pixel = 8192
 
+# Trace the columns independently, with no horizontal transport, which turns the tracer
+# into an exact column solver and leaves only the two-stream approximation between it
+# and the plane-parallel run beside it. Off is the three-dimensional field this case is
+# about; on is how to tell the two-stream's own error from what the third dimension
+# adds. The comparison against rte-rrtmgp-cpp below is the three-dimensional one.
+independent-column = false
+
 # Verified against rte-rrtmgp-cpp's own test_rte_rrtmgp_rt on this field, same 112
 # g-points, same sun: surface direct, surface diffuse, surface up and top-of-domain
 # up all agree to better than 0.1 percent, and the absorption profile agrees to
@@ -45,6 +52,7 @@ photons-per-pixel = 8192
 # The same pair in the longwave, for the same reason.
 plane-parallel = true
 raytracing = true
+independent-column = false      # as in the shortwave above
 scattering = true       # lw-scattering = false in the reference's test.ini
 # The reference counts longwave photons as 2**samples for the whole domain, not per
 # pixel as it does in the shortwave -- samples = 22 there. 2**22 over 128*128 columns
