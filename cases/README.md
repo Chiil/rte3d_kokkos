@@ -199,6 +199,12 @@ python cases/run_case.py cases/les_cloudfield/les_cloudfield
 python cases/les_cloudfield/plot_solvers.py      # optional, needs matplotlib
 ```
 
+`plot_solvers.py` writes three figures beside the case: `les_solvers_profiles.png`,
+the domain-mean heating and cooling the two transports give; `les_solvers_sfc_down.png`,
+the downward flux at the surface in both bands, each solver's map and their difference;
+and `les_solvers_tod_up.png`, the upward flux leaving the top of the tracer's domain,
+laid out the same way.
+
 The input is the same `test_input.nc` that `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt`
 reads, published at [10.5281/zenodo.18757088](https://doi.org/10.5281/zenodo.18757088)
 (CC BY 4.0). Fetching it writes `les_cloudfield_input.nc` beside the settings, which is
@@ -208,10 +214,13 @@ the name `run_case.py` derives from the case prefix; the fluxes go to
 Both bands are run through both transports: traced, and plane-parallel beside it. The
 g-point counts are the reference case's -- 112 shortwave and 128 longwave -- so that a
 run here and a run of `test_rte_rrtmgp_rt` cover the same spectrum. `plot_solvers.py`
-draws the two transports against each other afterwards: the heating and cooling
-profiles they give, and the surface shortwave the third dimension moves -- shadows
-displaced from under the cloud and the bright rim beside them, 11 W/m2 in the domain
-mean and 318 W/m2 per column.
+draws the two transports against each other afterwards. What the third dimension moves
+is plain in both directions: at the surface, shortwave shadows displaced from under the
+cloud with the bright rim beside them, 11 W/m2 in the domain mean and 318 W/m2 per
+column; at the top, a shortwave field the 1D solver gives as a bright cloud on a dark
+background and the tracer gives as very nearly uniform -- 6 W/m2 of spread against 141 --
+because photons reflected two kilometres below have spread across the whole domain by
+the time they leave it.
 
 The case leaves the 132 layers above the box outside it -- `lump-above = false` --
 rather than lumping them into the box's top cell, which is what the settings file

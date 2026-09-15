@@ -2,25 +2,37 @@
 """Draw what the third dimension is worth on the LES cloud field.
 
     python cases/run_case.py cases/les_cloudfield/les_cloudfield
-    python cases/les_cloudfield/plot_solvers.py [-o figure.png]
+    python cases/les_cloudfield/plot_solvers.py [-o stem]
 
 Reads the case's output file and compares the two transports the case runs, in both
 bands: the plane-parallel two-stream solver, which sees each column on its own, and
 the Monte Carlo ray tracer, which sees the whole domain. Both switches have to be on
 in les_cloudfield.toml, which they are.
 
+Three figures come out of it, named after the stem:
+
+    <stem>_profiles.png   the heating and cooling profiles, domain mean
+    <stem>_sfc_down.png   the downward flux at the surface, both bands, both solvers
+                          and their difference
+    <stem>_tod_up.png     the upward flux leaving the top of the tracer's domain,
+                          laid out the same way
+
 The heating rates come from the fluxes the way a model would take them: from the
 two-stream's flux divergence over a layer, and from the tracer's absorbed flux per
-unit height, which is what it reports. Only the 200 resolved cells are drawn -- the
-tracer's cell 200 holds the whole atmosphere above the box, lumped, and has no
-plane-parallel counterpart of the same depth.
+unit height, which is what it reports.
 
-A cell like that also costs the cells just below it, so where the case does lump --
-lump-above = true in the settings -- the figure hatches the region rather than hide
-it. The lump carries all the air above the box at one temperature and the box's own
-depth, which on this field sends 28 W/m2 less down into the box than the air it stands
-in for, and the cells beneath cool too hard by an amount that dies away downward. The
-case leaves that air outside the box instead, and then nothing is hatched.
+The two bands need not trace the same box. Where a band lumps the atmosphere above the
+box into the box's top cell, that cell stands for everything above it, so what leaves
+the top of that box is what leaves the atmosphere and the two-stream's own top of
+atmosphere is what it compares against; where the air above is left outside instead,
+the box ends at its own top and so does the comparison. The figures say which.
+
+A lumped cell also costs the cells just below it, so where the case does lump --
+lump-above = true in the settings -- the profile figure hatches the region rather than
+hide it. The lump carries all the air above the box at one temperature and the box's
+own depth, which on this field sends 28 W/m2 less down into the box than the air it
+stands in for, and the cells beneath cool too hard by an amount that dies away
+downward. The case leaves that air outside the box, and then nothing is hatched.
 """
 import argparse
 import os
@@ -39,27 +51,67 @@ CASE = os.path.join(HERE, 'les_cloudfield')
 CP = 1005.0
 PER_DAY = 86400.0
 
+BANDS = (('sw', 'shortwave'), ('lw', 'longwave'))
+
+
+def field(d, name):
+    """A field of the output as (level or cell, column), or (column) if it has no
+    vertical dimension."""
+    a = np.asarray(d[name], dtype=np.float64)
+    return a.reshape(-1) if a.ndim == 2 else a.reshape(a.shape[0], -1)
+
+
+def tracer_cells(d, band):
+    """How many cells the tracer used for this band."""
+    return d['rt_flux_abs_dir' if band == 'sw' else 'rt_lw_flux_abs'].shape[0]
+
 
 def rates(d, g, band, nz, dz):
     """Domain-mean heating rate [K/day] from each solver, over the resolved cells."""
     rho = np.asarray(g['rho'])[:nz].reshape(nz, -1).mean(axis=1)
 
-    def field(name):
-        a = np.asarray(d[name], dtype=np.float64)
-        return a.reshape(a.shape[0], -1)
-
     # The net flux is downward minus upward, so what a layer absorbs is what enters
     # its top less what leaves its bottom. The surface is index 0.
-    net = field(f'{band}_flux_net')
+    net = field(d, f'{band}_flux_net')
     plane_parallel = (net[1:nz + 1] - net[:nz]).mean(axis=1)/(rho*CP*dz)*PER_DAY
 
     if band == 'sw':
-        per_volume = field('rt_flux_abs_dir') + field('rt_flux_abs_dif')
+        per_volume = field(d, 'rt_flux_abs_dir') + field(d, 'rt_flux_abs_dif')
     else:
-        per_volume = field('rt_lw_flux_abs')
+        per_volume = field(d, 'rt_lw_flux_abs')
     tracer = per_volume[:nz].mean(axis=1)/(rho*CP)*PER_DAY
 
     return plane_parallel, tracer
+
+
+def surface_down(d, band, nz):
+    """The downward flux at the surface, from each solver, and what it is called."""
+    plane_parallel = field(d, f'{band}_flux_dn')[0]
+
+    if band == 'sw':
+        tracer = field(d, 'rt_flux_sfc_dir') + field(d, 'rt_flux_sfc_dif')
+    else:
+        tracer = field(d, 'rt_lw_flux_sfc_dn')
+
+    return plane_parallel, tracer, 'at the surface'
+
+
+def domain_top_up(d, band, nz):
+    """The upward flux leaving the top of the tracer's domain, from each solver.
+
+    Which level of the column that is depends on what the band did with the air above
+    the box: lumped into the box's top cell, the box stands for the whole atmosphere
+    and what leaves it leaves the atmosphere; left outside, the box ends where it ends.
+    """
+    up = field(d, f'{band}_flux_up')
+    lumped = tracer_cells(d, band) > nz
+
+    plane_parallel = up[-1] if lumped else up[nz]
+    tracer = field(d, 'rt_flux_tod_up' if band == 'sw' else 'rt_lw_flux_tod_up')
+    where = ('at the top of the atmosphere, the air above the box lumped into it'
+             if lumped else 'at the top of the box')
+
+    return plane_parallel, tracer, where
 
 
 def lump_shadow(plane_parallel, tracer, z):
@@ -87,43 +139,28 @@ def lump_shadow(plane_parallel, tracer, z):
     return z[k]
 
 
-def plot(d, g, path):
-    require_plotting()
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    z = np.asarray(g['z'])
+def plot_profiles(plt, d, g, z, dz, title, path):
+    """The heating and cooling the two transports give, as a model would feel them."""
     nz = z.size
-    dz = float(np.diff(np.asarray(g['zh']))[0])
 
-    shape = np.asarray(d['rt_flux_sfc_dir']).shape
-    sfc_tracer = (np.asarray(d['rt_flux_sfc_dir'], dtype=np.float64)
-                  + np.asarray(d['rt_flux_sfc_dif'], dtype=np.float64)).reshape(-1)
-    sfc_plane_parallel = np.asarray(
-        d['sw_flux_dn'], dtype=np.float64).reshape(-1, sfc_tracer.size)[0]
-
-    fig = plt.figure(figsize=(12.5, 7.5))
-    gs = fig.add_gridspec(2, 3, width_ratios=[1, 1, 1.25], hspace=0.35, wspace=0.3)
+    fig, axes = plt.subplots(1, 2, figsize=(9, 6), sharey=True)
 
     # Where the cloud sits, since that is the only place the two transports can
     # differ at all.
     lwp = np.asarray(g['lwp'])[:nz].reshape(nz, -1).mean(axis=1)
     cloud = (z[lwp > 0].min()/1e3, z[lwp > 0].max()/1e3) if (lwp > 0).any() else None
 
-    for col, (band, title, legend_at) in enumerate(
-            (('sw', 'shortwave heating', 'upper right'),
-             ('lw', 'longwave cooling', 'lower left'))):
-        ax = fig.add_subplot(gs[:, col])
+    for ax, (band, name), legend_at in zip(
+            axes, BANDS, ('upper right', 'lower left')):
         plane_parallel, tracer = rates(d, g, band, nz, dz)
 
         ax.plot(plane_parallel, z/1e3, '-', color='C0', lw=1.6,
                 label='two-stream (1D)')
         ax.plot(tracer, z/1e3, '-', color='C1', lw=1.6, label='ray tracer (3D)')
 
-        # The cells the lumped cell above the box spoils are drawn, but they are not
-        # allowed to set the axis: the topmost one cools an order of magnitude harder
-        # than anything else and would flatten the whole profile against it.
+        # The cells a lumped cell above the box spoils are drawn, but they are not
+        # allowed to set the axis: the topmost one absorbs an order of magnitude
+        # harder than anything else and would flatten the whole profile against it.
         shadow = lump_shadow(plane_parallel, tracer, z)
         clean = slice(None) if shadow is None else (z < shadow)
 
@@ -142,71 +179,90 @@ def plot(d, g, path):
             ax.text(0.97, cloud[1], 'cloud', transform=ax.get_yaxis_transform(),
                     ha='right', va='bottom', fontsize=8)
 
-        ax.set_title(f'{title}, domain mean')
+        ax.set_title(f'{name}, domain mean')
         ax.set_xlabel('heating rate [K day$^{-1}$]')
-        if col == 0:
-            ax.set_ylabel('height [km]')
         ax.legend(fontsize=8, loc=legend_at)
         ax.grid(alpha=0.3)
 
-    ax = fig.add_subplot(gs[0, 2])
-    difference = (sfc_tracer - sfc_plane_parallel).reshape(shape)
-
-    # A symmetric scale about zero, clipped at the 99th percentile so that a handful
-    # of pixels in the deepest shadow do not set it for the whole map.
-    limit = np.percentile(np.abs(difference), 99)
-    extent = [0.0, float(np.asarray(g['xh'])[-1])/1e3,
-              0.0, float(np.asarray(g['yh'])[-1])/1e3]
-    image = ax.imshow(difference, origin='lower', cmap='RdBu_r',
-                      vmin=-limit, vmax=limit, extent=extent)
-    ax.set_title('surface shortwave down, 3D minus 1D')
-    ax.set_xlabel('x [km]')
-    ax.set_ylabel('y [km]')
-    fig.colorbar(image, ax=ax, pad=0.02, label='W m$^{-2}$')
-
-    ax = fig.add_subplot(gs[1, 2])
-    lo = min(sfc_plane_parallel.min(), sfc_tracer.min())
-    hi = max(sfc_plane_parallel.max(), sfc_tracer.max())
-    ax.hexbin(sfc_plane_parallel, sfc_tracer, gridsize=55, bins='log', cmap='Blues',
-              extent=(lo, hi, lo, hi), linewidths=0)
-    ax.plot([lo, hi], [lo, hi], 'k--', lw=1)
-
-    bias = sfc_tracer.mean() - sfc_plane_parallel.mean()
-    rms = np.sqrt(np.mean((sfc_tracer - sfc_plane_parallel)**2))
-    ax.text(0.03, 0.95, f'mean {bias:+.1f} W m$^{{-2}}$\nrms {rms:.1f} W m$^{{-2}}$',
-            transform=ax.transAxes, va='top', fontsize=8)
-
-    ax.set_title(f'surface shortwave down, {sfc_tracer.size} columns')
-    ax.set_xlabel('two-stream [W m$^{-2}$]')
-    ax.set_ylabel('ray tracer [W m$^{-2}$]')
-    ax.grid(alpha=0.3)
-
-    nx, ny = shape[1], shape[0]
-    fig.suptitle(f'LES cumulus field: {nx} x {ny} x {nz} at {dz:g} m, '
-                 'plane-parallel against ray traced')
+    axes[0].set_ylabel('height [km]')
+    fig.suptitle(title)
     fig.savefig(path, dpi=140, bbox_inches='tight')
     print(f'wrote {path}')
 
-    print(f'surface shortwave down   1D {sfc_plane_parallel.mean():7.2f}   '
-          f'3D {sfc_tracer.mean():7.2f} W/m2, rms difference {rms:.2f}')
 
-    # What arrives at the top of the box, which is what the longwave panel's top
-    # stands or falls by.
-    into_the_box = np.asarray(d['lw_flux_dn'], dtype=np.float64).reshape(
-        -1, sfc_tracer.size)[nz].mean()
-    traced_in = float(np.asarray(d['rt_lw_flux_tod_dn']).mean())
-    print(f'longwave down into the box   1D {into_the_box:7.2f}   '
-          f'3D {traced_in:7.2f} W/m2'
-          + ('' if traced_in > 0.98*into_the_box else
-             ', the lumped cell above the box sending down less than the air it '
-             'stands in for'))
+def plot_maps(plt, d, g, which, nz, shape, title, path):
+    """One flux, both bands: each solver's map and the difference between them.
+
+    A band gets a row of three: the two solvers on one shared scale, so that the maps
+    can be read against each other rather than each against itself, and their
+    difference on a scale of its own, symmetric about zero.
+    """
+    extent = [0.0, float(np.asarray(g['xh'])[-1])/1e3,
+              0.0, float(np.asarray(g['yh'])[-1])/1e3]
+
+    fig, axes = plt.subplots(2, 3, figsize=(12.5, 7.6), layout='constrained')
+    wheres = []
+
+    for row, (band, name) in zip(axes, BANDS):
+        plane_parallel, tracer, where = which(d, band, nz)
+        difference = tracer - plane_parallel
+        wheres.append(f'{name}: {where}')
+
+        low = min(plane_parallel.min(), tracer.min())
+        high = max(plane_parallel.max(), tracer.max())
+
+        for ax, values, label in zip(row[:2], (plane_parallel, tracer),
+                                     ('two-stream (1D)', 'ray tracer (3D)')):
+            image = ax.imshow(values.reshape(shape), origin='lower', cmap='viridis',
+                              vmin=low, vmax=high, extent=extent)
+            ax.set_title(f'{name}, {label}', fontsize=10)
+
+        fig.colorbar(image, ax=row[:2].tolist(), label='W m$^{-2}$')
+
+        # A symmetric scale about zero for the difference, clipped at the 99th
+        # percentile so that a handful of pixels do not set it for the whole map.
+        limit = np.percentile(np.abs(difference), 99) or 1.0
+        image = row[2].imshow(difference.reshape(shape), origin='lower',
+                              cmap='RdBu_r', vmin=-limit, vmax=limit, extent=extent)
+        row[2].set_title(f'{name}, 3D minus 1D', fontsize=10)
+        fig.colorbar(image, ax=row[2], label='W m$^{-2}$')
+
+        bias = difference.mean()
+        rms = np.sqrt(np.mean(difference**2))
+        row[2].text(0.03, 0.97, f'mean {bias:+.1f}\nrms {rms:.1f} W m$^{{-2}}$',
+                    transform=row[2].transAxes, va='top', fontsize=8,
+                    bbox=dict(facecolor='white', alpha=0.7, lw=0, pad=2))
+
+        for ax in row:
+            ax.tick_params(labelsize=8)
+        row[0].set_ylabel('y [km]', fontsize=9)
+
+    for ax in axes[1]:
+        ax.set_xlabel('x [km]', fontsize=9)
+
+    # Where the flux was taken is a property of the band, not of the figure: the two
+    # need not have traced the same box.
+    fig.suptitle(title + '\n' + ' \u00b7 '.join(wheres), fontsize=11)
+    fig.savefig(path, dpi=140)
+    print(f'wrote {path}')
+
+
+def summary(d, which, nz, name):
+    """The numbers the maps are made of, for the terminal."""
+    for band, band_name in BANDS:
+        plane_parallel, tracer, _ = which(d, band, nz)
+        difference = tracer - plane_parallel
+
+        print(f'{band_name:10s} {name:22s} 1D {plane_parallel.mean():7.2f}   '
+              f'3D {tracer.mean():7.2f} W/m2, mean difference '
+              f'{difference.mean():+6.2f}, rms {np.sqrt(np.mean(difference**2)):6.2f}')
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('-o', '--output', default=os.path.join(HERE, 'les_solvers.png'),
-                   help='where to write the figure (default: %(default)s)')
+    p.add_argument('-o', '--output', default=os.path.join(HERE, 'les_solvers'),
+                   help='stem of the three figures (default: %(default)s)')
     args = p.parse_args()
 
     import xarray as xr
@@ -222,11 +278,35 @@ def main():
                                  'rt_lw_flux_abs') if name not in d]
     if missing:
         raise SystemExit(
-            f'{output} has no {", ".join(missing)}: the figure compares the two '
+            f'{output} has no {", ".join(missing)}: the figures compare the two '
             'transports, so both plane-parallel and raytracing have to be on in '
             'les_cloudfield.toml.')
 
-    plot(d, xr.open_dataset(CASE + '_input.nc'), args.output)
+    g = xr.open_dataset(CASE + '_input.nc')
+    z = np.asarray(g['z'])
+    dz = float(np.diff(np.asarray(g['zh']))[0])
+    shape = np.asarray(d['rt_flux_sfc_dir']).shape
+
+    require_plotting()
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    nx, ny = shape[1], shape[0]
+    field_size = f'{nx} x {ny} x {z.size} at {dz:g} m'
+
+    plot_profiles(plt, d, g, z, dz,
+                  f'Heating the two transports give, LES cumulus field, {field_size}',
+                  f'{args.output}_profiles.png')
+    plot_maps(plt, d, g, surface_down, z.size, shape,
+              f'Downward flux at the surface, LES cumulus field, {field_size}',
+              f'{args.output}_sfc_down.png')
+    plot_maps(plt, d, g, domain_top_up, z.size, shape,
+              f'Upward flux leaving the tracer\'s domain, LES cumulus field, '
+              f'{field_size}', f'{args.output}_tod_up.png')
+
+    summary(d, surface_down, z.size, 'down at the surface')
+    summary(d, domain_top_up, z.size, 'up at the domain top')
 
     return 0
 
