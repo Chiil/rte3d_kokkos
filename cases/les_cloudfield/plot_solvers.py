@@ -14,6 +14,14 @@ two-stream's flux divergence over a layer, and from the tracer's absorbed flux p
 unit height, which is what it reports. Only the 200 resolved cells are drawn -- the
 tracer's cell 200 holds the whole atmosphere above the box, lumped, and has no
 plane-parallel counterpart of the same depth.
+
+That lump also costs the cells just below it, which is marked in the figure rather
+than hidden. All of the air above the box is compressed into one cell of the box's own
+depth at one temperature, so what it emits downward is not what a resolved atmosphere
+would send: on this field the tracer's downward longwave into the top of the box is
+about 28 W/m2 short of the two-stream's, and the cells beneath it cool too hard by an
+amount that dies away downward, reaching the Monte Carlo noise around 3.5 km. Read the
+top few hundred metres of the longwave profile as the lumping's, not the tracer's.
 """
 import argparse
 import os
@@ -55,6 +63,31 @@ def rates(d, g, band, nz, dz):
     return plane_parallel, tracer
 
 
+def lump_shadow(plane_parallel, tracer, z):
+    """Where the lumped cell above the box starts contaminating the profile.
+
+    The two transports differ everywhere by the tracer's Monte Carlo noise, and near
+    the top of the box by the lump as well. The lump's part is the one that grows
+    towards the boundary, so it is found as the topmost run of cells that stands out
+    of the noise the rest of the profile shows. Returns the height it starts at, or
+    None where nothing stands out.
+    """
+    difference = np.abs(tracer - plane_parallel)
+
+    # The noise, taken from the lower three quarters, which the lump does not reach.
+    noise = np.median(difference[:3*difference.size//4])
+
+    out = difference > 3*noise
+    if not out[-1]:
+        return None
+
+    k = difference.size - 1
+    while k > 0 and out[k - 1]:
+        k -= 1
+
+    return z[k]
+
+
 def plot(d, g, path):
     require_plotting()
     import matplotlib
@@ -89,12 +122,21 @@ def plot(d, g, path):
                 label='two-stream (1D)')
         ax.plot(tracer, z/1e3, '-', color='C1', lw=1.6, label='ray tracer (3D)')
 
-        # The topmost resolved cell is not converged in either code -- it absorbs an
-        # order of magnitude harder than the median -- so it is drawn but is not
-        # allowed to set the axis, which would flatten everything below it.
-        span = np.concatenate([plane_parallel[:-1], tracer[:-1]])
+        # The cells the lumped cell above the box spoils are drawn, but they are not
+        # allowed to set the axis: the topmost one cools an order of magnitude harder
+        # than anything else and would flatten the whole profile against it.
+        shadow = lump_shadow(plane_parallel, tracer, z)
+        clean = slice(None) if shadow is None else (z < shadow)
+
+        span = np.concatenate([plane_parallel[clean], tracer[clean]])
         pad = 0.06*(span.max() - span.min())
         ax.set_xlim(span.min() - pad, span.max() + pad)
+
+        if shadow is not None:
+            ax.axhspan(shadow/1e3, z[-1]/1e3, facecolor='none', edgecolor='0.6',
+                       hatch='//', lw=0, zorder=0)
+            ax.text(0.03, shadow/1e3, 'lumped cell above', fontsize=8, va='bottom',
+                    transform=ax.get_yaxis_transform())
 
         if cloud:
             ax.axhspan(*cloud, color='0.85', lw=0, zorder=0)
@@ -148,6 +190,14 @@ def plot(d, g, path):
 
     print(f'surface shortwave down   1D {sfc_plane_parallel.mean():7.2f}   '
           f'3D {sfc_tracer.mean():7.2f} W/m2, rms difference {rms:.2f}')
+
+    # What the lump costs, which is what the marked band in the longwave panel is.
+    into_the_box = np.asarray(d['lw_flux_dn'], dtype=np.float64).reshape(
+        -1, sfc_tracer.size)[nz].mean()
+    print(f'longwave down into the box   1D {into_the_box:7.2f}   '
+          f'3D {float(np.asarray(d["rt_lw_flux_tod_dn"]).mean()):7.2f} W/m2, the '
+          'lumped cell above the box emitting less downward than the air it stands in '
+          'for')
 
 
 def main():
