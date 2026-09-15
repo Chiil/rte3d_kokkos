@@ -24,7 +24,7 @@ gas-lw = "rrtmgp-gas-lw-g128.nc"
 # has to be measured against. plot_solvers.py draws the two side by side.
 plane-parallel = true
 raytracing = true
-photons-per-pixel = 256
+photons-per-pixel = 8192
 
 # Verified against rte-rrtmgp-cpp's own test_rte_rrtmgp_rt on this field, same 112
 # g-points, same sun: surface direct, surface diffuse, surface up and top-of-domain
@@ -45,11 +45,11 @@ photons-per-pixel = 256
 # The same pair in the longwave, for the same reason.
 plane-parallel = true
 raytracing = true
-scattering = false      # lw-scattering = false in the reference's test.ini
+scattering = true       # lw-scattering = false in the reference's test.ini
 # The reference counts longwave photons as 2**samples for the whole domain, not per
 # pixel as it does in the shortwave -- samples = 22 there. 2**22 over 128*128 columns
 # is 256 per pixel exactly, so the two budgets match to the photon.
-photons-per-pixel = 256
+photons-per-pixel = 8192
 
 # Skip the g-points whose gas is opaque within a grid cell and solve those
 # plane-parallel: a photon cannot cross a cell before it is absorbed, so there is no

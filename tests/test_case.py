@@ -409,12 +409,16 @@ def test_the_air_above_the_box_can_stay_outside_it(rte3d, tmp_path, monkeypatch)
     net = outside['lw_flux_dn'] - outside['lw_flux_up']
     divergence = ((net[1:RT_NZ + 1].values - net[:RT_NZ].values)/dz).mean(axis=(1, 2))
 
-    # With the air left outside, the box is exactly that piece of the column.
+    # With the air left outside, the box is exactly that piece of the column -- to
+    # the precision it was computed in, the two paths differing only in the order they
+    # sum the g-points and the levels.
+    exact = 1e-4 if outside['rt_lw_flux_abs'].dtype == np.float32 else 1e-9
+
     assert outside['rt_lw_flux_abs'].sizes['z'] == RT_NZ
     assert float(outside['rt_lw_flux_tod_dn'].mean()) == pytest.approx(
-        into_the_box, rel=1e-6)
+        into_the_box, rel=exact)
     assert outside['rt_lw_flux_abs'].mean(('y', 'x')).values == pytest.approx(
-        divergence, rel=1e-6)
+        divergence, rel=exact)
 
     # Lumped, the box carries one cell more and the lumped cell sends down materially
     # less than the air it stands in for -- which is the reason the switch exists.
