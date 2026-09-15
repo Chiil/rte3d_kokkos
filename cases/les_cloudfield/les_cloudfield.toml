@@ -18,7 +18,11 @@ gas-sw = "rrtmgp-gas-sw-g112.nc"
 gas-lw = "rrtmgp-gas-lw-g128.nc"
 
 [shortwave]
-plane-parallel = false
+# Both transports, on the same gas optics and the same clouds. The two-stream one is
+# not part of the comparison against rte-rrtmgp-cpp below -- that is about the traced
+# fluxes alone -- but it costs under a second here and it is what the third dimension
+# has to be measured against. plot_solvers.py draws the two side by side.
+plane-parallel = true
 raytracing = true
 photons-per-pixel = 256
 
@@ -38,7 +42,8 @@ photons-per-pixel = 256
 # test.ini ships sza = 45 -- so it is not a like-for-like check either.
 
 [longwave]
-plane-parallel = false
+# The same pair in the longwave, for the same reason.
+plane-parallel = true
 raytracing = true
 scattering = false      # lw-scattering = false in the reference's test.ini
 # The reference counts longwave photons as 2**samples for the whole domain, not per

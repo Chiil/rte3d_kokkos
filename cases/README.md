@@ -196,6 +196,7 @@ columns.
 ```bash
 python cases/fetch_data.py les_cloudfield
 python cases/run_case.py cases/les_cloudfield/les_cloudfield
+python cases/les_cloudfield/plot_solvers.py      # optional, needs matplotlib
 ```
 
 The input is the same `test_input.nc` that `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt`
@@ -204,10 +205,16 @@ reads, published at [10.5281/zenodo.18757088](https://doi.org/10.5281/zenodo.187
 the name `run_case.py` derives from the case prefix; the fluxes go to
 `les_cloudfield_output.nc` in the input's own `(z, y, x)` layout.
 
-Both bands are traced, with the g-point counts the reference case uses -- 112 shortwave
-and 128 longwave -- so that a run here and a run of `test_rte_rrtmgp_rt` cover the same
-spectrum. [`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the
-settings and, at length, what was checked against the reference and the two traps that
+Both bands are run through both transports: traced, and plane-parallel beside it. The
+g-point counts are the reference case's -- 112 shortwave and 128 longwave -- so that a
+run here and a run of `test_rte_rrtmgp_rt` cover the same spectrum. `plot_solvers.py`
+draws the two transports against each other afterwards: the heating and cooling
+profiles they give, and the surface shortwave the third dimension moves -- shadows
+displaced from under the cloud and the bright rim beside them, 11 W/m2 in the domain
+mean and 318 W/m2 per column.
+
+[`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the settings and,
+at length, what was checked against the reference and the two traps that
 make the comparison come out wrong if you skip them: the sun has to be set explicitly
 in the reference's `test.ini`, and `min_mfp_grid_ratio` has to match, since the ini
 misspells the key and the built-in default applies instead of what it says.
