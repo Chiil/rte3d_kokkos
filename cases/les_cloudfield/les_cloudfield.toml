@@ -9,6 +9,7 @@ longwave = true
 shortwave = true
 cloud-optics = true
 delta-cloud = false     # as in the reference case's test.ini
+output-bnd-fluxes = false
 
 # The k-distributions the reference case's test.ini reads, so that a run here and a
 # run of rte-rrtmgp-cpp's test_rte_rrtmgp_rt cover the same g-points: 112 shortwave,
@@ -16,6 +17,12 @@ delta-cloud = false     # as in the reference case's test.ini
 [files]
 gas-sw = "rrtmgp-gas-sw-g112.nc"
 gas-lw = "rrtmgp-gas-lw-g128.nc"
+
+# The cloud coefficients and the ice roughness are the defaults, which is what the
+# reference case reads too. The field is liquid-only, so icergh does not bite here.
+cloud-lw = "rrtmgp-clouds-lw-bnd.nc"
+cloud-sw = "rrtmgp-clouds-sw-bnd.nc"
+icergh = 0
 
 [shortwave]
 # Both transports, on the same gas optics and the same clouds. The two-stream one is

@@ -11,14 +11,42 @@
 # A different size is a different case: pass --nx, --ny, --nlay or --rt-nz and put the
 # result in a folder of its own rather than here.
 
+# Every key run_case.py reads is written out here, at the value the case runs at, so
+# the run is readable from this file alone. ../example.toml says what each one means.
+
 [switches]
 longwave = true
 shortwave = true
 cloud-optics = true
+delta-cloud = true
+output-bnd-fluxes = false
 
-# Which shortwave solver, or both. The ray tracer reads the Cartesian
-# grid this file was written with; see ../example.toml for the rest.
+# Which shortwave solver, or both. The ray tracer reads the Cartesian grid this file
+# was written with; turn it on and give it a photon budget it can afford, because the
+# domain is 64 x 64 columns and the trace is per g-point.
 [shortwave]
 plane-parallel = true
 raytracing = false
 photons-per-pixel = 256
+independent-column = false
+
+# The same two solvers in the longwave. scattering, min-mfp-grid-ratio and lump-above
+# matter only once the tracer is on; see les_cloudfield.toml for what they are worth on
+# a real field.
+[longwave]
+plane-parallel = true
+raytracing = false
+photons-per-pixel = 256
+independent-column = false
+scattering = false
+min-mfp-grid-ratio = 0.0
+lump-above = true
+
+# The full k-distributions and the band-resolved cloud coefficients, all defaults. The
+# sounding carries an ice layer, so icergh does bite: 0 is the smoothest ice.
+[files]
+gas-lw = "rrtmgp-gas-lw-g256.nc"
+gas-sw = "rrtmgp-gas-sw-g224.nc"
+cloud-lw = "rrtmgp-clouds-lw-bnd.nc"
+cloud-sw = "rrtmgp-clouds-sw-bnd.nc"
+icergh = 0
