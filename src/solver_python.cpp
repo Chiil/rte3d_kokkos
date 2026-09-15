@@ -301,7 +301,6 @@ void Solver::init_python_bindings(py::module_& m)
            const int nx, const int ny, const int nz,
            const TF dx, const TF dy, const TF dz,
            const int photons_per_pixel, const bool independent_column,
-           const TF spectral_photons,
            const std::optional<Numpy::In<TF>>& cloud_tau,
            const std::optional<Numpy::In<TF>>& cloud_ssa,
            const std::optional<Numpy::In<TF>>& cloud_g,
@@ -337,7 +336,7 @@ void Solver::init_python_bindings(py::module_& m)
 
             Solver::solve_sw_rt(
                     k, gas_concs, atm, top_at_1, grid,
-                    photons_per_pixel, independent_column, spectral_photons, mu0, azi,
+                    photons_per_pixel, independent_column, mu0, azi,
                     Numpy::to_host_1d<TF>(toa_src, "toa_src"),
                     Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir"),
                     clouds, fluxes);
@@ -361,7 +360,6 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
         py::arg("dx"), py::arg("dy"), py::arg("dz"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
-        py::arg("spectral_photons") = TF(0.),
         py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
         py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
@@ -370,9 +368,5 @@ void Solver::init_python_bindings(py::module_& m)
         "column index i + j*nx, and layers from nz-1 upward are lumped into the top "
         "cell. The sun is one direction for the whole domain; toa_src is (ngpt) and "
         "sfc_alb_dir (ngpt, ncol). Returns a dict of the surface and top-of-domain "
-        "fluxes, (ncol) each, and the absorbed flux per unit height, (nz, ncol). "
-        "spectral_photons divides the photon budget over the g-points as toa_src to "
-        "that power rather than equally, the total unchanged and the floor one photon "
-        "per pixel: zero is equal shares, one is proportional to the flux each "
-        "g-point carries.");
+        "fluxes, (ncol) each, and the absorbed flux per unit height, (nz, ncol).");
 }

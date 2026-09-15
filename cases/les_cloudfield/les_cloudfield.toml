@@ -22,13 +22,6 @@ plane-parallel = false
 raytracing = true
 photons-per-pixel = 256
 
-# Equal shares over the g-points, which is what the reference case does and what the
-# comparison below was run with. This field is one of the two the alternative was
-# measured on: spending the budget by solar irradiance instead is worth 1.5x at equal
-# boundary-flux noise here and is a loss on the absorption field, so it stays off.
-# doc/raytracer_base_optimizations.md 4b.
-spectral-photons = 0.0
-
 # Verified against rte-rrtmgp-cpp's own test_rte_rrtmgp_rt on this field, same 112
 # g-points, same sun: surface direct, surface diffuse, surface up and top-of-domain
 # up all agree to better than 0.1 percent, and the absorption profile agrees to

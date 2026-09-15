@@ -310,8 +310,7 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
 
 
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
-                delta_cloud=True, photons_per_pixel=256, independent_column=False,
-                spectral_photons=0.0):
+                delta_cloud=True, photons_per_pixel=256, independent_column=False):
     """Shortwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The tracer follows photons through the whole domain at once, so unlike the
@@ -319,12 +318,6 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     irradiance are read from the first column. What comes back is the surface and
     top-of-domain fluxes, (ncol) each, and the absorbed flux per unit height,
     (nz, ncol) -- not a profile per column, since there is no such thing here.
-
-    spectral_photons divides the budget over the g-points as the solar irradiance to
-    that power rather than equally, the total unchanged: zero is equal shares, one is
-    proportional to the flux each g-point carries. A g-point that holds a thousandth
-    of the flux contributes a thousandth of its noise to the sum, so an equal share
-    largely wastes the photons it gives it.
     """
     if atm.get('grid') is None:
         raise SystemExit(
@@ -346,7 +339,6 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         toa_src=toa_src,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
-        spectral_photons=spectral_photons,
         col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
 
 

@@ -172,14 +172,6 @@ namespace Raytracer
             const Array_3d<TF>& k_null);
 
 
-    // How many photons one call of trace_rays draws, which is more than
-    // photons_per_pixel times the pixels: the quasi-random sequence covers the
-    // power-of-two lattice above the grid and the draws landing outside it are thrown
-    // away. This is what a caller tracing g-point after g-point advances
-    // photon_offset by.
-    unsigned int photons_spent(const Grid& grid, const int photons_per_pixel);
-
-
     // Trace one g-point.
     //
     // tau_gas and ssa_gas are the gas optical depth and its Rayleigh single-scattering
@@ -192,22 +184,15 @@ namespace Raytracer
     // files give it. inc_dir and inc_diffuse are the irradiances entering the top of
     // the domain, the first already multiplied by mu0.
     //
-    // photons_per_pixel is per g-point, and may differ from one g-point to the next:
-    // a g-point carrying little of the solar flux contributes little to the noise of
-    // the sum, so it need not be given the same budget. photon_offset is where this
-    // call starts in the quasi-random sequence, which the caller advances by the
-    // photons it has already spent so that no two g-points draw the same lattice
-    // points.
-    //
-    // independent_column switches off horizontal transport, which turns the tracer
-    // into an expensive but exact column solver and is what a comparison against the
-    // two-stream wants.
+    // photons_per_pixel is per g-point. independent_column switches off horizontal
+    // transport, which turns the tracer into an expensive but exact column solver and
+    // is what a comparison against the two-stream wants.
     void trace_rays(
             const Grid& grid,
             const bool top_at_1,
             const bool independent_column,
             const int photons_per_pixel,
-            const unsigned int photon_offset,
+            const int igpt,
             const Array_map_2d<const TF>& tau_gas,   // (nlay, ncol)
             const Array_map_2d<const TF>& ssa_gas,   // (nlay, ncol)
             const Array_map_2d<const TF>& tau_cld,   // (nlay, ncol), may be empty

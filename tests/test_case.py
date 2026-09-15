@@ -348,60 +348,6 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
 
 
 @requires_data
-def test_spectral_photons_moves_noise_and_not_the_answer(rte3d, tmp_path, monkeypatch):
-    """The same spectrum, the same budget, divided over the g-points by solar weight.
-
-    Where the photons go is a choice about noise, not about physics: a g-point given
-    more of them is not made brighter, only quieter, since each call converts its own
-    photon count back into a flux. So the fluxes must come back the same as an equal
-    division gives, to within what Monte Carlo leaves at this budget.
-    """
-    import sys
-
-    import xarray as xr
-
-    make_input, run_case = case_scripts()
-
-    monkeypatch.chdir(tmp_path)
-    make_input.make_input('rtcase_input.nc', nx=NX, ny=NY, nlay=NLAY)
-
-    def solve(name, spectral_photons):
-        (tmp_path/f'{name}.toml').write_text(
-            '[switches]\n'
-            'longwave = false\n'
-            '\n'
-            '[shortwave]\n'
-            'plane-parallel = false\n'
-            'raytracing = true\n'
-            'photons-per-pixel = 1024\n'
-            f'spectral-photons = {spectral_photons}\n')
-
-        os.replace('rtcase_input.nc', f'{name}_input.nc')
-        monkeypatch.setattr(sys, 'argv', ['run_case.py', name])
-        assert run_case.main() == 0
-        os.replace(f'{name}_input.nc', 'rtcase_input.nc')
-
-        return xr.open_dataset(tmp_path/f'{name}_output.nc')
-
-    equal = solve('equal', 0.0)
-    weighted = solve('weighted', 1.0)
-
-    # The domain still takes in the irradiance the case asks for, and still gives back
-    # what the equal division gave, both to within the noise of this budget.
-    incoming = make_input.TSI*np.cos(np.deg2rad(make_input.SOLAR_ZENITH_ANGLE))
-    assert float(weighted['rt_flux_tod_dn'].mean()) == pytest.approx(incoming, rel=0.02)
-
-    for name in ('rt_flux_sfc_dir', 'rt_flux_sfc_dif', 'rt_flux_sfc_up',
-                 'rt_flux_tod_up'):
-        assert float(weighted[name].mean()) == pytest.approx(
-            float(equal[name].mean()), rel=0.05)
-
-    absorbed = {k: float((d['rt_flux_abs_dir'] + d['rt_flux_abs_dif']).sum('z').mean())
-                for k, d in (('equal', equal), ('weighted', weighted))}
-    assert absorbed['weighted'] == pytest.approx(absorbed['equal'], rel=0.05)
-
-
-@requires_data
 def test_run_case_end_to_end(rte3d, tmp_path, monkeypatch):
     """make_input.py, then run_case.py, as a user runs them.
 
