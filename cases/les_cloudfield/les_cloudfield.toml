@@ -67,6 +67,22 @@ photons-per-pixel = 256
 # boundary fluxes here, which is the size of the approximation.
 min-mfp-grid-ratio = 1.0
 
+# Leave the 132 layers above the box outside it, as the reference does, rather than
+# lump them into the box's top cell. The lumped cell carries the right optical depth
+# but one temperature and the box's own 20 m, so it sends 199.6 W/m2 down into the box
+# where the air it stands in for sends 227.9 -- and the cells just beneath it then cool
+# far too hard, 33 K/day against 0.3 in the topmost one, dying away downward and gone
+# in the noise by 3.5 km. Left outside, the box is the 200 resolved cells and the air
+# above enters as the downward flux a plane-parallel solve of the full column leaves at
+# its top: 227.8 against that solve's 227.9, and the cooling profile follows the
+# two-stream all the way up.
+#
+# The tracer then knows nothing of what is above the box, so rt_lw_flux_toa_up is
+# rt_lw_flux_tod_up and not what reaches space; the plane-parallel solve beside it
+# still has that. It costs about 10 percent of the trace, one plane-parallel solve of
+# the full column per g-point.
+lump-above = false
+
 # Verified against rte-rrtmgp-cpp's test_rte_rrtmgp_rt on this field, same 128
 # g-points, same photon budget, with the atmosphere truncated to the 200 resolved
 # layers so that both codes see the same air:
@@ -91,8 +107,10 @@ min-mfp-grid-ratio = 1.0
 #
 # rte3d is 2.1 times faster: 1104 ms against 2350.
 #
-# Run as it stands, without truncating, rte3d lumps the 132 layers above the box into
-# its top cell and the reference discards them. That is a real difference and a large
-# one -- the air above absorbs 54 W/m2 of the upwelling flux before it reaches space,
-# so top-of-domain up is 321 rather than 374 W/m2. Neither is a porting error; see the
-# note in include/raytracer_lw.h.
+# Those numbers were taken with the atmosphere truncated by hand to the 200 resolved
+# layers, which is what lump-above = false now does from the settings file. With the
+# layers lumped instead -- lump-above = true, which was the only behaviour then -- the
+# air above absorbs 54 W/m2 of the upwelling flux before it reaches space, so the
+# tracer's top-of-domain up is 321 rather than 374 W/m2 and the reference's is 374,
+# since it discards those layers. Neither was a porting error; see the note in
+# include/raytracer_lw.h.

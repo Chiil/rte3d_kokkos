@@ -212,7 +212,7 @@ void Solver::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& cloud_ssa,
            const std::optional<Numpy::In<TF>>& cloud_g,
            const std::optional<Numpy::In<TF>>& col_dry,
-           const bool scattering,
+           const bool scattering, const bool lump_above,
            const int kn_x, const int kn_y, const int kn_z) -> py::dict
         {
             Runtime::get();
@@ -250,7 +250,7 @@ void Solver::init_python_bindings(py::module_& m)
                     Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
                     Numpy::to_device_2d<TF>(secants, "secants"),
                     Numpy::to_device_1d<TF>(weights, "weights"),
-                    min_mfp_grid_ratio, clouds, scattering, fluxes);
+                    min_mfp_grid_ratio, clouds, scattering, lump_above, fluxes);
             Kokkos::fence();
 
             py::dict out;
@@ -278,7 +278,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
         py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
         py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
-        py::arg("scattering") = false,
+        py::arg("scattering") = false, py::arg("lump_above") = true,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         "Longwave gas optics, Planck sources, clouds and the Monte Carlo ray tracer, "
         "one g-point at a time. The columns are the tracer's horizontal grid, "
@@ -290,7 +290,10 @@ void Solver::init_python_bindings(py::module_& m)
         "(nz, ncol) -- the names are rte-rrtmgp-cpp's own -- plus n_gpt_traced, how "
         "many g-points were actually traced. min_mfp_grid_ratio skips the g-points "
         "whose gas is opaque within a grid cell and solves those plane-parallel "
-        "instead, which is what secants and weights are for; zero traces everything.");
+        "instead, which is what secants and weights are for; zero traces everything. "
+        "lump_above puts the atmosphere above the box into the box\'s top cell; "
+        "without it nz must count only the resolved cells and the air above enters as "
+        "the downward flux a plane-parallel solve of the full column leaves there.");
 
 
     m.def("solve_sw_rt",

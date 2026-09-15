@@ -57,6 +57,17 @@ scattering = false
 # uses. Ray tracer only.
 min-mfp-grid-ratio = 0.0
 
+# What to do with an atmosphere deeper than the ray-tracing box. Lumping puts every
+# layer above the box into the box's top cell, which is how rte-rrtmgp-cpp reads these
+# files and keeps every watt inside the domain -- but that cell has one temperature and
+# the box's own depth, so it sends down less than the air it stands in for and the
+# cells just beneath it cool too hard. Turn it off and the box holds only the resolved
+# cells, with the air above entering as the downward flux a plane-parallel solve of the
+# full column leaves at the box's top; the tracer then knows nothing above the box, so
+# its toa fluxes are its tod fluxes. Longwave ray tracer only; the shortwave lump keeps
+# the optical depth the beam has to cross and does not have this trouble.
+lump-above = true
+
 [files]
 # Bare names are looked up in extern/rrtmgp-data; anything with a separator in it is
 # taken as a path.

@@ -15,13 +15,12 @@ unit height, which is what it reports. Only the 200 resolved cells are drawn -- 
 tracer's cell 200 holds the whole atmosphere above the box, lumped, and has no
 plane-parallel counterpart of the same depth.
 
-That lump also costs the cells just below it, which is marked in the figure rather
-than hidden. All of the air above the box is compressed into one cell of the box's own
-depth at one temperature, so what it emits downward is not what a resolved atmosphere
-would send: on this field the tracer's downward longwave into the top of the box is
-about 28 W/m2 short of the two-stream's, and the cells beneath it cool too hard by an
-amount that dies away downward, reaching the Monte Carlo noise around 3.5 km. Read the
-top few hundred metres of the longwave profile as the lumping's, not the tracer's.
+A cell like that also costs the cells just below it, so where the case does lump --
+lump-above = true in the settings -- the figure hatches the region rather than hide
+it. The lump carries all the air above the box at one temperature and the box's own
+depth, which on this field sends 28 W/m2 less down into the box than the air it stands
+in for, and the cells beneath cool too hard by an amount that dies away downward. The
+case leaves that air outside the box instead, and then nothing is hatched.
 """
 import argparse
 import os
@@ -191,13 +190,16 @@ def plot(d, g, path):
     print(f'surface shortwave down   1D {sfc_plane_parallel.mean():7.2f}   '
           f'3D {sfc_tracer.mean():7.2f} W/m2, rms difference {rms:.2f}')
 
-    # What the lump costs, which is what the marked band in the longwave panel is.
+    # What arrives at the top of the box, which is what the longwave panel's top
+    # stands or falls by.
     into_the_box = np.asarray(d['lw_flux_dn'], dtype=np.float64).reshape(
         -1, sfc_tracer.size)[nz].mean()
+    traced_in = float(np.asarray(d['rt_lw_flux_tod_dn']).mean())
     print(f'longwave down into the box   1D {into_the_box:7.2f}   '
-          f'3D {float(np.asarray(d["rt_lw_flux_tod_dn"]).mean()):7.2f} W/m2, the '
-          'lumped cell above the box emitting less downward than the air it stands in '
-          'for')
+          f'3D {traced_in:7.2f} W/m2'
+          + ('' if traced_in > 0.98*into_the_box else
+             ', the lumped cell above the box sending down less than the air it '
+             'stands in for'))
 
 
 def main():

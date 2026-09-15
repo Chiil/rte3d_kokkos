@@ -223,6 +223,15 @@ namespace Solver
     //
     // The fallback solve follows the caller's own scattering switch, so it is the same
     // solver a plane-parallel run of the case would have used.
+    //
+    // lump_above chooses what to do with an atmosphere deeper than the box. Lumping
+    // it into the box's top cell, which is the default and what rte-rrtmgp-cpp's input
+    // files are shaped for, keeps every watt in the domain but gives the cell one
+    // temperature and the box's own depth, so what it sends down is not what the air
+    // it stands in for would send. Without it the box is the whole of what the tracer
+    // sees -- the grid must then hold only the resolved cells -- and the air above
+    // enters as the downward flux a plane-parallel solve of the full column leaves at
+    // the box's top, which is how the reference does it.
     int solve_lw_rt(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -237,6 +246,7 @@ namespace Solver
             const TF min_mfp_grid_ratio,
             const Band_props& clouds,
             const bool scattering,
+            const bool lump_above,
             const Raytracer_lw::Fluxes_lw& fluxes);
 
     void init_python_bindings(py::module_& m);

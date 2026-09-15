@@ -213,11 +213,15 @@ profiles they give, and the surface shortwave the third dimension moves -- shado
 displaced from under the cloud and the bright rim beside them, 11 W/m2 in the domain
 mean and 318 W/m2 per column.
 
-The top of the longwave profile is marked in that figure and should be read as the
-lumping's doing, not the tracer's: all the air above the box is one cell of the box's
-own depth at one temperature, which sends 199 W/m2 down into the box where the
-two-stream over the resolved atmosphere sends 228. The cells just beneath it cool too
-hard by an amount that dies away downward and is gone in the noise by 3.5 km.
+The case leaves the 132 layers above the box outside it -- `lump-above = false` --
+rather than lumping them into the box's top cell, which is what the settings file
+explains. Lumped, that cell carries the right optical depth but one temperature and
+the box's own 20 m, and sends 199.6 W/m2 down into the box where the air it stands in
+for sends 227.9; the cells beneath it then cool far too hard, 33 K/day against 0.3 in
+the topmost one, dying away downward. Left outside, the air above enters as the
+downward flux a plane-parallel solve of the full column leaves at the box's top --
+227.8 against that solve's 227.9 -- and the cooling profile follows the two-stream all
+the way up. Switch it back and `plot_solvers.py` hatches the cells the lump spoils.
 
 [`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the settings and,
 at length, what was checked against the reference and the two traps that

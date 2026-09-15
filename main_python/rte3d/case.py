@@ -141,6 +141,11 @@ def read_grid(d, atm, nx, ny):
     nz_in = int(d.sizes['z'])
     dx = spacing('xh', 1.0)
 
+    # The resolved cells, kept beside the grid itself: a solve that leaves the air
+    # above the box outside it wants a box of exactly these, with no cell standing in
+    # for the rest of the atmosphere.
+    atm['nz_resolved'] = nz_in
+
     return dict(nx=nx, ny=ny,
                 nz=nz_in + 1 if nz_in < atm['nlay'] else nz_in,
                 dx=dx, dy=spacing('yh', dx), dz=spacing('zh', 1.0),
@@ -271,7 +276,7 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
 def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
                 photons_per_pixel=256, independent_column=False, scattering=False,
-                min_mfp_grid_ratio=0.0):
+                min_mfp_grid_ratio=0.0, lump_above=True):
     """Longwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The counterpart of solve_sw_rt, and it returns the same shape of answer: the
@@ -287,6 +292,13 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     solves those with the plane-parallel no-scattering solver instead: there is no
     horizontal transport left to resolve, so tracing them buys nothing but noise. Zero
     traces the whole spectrum; rte-rrtmgp-cpp's own default is 1.
+
+    lump_above puts the atmosphere above the box into the box's top cell, which is how
+    rte-rrtmgp-cpp reads these files. Turning it off shrinks the box to the resolved
+    cells and lets the air above enter as the downward flux a plane-parallel solve of
+    the full column leaves at the box's top: the lumped cell has one temperature and
+    the box's own depth, so what it sends down is not what the air it stands in for
+    would send, and the cells just beneath it cool too hard.
     """
     if atm.get('grid') is None:
         raise SystemExit(
@@ -296,6 +308,10 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     clouds = (cloud_props(rte3d, cloud_optics, atm, scattering)
               if cloud_optics else {})
 
+    grid = dict(atm['grid'])
+    if not lump_above:
+        grid['nz'] = atm['nz_resolved']
+
     return rte3d.solve_lw_rt(
         kdist, gas_concs, atm['top_at_1'],
         atm['play'], atm['plev'], atm['tlay'], atm['tlev'], atm['tsfc'],
@@ -304,9 +320,10 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         weights=np.array([1.0]),
         min_mfp_grid_ratio=min_mfp_grid_ratio,
         scattering=scattering,
+        lump_above=lump_above,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
-        col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
+        col_dry=atm.get('col_dry'), **grid, **clouds)
 
 
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,

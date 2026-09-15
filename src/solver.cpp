@@ -451,6 +451,7 @@ int Solver::solve_lw_rt(
         const TF min_mfp_grid_ratio,
         const Band_props& clouds,
         const bool scattering,
+        const bool lump_above,
         const Raytracer_lw::Fluxes_lw& fluxes)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
@@ -488,6 +489,15 @@ int Solver::solve_lw_rt(
     const int nz = grid.nz;
     const int lay_off = top_at_1 ? nlay - nz : 0;
 
+    // An atmosphere deeper than the box, with the caller asking for it to stay outside
+    // rather than be lumped into the box's top cell. Every g-point is then solved
+    // plane-parallel over the full column first, and what that solve leaves coming
+    // down at the box's top is what enters the box -- the reference's arrangement.
+    const bool truncate = !lump_above && nlay > nz;
+
+    // The level where the box ends, in the full column's own numbering.
+    const int lev_box_top = top_at_1 ? nlay - nz : nz;
+
     fluxes.zero();
 
     int traced = 0;
@@ -524,19 +534,80 @@ int Solver::solve_lw_rt(
                 Kokkos::Max<TF>(tau_max));
         }
 
+        // With the air above the box left outside it, the column is solved
+        // plane-parallel first, whatever becomes of the box afterwards: the tracer
+        // needs what that solve leaves coming down at the box's top, and a g-point
+        // that is not traced needs the solve anyway.
+        TF inc_dif = TF(0.);
+
+        if (truncate)
+        {
+            solve_lw_gpt(k, state, atm, top_at_1, igpt, secants, weights,
+                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
+                         clouds, scattering,
+                         Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
+                         Flux_sink{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()},
+                         Array_2d<TF>());
+
+            // That solve incremented the clouds into the optical depth, and the tracer
+            // takes the two apart: it has to know which of gas and cloud deflected a
+            // photon. So put the gas back, which costs one interpolation.
+            Gas_optics::compute_tau_lw(
+                    k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
+                    state.tau, state.pfrac);
+
+            // One number for the whole box, as the tracer takes it and as the
+            // reference feeds it: the mean over the columns of what arrives at the
+            // box's top.
+            const auto flux_dn = state.flux_dn;
+            TF sum = TF(0.);
+
+            Kokkos::parallel_reduce("lw_rt_inc_dif",
+                Kokkos::RangePolicy<Default_exec>(0, ncol),
+                KOKKOS_LAMBDA(const int icol, TF& acc)
+                {
+                    acc += flux_dn(lev_box_top, icol);
+                },
+                sum);
+
+            inc_dif = sum/TF(ncol);
+        }
+
         if (tau_max < tau_max_traced)
         {
             ++traced;
 
+            // Only the box's own layers are handed over when the air above stays
+            // outside, so that the tracer has nothing left to lump.
+            const auto box_rows = [=](const Array_map_2d<const TF>& v)
+            {
+                if (!truncate || v.size() == 0)
+                    return v;
+
+                return Array_map_2d<const TF>(v.data() + lay_off*ncol, nz, ncol);
+            };
+
             Raytracer_lw::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                    state.tau, ssa_gas,
-                    band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
-                    band_slice(clouds.g, ibnd),
-                    state.lay_source, state.sfc_source,
+                    box_rows(state.tau), box_rows(Array_map_2d<const TF>(
+                            ssa_gas.data(), ssa_gas.extent(0), ssa_gas.extent(1))),
+                    box_rows(band_slice(clouds.tau, ibnd)),
+                    box_rows(band_slice(clouds.ssa, ibnd)),
+                    box_rows(band_slice(clouds.g, ibnd)),
+                    box_rows(state.lay_source), state.sfc_source,
                     slice_1d(sfc_emis, igpt),
-                    TF(0.),
+                    inc_dif,
                     fluxes, scratch);
+        }
+        else if (truncate)
+        {
+            // The full column is already solved; the box is the part of it the tracer
+            // would have covered.
+            Raytracer_lw::add_plane_parallel(
+                    grid, top_at_1, nz, false,
+                    Array_map_2d<const TF>(state.flux_up.data() + lay_off*ncol, nz + 1, ncol),
+                    Array_map_2d<const TF>(state.flux_dn.data() + lay_off*ncol, nz + 1, ncol),
+                    fluxes);
         }
         else
         {

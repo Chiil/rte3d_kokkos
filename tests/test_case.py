@@ -28,6 +28,10 @@ SW_REF = os.path.join(REFERENCE, 'rrtmgp-allsky-sw-no-aerosols.nc')
 # everything a full domain would, on a coarse grid.
 NX, NY, NLAY = 3, 2, 48
 
+# The resolved depth of the ray-tracing box where a case is made shallower than the
+# atmosphere it sits in, which is what the tracer has to lump or leave outside.
+RT_NZ = 8
+
 requires_data = pytest.mark.skipif(
     not os.path.exists(LW_REF), reason='rrtmgp-data submodule not checked out')
 
@@ -345,6 +349,81 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
                      + out['rt_flux_sfc_dif'] - out['rt_flux_sfc_up']).mean())
     assert leaving + absorbed == pytest.approx(
         float(out['rt_flux_tod_dn'].mean()), rel=0.02)
+
+
+@requires_data
+def test_the_air_above_the_box_can_stay_outside_it(rte3d, tmp_path, monkeypatch):
+    """The longwave tracer's two ways of dealing with an atmosphere deeper than the box.
+
+    Lumped, the air above becomes the box's top cell: one temperature and the box's own
+    depth, so what it sends down is not what the air it stands in for sends. Left
+    outside, the box holds only the resolved cells and the air above enters as the
+    downward flux a plane-parallel solve of the full column leaves at the box's top.
+
+    Every g-point is pushed onto the plane-parallel fallback here, which makes the
+    check exact rather than a question about how many photons were shot: with the air
+    left outside, what the tracer's output carries has to be the full column's own
+    solve over the box, to the digit.
+    """
+    import sys
+
+    import xarray as xr
+
+    make_input, run_case = case_scripts()
+
+    monkeypatch.chdir(tmp_path)
+
+    # A box well inside the atmosphere, so that what stands above it carries a
+    # downward flux worth comparing rather than the trace of one.
+    make_input.make_input('rtcase_input.nc', nx=NX, ny=NY, nlay=NLAY, rt_nz=RT_NZ)
+
+    def solve(name, lump_above):
+        (tmp_path/f'{name}.toml').write_text(
+            '[switches]\n'
+            'shortwave = false\n'
+            '\n'
+            '[longwave]\n'
+            'plane-parallel = true\n'
+            'raytracing = true\n'
+            'photons-per-pixel = 64\n'
+            # Opaque within a cell by construction, so nothing is traced and nothing
+            # is noisy.
+            'min-mfp-grid-ratio = 1e6\n'
+            f'lump-above = {str(lump_above).lower()}\n')
+
+        os.replace('rtcase_input.nc', f'{name}_input.nc')
+        monkeypatch.setattr(sys, 'argv', ['run_case.py', name])
+        assert run_case.main() == 0
+        os.replace(f'{name}_input.nc', 'rtcase_input.nc')
+
+        return xr.open_dataset(tmp_path/f'{name}_output.nc')
+
+    lumped = solve('lumped', True)
+    outside = solve('outside', False)
+
+    # The full column's own answer, which the plane-parallel solver writes beside the
+    # tracer's output in both runs.
+    into_the_box = float(outside['lw_flux_dn'][RT_NZ].mean())
+    dz = 70.0e3/NLAY
+
+    net = outside['lw_flux_dn'] - outside['lw_flux_up']
+    divergence = ((net[1:RT_NZ + 1].values - net[:RT_NZ].values)/dz).mean(axis=(1, 2))
+
+    # With the air left outside, the box is exactly that piece of the column.
+    assert outside['rt_lw_flux_abs'].sizes['z'] == RT_NZ
+    assert float(outside['rt_lw_flux_tod_dn'].mean()) == pytest.approx(
+        into_the_box, rel=1e-6)
+    assert outside['rt_lw_flux_abs'].mean(('y', 'x')).values == pytest.approx(
+        divergence, rel=1e-6)
+
+    # Lumped, the box carries one cell more and the lumped cell sends down materially
+    # less than the air it stands in for -- which is the reason the switch exists.
+    assert lumped['rt_lw_flux_abs'].sizes['z'] == RT_NZ + 1
+    assert float(lumped['rt_lw_flux_tod_dn'].mean()) < 0.95*into_the_box
+
+    # Below the box the two agree: what the lump costs is above, not underneath.
+    assert float(lumped['rt_lw_flux_sfc_dn'].mean()) == pytest.approx(
+        float(outside['rt_lw_flux_sfc_dn'].mean()), rel=0.01)
 
 
 @requires_data
