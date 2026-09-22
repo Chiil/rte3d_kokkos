@@ -344,6 +344,14 @@ inline Array_map_2d<T> slice_2d(const Array_3d<T>& v, const int i)
     return Array_map_2d<T>(v.data() + std::size_t(i)*v.extent(1)*v.extent(2), v.extent(1), v.extent(2));
 }
 
+// The range [i0, i1) along the slowest-varying dimension, likewise: a block of
+// g-points.
+template<typename T>
+inline Array_map_3d<T> slice_block(const Array_3d<T>& v, const int i0, const int i1)
+{
+    return Array_map_3d<T>(v.data() + std::size_t(i0)*v.extent(1)*v.extent(2), i1 - i0, v.extent(1), v.extent(2));
+}
+
 template<typename T>
 inline Array_map_1d<T> slice_1d(const Array_2d<T>& v, const int i)
 {

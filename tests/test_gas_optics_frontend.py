@@ -120,6 +120,45 @@ def test_lw_gas_optics_matches_reference(rte3d, fortran_ref, supply_col_dry):
 
 
 @requires_data()
+def test_sw_gas_optics_matches_reference(rte3d, fortran_ref):
+    """tau and ssa against the reference's absorption and Rayleigh kernels, combined
+    as combine_abs_and_rayleigh does. This runs the g-point block kernel over whole
+    bands, which the kernel-by-kernel tests, one g-point at a time, do not."""
+    from rte3d.kdist import read_kdist
+
+    atm = profile()
+    gas_concs = make_concs(rte3d, atm)
+    kdist = rte3d.load_kdist(read_kdist(SW_FILE), gas_concs)
+    a = kdist.arrays()
+
+    col_gas = rte3d.compute_col_gas(gas_concs, kdist.gas_names, atm['plev'])
+
+    grid = dict(
+        press_ref_log=a['press_ref_log'], temp_ref=a['temp_ref'],
+        press_ref_log_delta=a['press_ref_log_delta'],
+        temp_ref_min=a['temp_ref_min'], temp_ref_delta=a['temp_ref_delta'],
+        press_ref_trop_log=a['press_ref_trop_log'], neta=kdist.neta,
+        vmr_ref=a['vmr_ref'])
+
+    interp = fortran_ref.interpolation(
+        flavor=a['flavor'], **grid, play=atm['play'], tlay=atm['tlay'], col_gas=col_gas)
+
+    tau_abs = fortran_ref.compute_tau_absorption(
+        a, interp, atm['play'], atm['tlay'], col_gas, kdist.neta)
+    tau_ray = fortran_ref.compute_tau_rayleigh(
+        a, interp, np.ascontiguousarray(col_gas[0]), col_gas, kdist.neta)
+
+    expected_tau = tau_abs + tau_ray
+    expected_ssa = tau_ray/expected_tau
+
+    tau, ssa = rte3d.gas_optics_sw(
+        kdist, gas_concs, atm['play'], atm['plev'], atm['tlay'])
+
+    assert_close(tau, expected_tau, rtol=1e-11)
+    assert_close(ssa, expected_ssa, rtol=1e-11)
+
+
+@requires_data()
 def test_sw_gas_optics_is_physical(rte3d):
     """The shortwave path has no separate oracle here; check the invariants that
     combine_abs_and_rayleigh must satisfy."""
