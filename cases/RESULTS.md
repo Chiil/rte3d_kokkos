@@ -169,14 +169,14 @@ The staged `--breakdown` above cannot be used for this. It writes the whole
 fused path exists to avoid, and it reports gas optics thirty times slower as a result.
 
 Gas optics is ahead --- a sixth cheaper in the longwave, and a third of the cost in the
-shortwave, where there is no Planck source to compute per g-point. The sweeps are not, and the launch geometry says why: it
-solves four column blocks with every g-point resolved, so its `sw_adding` runs 229376
-threads and its `lw_solver_noscat_step_2` 262144, where ours run `ncol` --- 4096. Same
-work, 64x the parallelism, and at 4096 columns ours reach about 15% of peak bandwidth
-and 8% occupancy where at 65536 they reach 70%. The gap is a small-problem gap: 48.3
-us/column at 4096 against 23.4 at 65536, while a chunked full-spectrum solver is flat
-in problem size and pays for it in memory --- 4 column blocks here, 64 for the case
-above.
+shortwave, where there is no Planck source to compute per g-point. The sweeps are not,
+and the launch geometry says why: it solves four column blocks with every g-point
+resolved, so its `sw_adding` runs 229376 threads and its `lw_solver_noscat_step_2`
+262144, where ours run `ncol` --- 4096. Same work, 64x the parallelism, and at 4096
+columns ours reach about 15% of peak bandwidth and 8% occupancy where at 65536 they
+reach 70%. The gap is a small-problem gap: 48.3 us/column at 4096 against 23.4 at 65536,
+while a chunked full-spectrum solver is flat in problem size and pays for it in
+memory --- 4 column blocks here, 64 for the case above.
 
 Block size is not the lever it looks like. Pinning the sweeps' CUDA block to 32 instead
 of the 128 Kokkos picks spreads them over all 56 SMs rather than leaving 24 idle, and

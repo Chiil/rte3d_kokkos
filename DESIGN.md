@@ -187,9 +187,11 @@ The exception is gas optics, which runs a band at a time — at most
 the g-point loop then reads a slice at a time. Everything in the optical depth except
 the table lookups is the same for every g-point of a band: the interpolation state,
 the binary-species interpolation and its weights, the minor absorbers' scaling. Done
-once per band instead of once per g-point, that halves the cost of gas optics on the
-GPU and on one CPU thread alike, for a few hundred MB of block arrays, bounded by the
-band width and not by the spectrum.
+once per band instead of once per g-point, that takes a third off gas optics in the
+longwave and more than half in the shortwave on the GPU, and nearly halves the whole
+solve on one CPU thread. The block arrays are a few hundred MB at 4096 columns, bounded
+by the band width and not by the spectrum, and stay below the peak the case reaches
+outside the solve, so the 1.1 GB above stands.
 
 The loop body is public as `gas_optics_lw_block` / `gas_optics_sw_block` and
 `solve_lw_gpt` / `solve_sw_gpt`, for callers that want a single g-point — the Monte
