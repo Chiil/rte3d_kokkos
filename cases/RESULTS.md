@@ -134,8 +134,10 @@ peaks near 640. So the work was to move less --- the binary-species interpolatio
 recomputed rather than stored (4.0 GB, and 24 bytes per cell per g-point), the Planck
 fraction and the Rayleigh scattering taken from the interpolation the optical depth was
 already doing, and the fluxes added into the spectral totals where they are produced
-instead of being written per g-point and read straight back. `git log` has the
-measurement for each.
+instead of being written per g-point and read straight back. Last, gas optics runs a
+band of g-points at a time, so that the interpolation state, the binary-species
+weights and the minor-absorber scaling are done once per band rather than once per
+g-point. `git log` has the measurement for each.
 
 What is left is the column sweeps. Against `rte-rrtmgp-cpp`'s CUDA solver on its own
 RCEMIP case --- the same input file, 4096 columns, plane-parallel, clear sky, both
@@ -143,12 +145,12 @@ single precision on one RTX A4500 --- that is now the whole of the gap:
 
 | stage | rte3d | rte-rrtmgp-cpp | ratio |
 |---|---|---|---|
-| longwave, optical depth + Planck | 34.5 ms | 28.0 ms | 1.23 |
-| longwave, transport | **68.3 ms** | **42.0 ms** | **1.63** |
-| shortwave, optical depth + Rayleigh | 22.7 ms | 28.4 ms | 0.80 |
-| shortwave, transport | **155 ms** | **45.2 ms** | **3.42** |
-| GPU kernel time, longwave / shortwave | 103 / 177 ms | 70 / 74 ms | |
-| what the driver's own timer reports | 120 / 198 ms | 73 / 74 ms | |
+| longwave, optical depth + Planck | 23.2 ms | 28.0 ms | 0.83 |
+| longwave, transport | **71.3 ms** | **42.0 ms** | **1.70** |
+| shortwave, optical depth + Rayleigh | 8.9 ms | 28.4 ms | 0.31 |
+| shortwave, transport | **164 ms** | **45.2 ms** | **3.62** |
+| GPU kernel time, longwave / shortwave | 95 / 173 ms | 70 / 74 ms | |
+| what the driver's own timer reports | 114 / 197 ms | 73 / 74 ms | |
 
 Neither driver times a stage on its own, so the split is GPU kernel time from an `nsys`
 kernel summary, attributed by kernel name: gas optics is rte3d's `compute_tau`,
@@ -166,8 +168,8 @@ The staged `--breakdown` above cannot be used for this. It writes the whole
 `(ngpt, nlay, ncol)` spectrum between the two stages, which is the memory traffic the
 fused path exists to avoid, and it reports gas optics thirty times slower as a result.
 
-Gas optics is at parity --- a quarter more expensive in the longwave, a fifth cheaper in
-the shortwave. The sweeps are not, and the launch geometry says why: it
+Gas optics is ahead --- a sixth cheaper in the longwave, and a third of the cost in the
+shortwave, where there is no Planck source to compute per g-point. The sweeps are not, and the launch geometry says why: it
 solves four column blocks with every g-point resolved, so its `sw_adding` runs 229376
 threads and its `lw_solver_noscat_step_2` 262144, where ours run `ncol` --- 4096. Same
 work, 64x the parallelism, and at 4096 columns ours reach about 15% of peak bandwidth

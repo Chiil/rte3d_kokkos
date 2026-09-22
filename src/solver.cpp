@@ -37,14 +37,21 @@ Solver::Solve_state Solver::prepare(
     auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, atm.play);
     s.sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
 
-    s.tau = Array_2d<TF>(Kokkos::view_alloc("tau", no_init), nlay, ncol);
-    s.ssa = Array_2d<TF>(Kokkos::view_alloc("ssa", no_init), nlay, ncol);
-    s.g = Array_2d<TF>(Kokkos::view_alloc("g", no_init), nlay, ncol);
+    // One block of g-points. The longwave without scattering has no use for ssa and
+    // g, and only the longwave has a Planck fraction.
+    const int nblk = Gas_optics::max_gpt_block;
+    const bool with_ssa = !do_lw || lw_scattering;
+
+    s.tau = Array_3d<TF>(Kokkos::view_alloc("tau", no_init), nblk, nlay, ncol);
+    s.ssa = Array_3d<TF>(Kokkos::view_alloc("ssa", no_init),
+                         with_ssa ? nblk : 0, with_ssa ? nlay : 0, with_ssa ? ncol : 0);
+    s.g = Array_3d<TF>(Kokkos::view_alloc("g", no_init),
+                       with_ssa ? nblk : 0, with_ssa ? nlay : 0, with_ssa ? ncol : 0);
 
     if (do_lw)
     {
         s.lay_source = Array_2d<TF>(Kokkos::view_alloc("lay_source", no_init), nlay, ncol);
-        s.pfrac = Array_2d<TF>(Kokkos::view_alloc("pfrac", no_init), nlay, ncol);
+        s.pfrac = Array_3d<TF>(Kokkos::view_alloc("pfrac", no_init), nblk, nlay, ncol);
         s.lev_source = Array_2d<TF>(Kokkos::view_alloc("lev_source", no_init), nlev, ncol);
         s.sfc_source = Array_1d<TF>(Kokkos::view_alloc("sfc_source", no_init), ncol);
         s.sfc_source_jac = Array_1d<TF>(
@@ -83,12 +90,46 @@ namespace
 }
 
 
+void Solver::gas_optics_lw_block(
+        const Kdist_gas& k,
+        const Solve_state& state,
+        const Atmosphere& atm,
+        const int igpt0,
+        const int igpt1)
+{
+    // The Planck fraction comes out of the same interpolation as the optical depth.
+    Gas_optics::compute_tau_lw_block(
+            k, state.interp, atm.play, atm.tlay, state.col_gas, igpt0, igpt1,
+            slice_block(state.tau, 0, igpt1 - igpt0),
+            slice_block(state.pfrac, 0, igpt1 - igpt0));
+}
+
+
+void Solver::gas_optics_sw_block(
+        const Kdist_gas& k,
+        const Solve_state& state,
+        const Atmosphere& atm,
+        const int igpt0,
+        const int igpt1,
+        const bool with_g)
+{
+    // Absorption, Rayleigh and the combine in one pass; the dry air column Rayleigh
+    // needs is index 0 of col_gas, which the kernel reads for itself.
+    Gas_optics::compute_tau_sw_block(
+            k, state.interp, atm.play, atm.tlay, state.col_gas, igpt0, igpt1,
+            slice_block(state.tau, 0, igpt1 - igpt0),
+            slice_block(state.ssa, 0, igpt1 - igpt0),
+            with_g ? slice_block(state.g, 0, igpt1 - igpt0) : Array_map_3d<TF>());
+}
+
+
 void Solver::solve_lw_gpt(
         const Kdist_gas& k,
         const Solve_state& state,
         const Atmosphere& atm,
         const bool top_at_1,
         const int igpt,
+        const int islot,
         const Array_map_2d<const TF>& secants,
         const Array_1d<const TF>& weights,
         const Array_map_1d<const TF>& sfc_emis,
@@ -99,14 +140,12 @@ void Solver::solve_lw_gpt(
         const Flux_sink& flux_dn,
         const Array_2d<TF>& flux_up_jac)
 {
-    // The Planck fraction comes out of the same interpolation as the optical depth.
-    Gas_optics::compute_tau_lw(
-            k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
-            state.tau, state.pfrac);
+    const auto opt = state.optics(islot);
 
+    // The sources come from the Planck fraction the block's gas optics left.
     Gas_optics::compute_planck_source(
             k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
-            state.sources(), state.pfrac);
+            state.sources(), opt.pfrac);
 
     const int ibnd = k.gpt_band_h(igpt);
     const auto cloud_tau = band_slice(clouds.tau, ibnd);
@@ -116,10 +155,10 @@ void Solver::solve_lw_gpt(
         // Clouds are absorption-only on this path: the solver cannot deflect anything,
         // so they enter as an optical depth and nothing else.
         if (cloud_tau.size() > 0)
-            Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+            Optical_props::increment_1scalar_by_1scalar(opt.tau, cloud_tau);
 
         Rte_lw::solver_noscat(
-                top_at_1, secants, weights, state.tau, state.sources(), sfc_emis,
+                top_at_1, secants, weights, opt.tau, state.sources(), sfc_emis,
                 inc_flux, flux_up, flux_dn, flux_up_jac, state.lw_noscat);
 
         return;
@@ -129,16 +168,16 @@ void Solver::solve_lw_gpt(
     // asymmetry are zero and the cloud's survive the combination unchanged. Zeroed
     // rather than special-cased so that the same tested increment the shortwave uses
     // does the work here too.
-    Kokkos::deep_copy(state.ssa, TF(0.));
-    Kokkos::deep_copy(state.g, TF(0.));
+    Kokkos::deep_copy(opt.ssa, TF(0.));
+    Kokkos::deep_copy(opt.g, TF(0.));
 
     if (cloud_tau.size() > 0)
         Optical_props::increment_2stream_by_2stream(
-                state.tau, state.ssa, state.g,
+                opt.tau, opt.ssa, opt.g,
                 cloud_tau, band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
 
     Rte_lw::solver_2stream(
-            top_at_1, state.tau, state.ssa, state.g, state.sources(), sfc_emis,
+            top_at_1, opt.tau, opt.ssa, opt.g, state.sources(), sfc_emis,
             inc_flux, flux_up, flux_dn, state.lw_2stream);
 }
 
@@ -149,6 +188,7 @@ void Solver::solve_sw_gpt(
         const Atmosphere& atm,
         const bool top_at_1,
         const int igpt,
+        const int islot,
         const Array_2d<const TF>& mu0,
         const Array_map_1d<const TF>& sfc_alb_dir,
         const Array_map_1d<const TF>& sfc_alb_dif,
@@ -162,20 +202,15 @@ void Solver::solve_sw_gpt(
     const int ibnd = k.gpt_band_h(igpt);
     const auto cloud_tau = band_slice(clouds.tau, ibnd);
 
-    const auto tau = state.tau;
-    const auto ssa = state.ssa;
+    const auto opt = state.optics(islot);
+    const auto tau = opt.tau;
+    const auto ssa = opt.ssa;
 
     // The asymmetry parameter is zero for a pure gas atmosphere, so it is only worth
     // an array when clouds are going to make it something else; the solver reads an
     // empty g as isotropic. That saves writing and reading a whole (nlay, ncol) array
-    // per g-point in the clear-sky case.
-    const Array_map_2d<TF> g = cloud_tau.size() > 0
-            ? Array_map_2d<TF>(state.g) : Array_map_2d<TF>();
-
-    // Absorption, Rayleigh and the combine in one pass; the dry air column Rayleigh
-    // needs is index 0 of col_gas, which the kernel reads for itself.
-    Gas_optics::compute_tau_sw(
-            k, state.interp, atm.play, atm.tlay, state.col_gas, igpt, tau, ssa, g);
+    // per g-point in the clear-sky case. The block's gas optics zeroed it if so.
+    const Array_map_2d<TF> g = cloud_tau.size() > 0 ? opt.g : Array_map_2d<TF>();
 
     if (cloud_tau.size() > 0)
         Optical_props::increment_2stream_by_2stream(
@@ -232,8 +267,6 @@ void Solver::solve_lw(
         const bool scattering,
         const Fluxes_out& fluxes)
 {
-    const int ngpt = static_cast<int>(k.kmajor.extent(0));
-
     if (scattering && fluxes.up_jac.size() > 0)
         throw std::invalid_argument(
                 "The longwave two-stream solver does not produce a surface Jacobian.");
@@ -244,20 +277,25 @@ void Solver::solve_lw(
     zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
     zero(fluxes.up_byband); zero(fluxes.dn_byband);
 
-    for (int igpt=0; igpt<ngpt; ++igpt)
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
     {
-        // The solver adds into the totals itself; no g-point flux is written, since
-        // the no-scattering solver never reads one back.
-        const int ibnd = k.gpt_band_h(igpt);
+        gas_optics_lw_block(k, state, atm, igpt0, igpt1);
 
-        solve_lw_gpt(
-                k, state, atm, top_at_1, igpt, secants, weights,
-                slice_1d(sfc_emis, igpt),
-                inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
-                clouds, scattering,
-                sink(ibnd, fluxes.up, fluxes.up_byband),
-                sink(ibnd, fluxes.dn, fluxes.dn_byband),
-                fluxes.up_jac);
+        for (int igpt=igpt0; igpt<igpt1; ++igpt)
+        {
+            // The solver adds into the totals itself; no g-point flux is written,
+            // since the no-scattering solver never reads one back.
+            const int ibnd = k.gpt_band_h(igpt);
+
+            solve_lw_gpt(
+                    k, state, atm, top_at_1, igpt, igpt - igpt0, secants, weights,
+                    slice_1d(sfc_emis, igpt),
+                    inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
+                    clouds, scattering,
+                    sink(ibnd, fluxes.up, fluxes.up_byband),
+                    sink(ibnd, fluxes.dn, fluxes.dn_byband),
+                    fluxes.up_jac);
+        }
     }
 }
 
@@ -275,29 +313,35 @@ void Solver::solve_sw(
         const Band_props& clouds,
         const Fluxes_out& fluxes)
 {
-    const int ngpt = static_cast<int>(k.kmajor.extent(0));
-
     const Solve_state state = prepare(k, gas_concs, atm, false);
 
     zero(fluxes.up); zero(fluxes.dn); zero(fluxes.dir);
     zero(fluxes.up_byband); zero(fluxes.dn_byband); zero(fluxes.dir_byband);
 
-    for (int igpt=0; igpt<ngpt; ++igpt)
-    {
-        // Only the direct beam keeps a g-point array, which the last kernel reads to
-        // put it in the totals; the two diffuse fluxes go straight there.
-        const int ibnd = k.gpt_band_h(igpt);
+    // g is only worth zeroing when clouds are going to add to it.
+    const bool with_g = clouds.tau.size() > 0;
 
-        solve_sw_gpt(
-                k, state, atm, top_at_1, igpt, mu0,
-                slice_1d(sfc_alb_dir, igpt), slice_1d(sfc_alb_dif, igpt),
-                slice_1d(inc_flux_dir, igpt),
-                inc_flux_dif.size() > 0 ? slice_1d(inc_flux_dif, igpt)
-                                        : Array_map_1d<const TF>(),
-                clouds,
-                sink(ibnd, fluxes.up, fluxes.up_byband),
-                sink(ibnd, fluxes.dn, fluxes.dn_byband),
-                sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
+    {
+        gas_optics_sw_block(k, state, atm, igpt0, igpt1, with_g);
+
+        for (int igpt=igpt0; igpt<igpt1; ++igpt)
+        {
+            // Only the direct beam keeps a g-point array, which the last kernel reads
+            // to put it in the totals; the two diffuse fluxes go straight there.
+            const int ibnd = k.gpt_band_h(igpt);
+
+            solve_sw_gpt(
+                    k, state, atm, top_at_1, igpt, igpt - igpt0, mu0,
+                    slice_1d(sfc_alb_dir, igpt), slice_1d(sfc_alb_dif, igpt),
+                    slice_1d(inc_flux_dir, igpt),
+                    inc_flux_dif.size() > 0 ? slice_1d(inc_flux_dif, igpt)
+                                            : Array_map_1d<const TF>(),
+                    clouds,
+                    sink(ibnd, fluxes.up, fluxes.up_byband),
+                    sink(ibnd, fluxes.dn, fluxes.dn_byband),
+                    sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
+        }
     }
 }
 
@@ -317,32 +361,32 @@ void Solver::solve_sw_rt(
         const Band_props& clouds,
         const Raytracer::Fluxes_rt& fluxes)
 {
-    const int ngpt = static_cast<int>(k.kmajor.extent(0));
-
     const Solve_state state = prepare(k, gas_concs, atm, false);
     const auto scratch = Raytracer::Scratch::make(grid);
 
     fluxes.zero();
 
-    for (int igpt=0; igpt<ngpt; ++igpt)
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
     {
-        const int ibnd = k.gpt_band_h(igpt);
-
         // Absorption and Rayleigh scattering, as the two-stream path computes them.
         // The asymmetry parameter is not asked for: the gas scatters by the Rayleigh
         // phase function, which the tracer samples directly.
-        Gas_optics::compute_tau_sw(
-                k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
-                state.tau, state.ssa, Array_map_2d<TF>());
+        gas_optics_sw_block(k, state, atm, igpt0, igpt1, false);
 
-        Raytracer::trace_rays(
-                grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                state.tau, state.ssa,
-                band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
-                band_slice(clouds.g, ibnd),
-                slice_1d(sfc_alb_dir, igpt),
-                mu0, azi, toa_src(igpt)*mu0, TF(0.),
-                fluxes, scratch);
+        for (int igpt=igpt0; igpt<igpt1; ++igpt)
+        {
+            const int ibnd = k.gpt_band_h(igpt);
+            const auto opt = state.optics(igpt - igpt0);
+
+            Raytracer::trace_rays(
+                    grid, top_at_1, independent_column, photons_per_pixel, igpt,
+                    opt.tau, opt.ssa,
+                    band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
+                    band_slice(clouds.g, ibnd),
+                    slice_1d(sfc_alb_dir, igpt),
+                    mu0, azi, toa_src(igpt)*mu0, TF(0.),
+                    fluxes, scratch);
+        }
     }
 }
 
@@ -365,11 +409,11 @@ namespace
     void lump_column_into_box(
             const int nz, const int nlay, const int ncol, const bool top_at_1,
             const bool scattering,
-            const Array_2d<TF>& tau,
-            const Array_2d<TF>& ssa,
-            const Array_2d<TF>& g,
-            const Array_2d<TF>& lay_source,
-            const Array_2d<TF>& lev_source)
+            const Array_map_2d<TF>& tau,
+            const Array_map_2d<TF>& ssa,
+            const Array_map_2d<TF>& g,
+            const Array_map_2d<TF>& lay_source,
+            const Array_map_2d<TF>& lev_source)
     {
         const int off = top_at_1 ? nlay - nz : 0;
         const int ilump = Raytracer::layer_of(nz - 1, nlay, top_at_1);
@@ -464,7 +508,7 @@ int Solver::solve_lw_rt(
 
     // The gas does not scatter in the longwave, and the tracer wants that as an array
     // rather than as a special case. Allocated once and left at zero.
-    const Array_2d<TF> ssa_gas("lw_rt_ssa_gas", state.tau.extent(0), state.tau.extent(1));
+    const Array_2d<TF> ssa_gas("lw_rt_ssa_gas", nlay, ncol);
 
     // The shortest gas mean free path the box may hold before the tracer gives up on
     // it, as an optical depth per cell: a mean free path of ratio*min(dx, dy) is an
@@ -473,8 +517,6 @@ int Solver::solve_lw_rt(
     const TF tau_max_traced = min_mfp_grid_ratio > TF(0.)
             ? grid.dz/(min_mfp_grid_ratio*d_xy_min)
             : std::numeric_limits<TF>::infinity();
-
-    const auto tau = state.tau;
 
     // The cells the threshold may ask about: those that stand for one layer each. When
     // the atmosphere runs deeper than the box the top cell is not one of them -- it
@@ -502,19 +544,29 @@ int Solver::solve_lw_rt(
 
     int traced = 0;
 
+    const auto blocks = Gas_optics::gpt_blocks(k);
+    int iblk = -1;
+    int igpt0 = 0;
+
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
         const int ibnd = k.gpt_band_h(igpt);
 
-        // The Planck fraction comes out of the same interpolation as the optical
-        // depth, and the sources out of the fraction, exactly as solve_lw_gpt does it.
-        Gas_optics::compute_tau_lw(
-                k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
-                state.tau, state.pfrac);
+        // The gas optics of the block igpt falls in, on entering it. The sources come
+        // out of its Planck fraction, exactly as solve_lw_gpt does it.
+        if (iblk < 0 || igpt == blocks[iblk].second)
+        {
+            ++iblk;
+            igpt0 = blocks[iblk].first;
+            gas_optics_lw_block(k, state, atm, igpt0, blocks[iblk].second);
+        }
+
+        const auto opt = state.optics(igpt - igpt0);
+        const auto tau = opt.tau;
 
         Gas_optics::compute_planck_source(
                 k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
-                state.sources(), state.pfrac);
+                state.sources(), opt.pfrac);
 
         // The largest gas optical depth across a cell of the resolved box, which is
         // where the shortest mean free path is. Clouds are left out of it, as the
@@ -542,7 +594,7 @@ int Solver::solve_lw_rt(
 
         if (truncate)
         {
-            solve_lw_gpt(k, state, atm, top_at_1, igpt, secants, weights,
+            solve_lw_gpt(k, state, atm, top_at_1, igpt, igpt - igpt0, secants, weights,
                          slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                          clouds, scattering,
                          Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
@@ -554,7 +606,7 @@ int Solver::solve_lw_rt(
             // photon. So put the gas back, which costs one interpolation.
             Gas_optics::compute_tau_lw(
                     k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
-                    state.tau, state.pfrac);
+                    opt.tau, opt.pfrac);
 
             // One number for the whole box, as the tracer takes it and as the
             // reference feeds it: the mean over the columns of what arrives at the
@@ -589,7 +641,7 @@ int Solver::solve_lw_rt(
 
             Raytracer_lw::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                    box_rows(state.tau), box_rows(Array_map_2d<const TF>(
+                    box_rows(opt.tau), box_rows(Array_map_2d<const TF>(
                             ssa_gas.data(), ssa_gas.extent(0), ssa_gas.extent(1))),
                     box_rows(band_slice(clouds.tau, ibnd)),
                     box_rows(band_slice(clouds.ssa, ibnd)),
@@ -619,16 +671,16 @@ int Solver::solve_lw_rt(
 
             if (scattering)
             {
-                Kokkos::deep_copy(state.ssa, TF(0.));
-                Kokkos::deep_copy(state.g, TF(0.));
+                Kokkos::deep_copy(opt.ssa, TF(0.));
+                Kokkos::deep_copy(opt.g, TF(0.));
 
                 if (cloud_tau.size() > 0)
                     Optical_props::increment_2stream_by_2stream(
-                            state.tau, state.ssa, state.g, cloud_tau,
+                            opt.tau, opt.ssa, opt.g, cloud_tau,
                             band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
             }
             else if (cloud_tau.size() > 0)
-                Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+                Optical_props::increment_1scalar_by_1scalar(opt.tau, cloud_tau);
 
             // Clouds first, then the collapse, so that what weights the lumped Planck
             // source is the total absorption -- the same quantity bundle_emission
@@ -636,10 +688,10 @@ int Solver::solve_lw_rt(
             // asymmetry being combined are the ones the solver will read.
             if (nlay > nz)
                 lump_column_into_box(nz, nlay, ncol, top_at_1, scattering,
-                                     state.tau, state.ssa, state.g,
+                                     opt.tau, opt.ssa, opt.g,
                                      state.lay_source, state.lev_source);
 
-            const auto box_2d = [=](const Array_2d<TF>& v, const int rows)
+            const auto box_2d = [=](const Array_map_2d<TF>& v, const int rows)
             { return Array_map_2d<TF>(v.data() + lay_off*ncol, rows, ncol); };
 
             const Source_func_lw box_sources{
@@ -648,13 +700,13 @@ int Solver::solve_lw_rt(
 
             if (scattering)
                 Rte_lw::solver_2stream(
-                        top_at_1, box_2d(state.tau, nz), box_2d(state.ssa, nz),
-                        box_2d(state.g, nz), box_sources,
+                        top_at_1, box_2d(opt.tau, nz), box_2d(opt.ssa, nz),
+                        box_2d(opt.g, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, state.lw_2stream);
             else
                 Rte_lw::solver_noscat(
-                        top_at_1, secants, weights, box_2d(state.tau, nz), box_sources,
+                        top_at_1, secants, weights, box_2d(opt.tau, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, Array_2d<TF>(), state.lw_noscat);
 
