@@ -6,14 +6,19 @@ comparisons can and cannot check. [`README.md`](README.md) is how to run them.
 ## les_cloudfield
 
 The three-dimensional cloud field the ray tracer was validated on, described in
-[`README.md`](README.md#les_cloudfield--a-three-dimensional-cloud-field). On one MI250X
-GCD, double precision, 256 photons per pixel, best of three runs -- the first pays for
-warm-up and lands about a third high:
+[`README.md`](README.md#les_cloudfield--a-three-dimensional-cloud-field). This is the
+ray tracer's benchmark: single precision, which is what the tracer is run at, on an
+RTX A4500, with the settings file as it stands -- 512 photons per pixel in both bands.
+Best of three runs of `run_case.py`, which spread by under 3 percent:
 
 | | time | per column |
 |---|---|---|
-| longwave, 62 of 128 g-points traced | 3045 ms | 186 us |
-| shortwave, 112 g-points | 7950 ms | 485 us |
+| longwave, 62 of 128 g-points traced | 2487 ms | 152 us |
+| shortwave, 112 g-points | 3550 ms | 217 us |
+
+The plane-parallel solves beside them take 802 and 720 ms. An earlier measurement on
+one MI250X GCD, in double precision and at 256 photons per pixel, gave 3045 and 7950
+ms; it is not comparable with the above and is kept only for the record.
 
 ### The reference fluxes, and what they can check
 
