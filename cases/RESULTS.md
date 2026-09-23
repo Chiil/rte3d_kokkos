@@ -25,9 +25,10 @@ bands again; `include/random.h` says why. The longwave then lost another 380 ms 
 no longer delta-scaling its clouds when `delta-cloud` says not to, which it used to do
 regardless.
 
-About a third of what is left of the longwave is not the tracer at all: the case
-driver computes the cloud optics on the GPU, copies them into numpy and hands them
-back, which is 2 GB over PCIe for this field. The shortwave pays the same.
+Part of every one of these timings is not the solver at all: the case driver computes
+the cloud optics on the GPU, copies them into numpy and hands them back, which is 2 GB
+over PCIe for this field. That is 342 ms of the longwave trace and 299 of the
+shortwave one, and about 43 percent of each plane-parallel solve below.
 
 The plane-parallel solves beside them take 802 and 720 ms. An earlier measurement on
 one MI250X GCD, in double precision and at 256 photons per pixel, gave 3045 and 7950
