@@ -130,7 +130,8 @@ def solve_everything(rte3d, atm, files, photons, delta_cloud=True,
             for name, icol in (('lw_rt_1d', True), ('lw_rt_3d', False)):
                 out[name] = solve_lw_rt(*args, photons_per_pixel=photons,
                                         independent_column=icol,
-                                        min_mfp_grid_ratio=min_mfp_grid_ratio)
+                                        min_mfp_grid_ratio=min_mfp_grid_ratio,
+                                        delta_cloud=delta_cloud)
         else:
             out['sw_2str'] = solve_sw(*args, delta_cloud=delta_cloud)
 

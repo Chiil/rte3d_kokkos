@@ -140,7 +140,8 @@ def run_band(band, atm, switches, files, shortwave, longwave,
                                     longwave['independent_column'],
                                     longwave['scattering'],
                                     longwave['min_mfp_grid_ratio'],
-                                    longwave['lump_above']),
+                                    longwave['lump_above'],
+                                    switches['delta_cloud']),
                 repeats=1, warmup=0))
             print(rt_timer.report(ncol=atm['ncol']))
 

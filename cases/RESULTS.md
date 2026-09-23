@@ -13,15 +13,21 @@ Best of three runs of `run_case.py`, which spread by under 3 percent:
 
 | | time | per column |
 |---|---|---|
-| longwave, 62 of 128 g-points traced | 2253 ms | 138 us |
-| shortwave, 112 g-points | 3285 ms | 201 us |
+| longwave, 62 of 128 g-points traced | 1870 ms | 114 us |
+| shortwave, 112 g-points | 3218 ms | 196 us |
 
 The runs agree bit for bit: the photon counts are summed in fixed point, so the order
 the GPU's atomics land in does not matter. That cost 1 and 3 percent against the
 floating-point counters, which gave 2487 and 3550 ms and differed from run to run in
 the last bits of a third of the columns. Seeding each thread's generator directly,
 rather than skipping it ahead to a subsequence of its own, took 10 percent off both
-bands again; `include/random.h` says why.
+bands again; `include/random.h` says why. The longwave then lost another 380 ms by
+no longer delta-scaling its clouds when `delta-cloud` says not to, which it used to do
+regardless.
+
+About a third of what is left of the longwave is not the tracer at all: the case
+driver computes the cloud optics on the GPU, copies them into numpy and hands them
+back, which is 2 GB over PCIe for this field. The shortwave pays the same.
 
 The plane-parallel solves beside them take 802 and 720 ms. An earlier measurement on
 one MI250X GCD, in double precision and at 256 photons per pixel, gave 3045 and 7950

@@ -276,7 +276,7 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
 def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
                 photons_per_pixel=256, independent_column=False, scattering=False,
-                min_mfp_grid_ratio=0.0, lump_above=True):
+                min_mfp_grid_ratio=0.0, lump_above=True, delta_cloud=False):
     """Longwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The counterpart of solve_sw_rt, and it returns the same shape of answer: the
@@ -286,7 +286,9 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     is signed -- negative where a cell emits more than it absorbs.
 
     Clouds are absorption-only unless scattering is asked for, which is what
-    lw-scattering does in rte-rrtmgp-cpp's ini files.
+    lw-scattering does in rte-rrtmgp-cpp's ini files. delta_cloud then decides whether
+    they are delta-scaled, exactly as it does for solve_lw, so that the two transports
+    see the same clouds.
 
     min_mfp_grid_ratio skips the g-points whose gas is opaque within a grid cell and
     solves those with the plane-parallel no-scattering solver instead: there is no
@@ -305,7 +307,8 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
             'the input file. cases/make_input.py writes them.')
 
-    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering)
+    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering,
+                          delta_cloud and scattering)
               if cloud_optics else {})
 
     grid = dict(atm['grid'])
