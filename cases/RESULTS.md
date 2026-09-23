@@ -13,13 +13,15 @@ Best of three runs of `run_case.py`, which spread by under 3 percent:
 
 | | time | per column |
 |---|---|---|
-| longwave, 62 of 128 g-points traced | 2506 ms | 153 us |
-| shortwave, 112 g-points | 3646 ms | 223 us |
+| longwave, 62 of 128 g-points traced | 2253 ms | 138 us |
+| shortwave, 112 g-points | 3285 ms | 201 us |
 
 The runs agree bit for bit: the photon counts are summed in fixed point, so the order
 the GPU's atomics land in does not matter. That cost 1 and 3 percent against the
 floating-point counters, which gave 2487 and 3550 ms and differed from run to run in
-the last bits of a third of the columns.
+the last bits of a third of the columns. Seeding each thread's generator directly,
+rather than skipping it ahead to a subsequence of its own, took 10 percent off both
+bands again; `include/random.h` says why.
 
 The plane-parallel solves beside them take 802 and 720 ms. An earlier measurement on
 one MI250X GCD, in double precision and at 256 photons per pixel, gave 3045 and 7950

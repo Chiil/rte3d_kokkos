@@ -80,25 +80,41 @@ namespace Rand
     };
 
 
-    // A uniform deviate in [0, 1). Seeded per photon, so a run is reproducible for a
+    // SplitMix64's finalizer, which takes neighbouring seeds to unrelated 64-bit
+    // states. Every backend seeds from this rather than from the seed itself.
+    RTE3D_DEVICE_FUNCTION
+    std::uint64_t mix_seed(const unsigned int seed)
+    {
+        std::uint64_t z = seed + 0x9e3779b97f4a7c15ULL;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return z ^ (z >> 31);
+    }
+
+
+    // A uniform deviate in [0, 1). Seeded per thread, so a run is reproducible for a
     // given photon count and backend.
+    //
+    // Every thread starts a stream of its own from a mixed seed, at subsequence zero.
+    // Giving each thread its own subsequence of one seed instead, which is what the
+    // reference does, makes XORWOW skip ahead by 2^67 per subsequence, through
+    // matrices it reads from global memory. On the LES field that set-up alone was a
+    // quarter of the shortwave walk and a third of the longwave one, for a thread that
+    // then shoots sixteen photons. The mixing is what keeps it safe: the vendor's own
+    // seed scramble is linear, and on consecutive seeds it would start streams that
+    // are correlated.
     struct Rng
     {
         RTE3D_DEVICE_FUNCTION
         explicit Rng(const unsigned int seed)
         {
             #if defined(USECUDA)
-            curand_init(seed, seed, 0, &state);
+            curand_init(mix_seed(seed), 0, 0, &state);
             #elif defined(USEHIP)
-            hiprand_init(seed, seed, 0, &state);
+            hiprand_init(mix_seed(seed), 0, 0, &state);
             #else
-            // SplitMix64 on the seed, so that neighbouring seeds do not start
-            // correlated streams; xorshift64* takes it from there.
-            state = seed + 0x9e3779b97f4a7c15ULL;
-            state = (state ^ (state >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            state = (state ^ (state >> 27)) * 0x94d049bb133111ebULL;
-            state = state ^ (state >> 31);
-            state |= 1ULL;
+            // xorshift64* takes it from there, and must not start from zero.
+            state = mix_seed(seed) | 1ULL;
             #endif
         }
 
