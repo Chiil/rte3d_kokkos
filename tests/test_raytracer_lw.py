@@ -40,9 +40,9 @@ GAUSS_WTS = 2*np.array([0.2009319137, 0.2292411064, 0.0698269799])
 def exact_rtol(rte3d):
     """Tolerance for a quantity the tracer computes exactly, up to accumulation.
 
-    The photon counts are summed with atomics, so the order the threads add them in is
-    not fixed; what is left is the rounding of that sum, which is the precision the
-    module was built in.
+    The photon counts are summed in fixed point, so the order the threads add them in
+    does not matter; what is left is each score's rounding to the counters' 2^-32 and
+    the conversion of the total back to the precision the module was built in.
     """
     return 1e-4 if rte3d.runtime().precision == 'single' else 1e-9
 
@@ -256,8 +256,8 @@ def test_both_vertical_orientations_give_the_same_answer(rte3d):
         np.testing.assert_allclose(down[key], up[key], rtol=rtol)
 
     # Against the scale of the field rather than cell by cell: a cell whose net is a
-    # rounding away from zero is a difference of two large atomic sums, and the order
-    # threads add those in is not fixed, so it is not the same rounding twice.
+    # rounding away from zero is a difference of two large sums, and flipping the
+    # column changes where along the way the photons' deposits are rounded.
     assert (np.abs(down['flux_net'] - up['flux_net']).max()
             < rtol*np.abs(up['flux_net']).max())
 

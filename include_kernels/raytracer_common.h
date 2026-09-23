@@ -16,6 +16,7 @@
 // rte-rrtmgp-cpp, which the two reference kernels share in the same way.
 namespace Rt_common
 {
+    using Raytracer::Count;
     using Raytracer::Optics_cell;
     using Raytracer::Vector;
 
@@ -79,6 +80,15 @@ namespace Rt_common
         const TF b = TF(2.)*g*(TF(2.)*r*g + TF(1.) - g)*(TF(2.)*r*g + TF(1.) - g);
         const TF c = -g/TF(2.) - TF(1.)/(TF(2.)*g);
         return TF(-1.)*(a/b) - c;
+    }
+
+
+    // Add a weight into a photon count. Every score the walks make goes through here,
+    // so that every one of them is in the fixed point that makes a trace reproducible.
+    KOKKOS_INLINE_FUNCTION
+    void score(Count* count, const TF w)
+    {
+        Kokkos::atomic_add(count, Raytracer::to_count(w));
     }
 
 

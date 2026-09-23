@@ -9,6 +9,7 @@
 namespace
 {
     using Raytracer::Grid;
+    using Raytracer::from_count;
     using Raytracer::Optics_cell;
     using Raytracer::Vector;
 
@@ -219,18 +220,18 @@ namespace
         parallel_for_1d("rt_count_to_flux_2d", 0, ncol,
             KOKKOS_LAMBDA(const int icol)
             {
-                f_tod_dn(icol) += tod_dn(icol)*flux_per_photon;
-                f_tod_up(icol) += tod_up(icol)*flux_per_photon;
-                f_sfc_dir(icol) += sfc_dir(icol)*flux_per_photon;
-                f_sfc_dif(icol) += sfc_dif(icol)*flux_per_photon;
-                f_sfc_up(icol) += sfc_up(icol)*flux_per_photon;
+                f_tod_dn(icol) += from_count(tod_dn(icol))*flux_per_photon;
+                f_tod_up(icol) += from_count(tod_up(icol))*flux_per_photon;
+                f_sfc_dir(icol) += from_count(sfc_dir(icol))*flux_per_photon;
+                f_sfc_dif(icol) += from_count(sfc_dif(icol))*flux_per_photon;
+                f_sfc_up(icol) += from_count(sfc_up(icol))*flux_per_photon;
             });
 
         parallel_for_2d("rt_count_to_flux_3d", {0, 0}, {grid.nz, ncol},
             KOKKOS_LAMBDA(const int k, const int icol)
             {
-                f_abs_dir(k, icol) += atmos_dir(k, icol)*per_volume;
-                f_abs_dif(k, icol) += atmos_dif(k, icol)*per_volume;
+                f_abs_dir(k, icol) += from_count(atmos_dir(k, icol))*per_volume;
+                f_abs_dif(k, icol) += from_count(atmos_dif(k, icol))*per_volume;
             });
     }
 }
@@ -292,13 +293,13 @@ Raytracer::Scratch Raytracer::Scratch::make(const Grid& grid)
     s.k_null = Array_3d<TF>(Kokkos::view_alloc("rt_k_null", Kokkos::WithoutInitializing),
                             grid.kn_z, grid.kn_y, grid.kn_x);
 
-    s.tod_dn = Array_1d<TF>("rt_tod_dn_count", ncol);
-    s.tod_up = Array_1d<TF>("rt_tod_up_count", ncol);
-    s.sfc_dir = Array_1d<TF>("rt_sfc_dir_count", ncol);
-    s.sfc_dif = Array_1d<TF>("rt_sfc_dif_count", ncol);
-    s.sfc_up = Array_1d<TF>("rt_sfc_up_count", ncol);
-    s.atmos_dir = Array_2d<TF>("rt_atmos_dir_count", grid.nz, ncol);
-    s.atmos_dif = Array_2d<TF>("rt_atmos_dif_count", grid.nz, ncol);
+    s.tod_dn = Array_1d<Count>("rt_tod_dn_count", ncol);
+    s.tod_up = Array_1d<Count>("rt_tod_up_count", ncol);
+    s.sfc_dir = Array_1d<Count>("rt_sfc_dir_count", ncol);
+    s.sfc_dif = Array_1d<Count>("rt_sfc_dif_count", ncol);
+    s.sfc_up = Array_1d<Count>("rt_sfc_up_count", ncol);
+    s.atmos_dir = Array_2d<Count>("rt_atmos_dir_count", grid.nz, ncol);
+    s.atmos_dif = Array_2d<Count>("rt_atmos_dif_count", grid.nz, ncol);
 
     s.qrng = Rand::Qrng_table::make();
 
@@ -338,13 +339,13 @@ void Raytracer::trace_rays(
             Array_map_2d<const Optics_cell>(scratch.optics.data(), grid.nz, ncol),
             scratch.k_null);
 
-    Kokkos::deep_copy(scratch.tod_dn, TF(0.));
-    Kokkos::deep_copy(scratch.tod_up, TF(0.));
-    Kokkos::deep_copy(scratch.sfc_dir, TF(0.));
-    Kokkos::deep_copy(scratch.sfc_dif, TF(0.));
-    Kokkos::deep_copy(scratch.sfc_up, TF(0.));
-    Kokkos::deep_copy(scratch.atmos_dir, TF(0.));
-    Kokkos::deep_copy(scratch.atmos_dif, TF(0.));
+    Kokkos::deep_copy(scratch.tod_dn, Count(0));
+    Kokkos::deep_copy(scratch.tod_up, Count(0));
+    Kokkos::deep_copy(scratch.sfc_dir, Count(0));
+    Kokkos::deep_copy(scratch.sfc_dif, Count(0));
+    Kokkos::deep_copy(scratch.sfc_up, Count(0));
+    Kokkos::deep_copy(scratch.atmos_dir, Count(0));
+    Kokkos::deep_copy(scratch.atmos_dif, Count(0));
 
     Rt_kernels::Scene scene;
     scene.optics = Array_map_2d<const Optics_cell>(scratch.optics.data(), grid.nz, ncol);
@@ -352,13 +353,13 @@ void Raytracer::trace_rays(
             scratch.k_null.data(), grid.kn_z, grid.kn_y, grid.kn_x);
     scene.sfc_alb = sfc_alb;
 
-    scene.tod_dn = Array_map_1d<TF>(scratch.tod_dn.data(), ncol);
-    scene.tod_up = Array_map_1d<TF>(scratch.tod_up.data(), ncol);
-    scene.sfc_dir = Array_map_1d<TF>(scratch.sfc_dir.data(), ncol);
-    scene.sfc_dif = Array_map_1d<TF>(scratch.sfc_dif.data(), ncol);
-    scene.sfc_up = Array_map_1d<TF>(scratch.sfc_up.data(), ncol);
-    scene.atmos_dir = Array_map_2d<TF>(scratch.atmos_dir.data(), grid.nz, ncol);
-    scene.atmos_dif = Array_map_2d<TF>(scratch.atmos_dif.data(), grid.nz, ncol);
+    scene.tod_dn = Array_map_1d<Count>(scratch.tod_dn.data(), ncol);
+    scene.tod_up = Array_map_1d<Count>(scratch.tod_up.data(), ncol);
+    scene.sfc_dir = Array_map_1d<Count>(scratch.sfc_dir.data(), ncol);
+    scene.sfc_dif = Array_map_1d<Count>(scratch.sfc_dif.data(), ncol);
+    scene.sfc_up = Array_map_1d<Count>(scratch.sfc_up.data(), ncol);
+    scene.atmos_dir = Array_map_2d<Count>(scratch.atmos_dir.data(), grid.nz, ncol);
+    scene.atmos_dif = Array_map_2d<Count>(scratch.atmos_dif.data(), grid.nz, ncol);
 
     scene.grid_cells = grid.cells();
     scene.grid_d = grid.d();

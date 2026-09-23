@@ -52,8 +52,8 @@ namespace Rt_lw_kernels
 
         // Photon counts. Written with atomics, since photons from any thread may land
         // in any cell.
-        Array_map_1d<TF> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
-        Array_map_2d<TF> atmos;                                            // (nz, ncol)
+        Array_map_1d<Count> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
+        Array_map_2d<Count> atmos;                                            // (nz, ncol)
 
         // Where the resolved domain ends: the bottom face of the box's top cell, which
         // stands in for every layer above it. Zero when nothing was lumped, and then
@@ -140,13 +140,12 @@ namespace Rt_lw_kernels
         if (photon.source == Source::Atmosphere)
         {
             const int ncol = s.grid_cells.x*s.grid_cells.y;
-            Kokkos::atomic_add(&s.atmos(photon.source_idx/ncol, photon.source_idx%ncol),
-                               -photon.emitted);
+            score(&s.atmos(photon.source_idx/ncol, photon.source_idx%ncol), -photon.emitted);
         }
         else if (photon.source == Source::Surface)
-            Kokkos::atomic_add(&s.sfc_up(photon.source_idx), photon.emitted);
+            score(&s.sfc_up(photon.source_idx), photon.emitted);
         else
-            Kokkos::atomic_add(&s.toa_dn(photon.source_idx), photon.emitted);
+            score(&s.toa_dn(photon.source_idx), photon.emitted);
     }
 
 
@@ -184,8 +183,7 @@ namespace Rt_lw_kernels
         const int j = coord_to_index(y < TF(0.) ? y + s.grid_size.y : y,
                                      s.grid_d_inv.y, s.grid_cells.y);
 
-        Kokkos::atomic_add(up ? &s.tod_up(s.column(i, j)) : &s.tod_dn(s.column(i, j)),
-                           weight);
+        score(up ? &s.tod_up(s.column(i, j)) : &s.tod_dn(s.column(i, j)), weight);
     }
 
 
@@ -269,7 +267,7 @@ namespace Rt_lw_kernels
     {
         if (absorbed > TF(0.))
         {
-            Kokkos::atomic_add(&s.atmos(k, ij), absorbed);
+            score(&s.atmos(k, ij), absorbed);
             absorbed = TF(0.);
         }
     }
@@ -373,13 +371,13 @@ namespace Rt_lw_kernels
                     const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
                     const int ij = s.column(i, j);
 
-                    Kokkos::atomic_add(&s.sfc_dn(ij), weight);
+                    score(&s.sfc_dn(ij), weight);
 
                     const TF albedo = TF(1.) - s.sfc_emis(ij);
                     photon.emitted += (TF(1.) - albedo)*weight;
 
                     weight *= albedo;
-                    Kokkos::atomic_add(&s.sfc_up(ij), weight);
+                    score(&s.sfc_up(ij), weight);
 
                     if (weight < w_thres())
                         weight = (rng() > weight) ? TF(0.) : TF(1.);
@@ -401,7 +399,7 @@ namespace Rt_lw_kernels
 
                     const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                     const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
-                    Kokkos::atomic_add(&s.toa_up(s.column(i, j)), weight);
+                    score(&s.toa_up(s.column(i, j)), weight);
 
                     photon.emitted += weight;
 

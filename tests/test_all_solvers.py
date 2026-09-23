@@ -76,14 +76,15 @@ def permutation_rtol(rte3d):
     A horizontally uniform atmosphere makes the three-dimensional trace a permutation
     of the independent-column one: a photon that leaves its pixel arrives in a column
     identical to the one it left, so the set of scores is the same and only which
-    column holds which changes. What is left in the domain mean is the order things
-    are added in -- the columns in the mean, and the photons in the atomic counters
-    the tracer scores into, which is the larger of the two and why single precision
-    needs a hundred times the room double precision does. Measured on this case, the
-    two runs agree to 4e-15 of the field's scale in double precision and to 3e-3 in
-    single.
+    column holds which changes. The counters the tracer scores into are fixed point,
+    so their order does not matter; what is left is the order the columns are added
+    in the mean, and the absorbed weight, which a photon holds until it leaves a cell:
+    leaving sideways cuts that into different pieces than leaving up or down, and
+    each piece is rounded to the counters' 2^-32. Measured on this case, the two runs
+    agree to 2e-4 in single precision; in double the boundary fluxes agree exactly
+    and the absorption to 1e-10, which is that rounding.
     """
-    return 1e-2 if rte3d.runtime().precision == 'single' else 1e-11
+    return 1e-2 if rte3d.runtime().precision == 'single' else 1e-9
 
 
 def case_scripts():

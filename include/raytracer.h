@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "random.h"
 #include "types.h"
 
@@ -46,6 +48,36 @@ namespace Raytracer
         TF k_sca_cld;   // cloud scattering coefficient [1/m]
         TF asy_cld;     // cloud asymmetry parameter
     };
+
+
+    // A photon count: weight scored into a cell, held in fixed point with 32 fractional
+    // bits. The walk scores with atomics, and the GPU does not order them twice the
+    // same way; floating-point addition would then round differently from one run to
+    // the next, where integer addition is associative, so any order gives the same
+    // bits. Unsigned so that the atomic is a native one: a negative score, which the
+    // longwave's emission is, wraps around and comes back out of from_count signed.
+    // And uint64_t in particular, not unsigned long long: that is the type Kokkos has
+    // a native 64-bit add for, and the other one is the same width but falls through
+    // to a compare-and-swap loop, which cost the shortwave walk a quarter of its time.
+    //
+    // The 31 integer bits hold two billion photons' worth of weight in one cell, far
+    // beyond any launch. Below them, a float weight times a power of two is exact, so
+    // at single precision the conversion loses nothing a weight of 2^-9 or more has.
+    using Count = std::uint64_t;
+
+    KOKKOS_INLINE_FUNCTION constexpr TF count_unit() { return TF(4294967296.); }   // 2^32
+
+    KOKKOS_INLINE_FUNCTION
+    Count to_count(const TF w)
+    {
+        return static_cast<Count>(static_cast<long long>(Kokkos::round(w*count_unit())));
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    TF from_count(const Count c)
+    {
+        return static_cast<TF>(static_cast<long long>(c))/count_unit();
+    }
 
 
     // The ray-tracing box, and the coarser grid the null-collision extinction is taken
@@ -105,8 +137,8 @@ namespace Raytracer
 
         // Photon counts, zeroed at the start of every trace. Separate from the fluxes
         // because a count becomes a flux only once the trace is over.
-        Array_1d<TF> tod_dn, tod_up, sfc_dir, sfc_dif, sfc_up;   // (ncol)
-        Array_2d<TF> atmos_dir, atmos_dif;                       // (nz, ncol)
+        Array_1d<Count> tod_dn, tod_up, sfc_dir, sfc_dif, sfc_up;   // (ncol)
+        Array_2d<Count> atmos_dir, atmos_dif;                       // (nz, ncol)
 
         Rand::Qrng_table qrng;
 

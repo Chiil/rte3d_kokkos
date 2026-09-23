@@ -28,9 +28,9 @@ TSI = 1000.0
 def exact_rtol(rte3d):
     """Tolerance for a quantity the tracer computes exactly, up to accumulation.
 
-    The photon counts are summed with atomics, so the order the threads add them in is
-    not fixed; what is left is the rounding of that sum, which is the precision the
-    module was built in.
+    The photon counts are summed in fixed point, so the order the threads add them in
+    does not matter; what is left is each score's rounding to the counters' 2^-32 and
+    the conversion of the total back to the precision the module was built in.
     """
     return 1e-4 if rte3d.runtime().precision == 'single' else 1e-9
 

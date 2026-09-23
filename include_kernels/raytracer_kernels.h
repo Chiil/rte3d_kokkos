@@ -40,10 +40,10 @@ namespace Rt_kernels
         Array_map_3d<const TF> k_null;            // (kn_z, kn_y, kn_x) [1/m]
         Array_map_1d<const TF> sfc_alb;           // (ncol)
 
-        // Photon counts. Written with atomics, since photons from any thread may land
-        // in any cell.
-        Array_map_1d<TF> tod_dn, tod_up, sfc_dir, sfc_dif, sfc_up;   // (ncol)
-        Array_map_2d<TF> atmos_dir, atmos_dif;                       // (nz, ncol)
+        // Photon counts, in fixed point. Written with atomics, since photons from any
+        // thread may land in any cell.
+        Array_map_1d<Count> tod_dn, tod_up, sfc_dir, sfc_dif, sfc_up;   // (ncol)
+        Array_map_2d<Count> atmos_dir, atmos_dif;                       // (nz, ncol)
 
         Vector<int> grid_cells;
         Vector<TF> grid_d;
@@ -122,7 +122,7 @@ namespace Rt_kernels
             photon.kind = Photon_kind::Diffuse;
         }
 
-        Kokkos::atomic_add(&s.tod_dn(s.column(i, j)), TF(1.));
+        score(&s.tod_dn(s.column(i, j)), TF(1.));
         weight = TF(1.);
     }
 
@@ -141,9 +141,9 @@ namespace Rt_kernels
         if (absorbed > TF(0.))
         {
             if (kind == Photon_kind::Direct)
-                Kokkos::atomic_add(&s.atmos_dir(k, ij), absorbed);
+                score(&s.atmos_dir(k, ij), absorbed);
             else
-                Kokkos::atomic_add(&s.atmos_dif(k, ij), absorbed);
+                score(&s.atmos_dif(k, ij), absorbed);
 
             absorbed = TF(0.);
         }
@@ -258,12 +258,12 @@ namespace Rt_kernels
                     const int ij = s.column(i, j);
 
                     if (photon.kind == Photon_kind::Direct)
-                        Kokkos::atomic_add(&s.sfc_dir(ij), weight);
+                        score(&s.sfc_dir(ij), weight);
                     else
-                        Kokkos::atomic_add(&s.sfc_dif(ij), weight);
+                        score(&s.sfc_dif(ij), weight);
 
                     weight *= s.sfc_alb(ij);
-                    Kokkos::atomic_add(&s.sfc_up(ij), weight);
+                    score(&s.sfc_up(ij), weight);
 
                     if (weight < w_thres())
                         weight = (rng() > weight) ? TF(0.) : TF(1.);
@@ -283,7 +283,7 @@ namespace Rt_kernels
 
                     const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                     const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
-                    Kokkos::atomic_add(&s.tod_up(s.column(i, j)), weight);
+                    score(&s.tod_up(s.column(i, j)), weight);
 
                     reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
                 }

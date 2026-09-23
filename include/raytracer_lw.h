@@ -27,6 +27,7 @@
 // Aerosols and the Mie phase function are left out, as in the shortwave tracer.
 namespace Raytracer_lw
 {
+    using Raytracer::Count;
     using Raytracer::Grid;
     using Raytracer::Optics_cell;
     using Raytracer::Vector;
@@ -80,8 +81,8 @@ namespace Raytracer_lw
         Array_1d<double> cdf;           // ((nz+2)*ncol)
 
         // Photon counts, zeroed at the start of every trace.
-        Array_1d<TF> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
-        Array_2d<TF> atmos;                            // (nz, ncol)
+        Array_1d<Count> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
+        Array_2d<Count> atmos;                                            // (nz, ncol)
 
         static Scratch make(const Grid& grid);
     };

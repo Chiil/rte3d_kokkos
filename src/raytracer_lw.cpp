@@ -12,6 +12,7 @@ namespace
     using Raytracer_lw::Grid;
     using Raytracer_lw::Optics_cell;
     using Raytracer_lw::Vector;
+    using Raytracer::from_count;
     using Raytracer::layer_of;
 
 
@@ -161,12 +162,12 @@ namespace
             {
                 const TF per_photon = TF(cdf(nslot - 1)/photons_total);
 
-                f_toa_dn(icol) += toa_dn(icol)*per_photon;
-                f_toa_up(icol) += toa_up(icol)*per_photon;
-                f_tod_dn(icol) += (lumped ? tod_dn(icol) : toa_dn(icol))*per_photon;
-                f_tod_up(icol) += (lumped ? tod_up(icol) : toa_up(icol))*per_photon;
-                f_sfc_dn(icol) += sfc_dn(icol)*per_photon;
-                f_sfc_up(icol) += sfc_up(icol)*per_photon;
+                f_toa_dn(icol) += from_count(toa_dn(icol))*per_photon;
+                f_toa_up(icol) += from_count(toa_up(icol))*per_photon;
+                f_tod_dn(icol) += from_count(lumped ? tod_dn(icol) : toa_dn(icol))*per_photon;
+                f_tod_up(icol) += from_count(lumped ? tod_up(icol) : toa_up(icol))*per_photon;
+                f_sfc_dn(icol) += from_count(sfc_dn(icol))*per_photon;
+                f_sfc_up(icol) += from_count(sfc_up(icol))*per_photon;
             });
 
         parallel_for_2d("rt_lw_count_to_flux_3d", {0, 0}, {grid.nz, ncol},
@@ -174,7 +175,7 @@ namespace
             {
                 const TF per_volume = TF(cdf(nslot - 1)/photons_total)*dz_inv;
 
-                f_net(k, icol) += atmos(k, icol)*per_volume;
+                f_net(k, icol) += from_count(atmos(k, icol))*per_volume;
             });
     }
 }
@@ -223,13 +224,13 @@ Raytracer_lw::Scratch Raytracer_lw::Scratch::make(const Grid& grid)
     s.cdf = Array_1d<double>(Kokkos::view_alloc("rt_lw_cdf", no_init),
                              std::size_t(grid.nz + 2)*ncol);
 
-    s.toa_dn = Array_1d<TF>("rt_lw_toa_dn_count", ncol);
-    s.toa_up = Array_1d<TF>("rt_lw_toa_up_count", ncol);
-    s.tod_dn = Array_1d<TF>("rt_lw_tod_dn_count", ncol);
-    s.tod_up = Array_1d<TF>("rt_lw_tod_up_count", ncol);
-    s.sfc_dn = Array_1d<TF>("rt_lw_sfc_dn_count", ncol);
-    s.sfc_up = Array_1d<TF>("rt_lw_sfc_up_count", ncol);
-    s.atmos = Array_2d<TF>("rt_lw_atmos_count", grid.nz, ncol);
+    s.toa_dn = Array_1d<Count>("rt_lw_toa_dn_count", ncol);
+    s.toa_up = Array_1d<Count>("rt_lw_toa_up_count", ncol);
+    s.tod_dn = Array_1d<Count>("rt_lw_tod_dn_count", ncol);
+    s.tod_up = Array_1d<Count>("rt_lw_tod_up_count", ncol);
+    s.sfc_dn = Array_1d<Count>("rt_lw_sfc_dn_count", ncol);
+    s.sfc_up = Array_1d<Count>("rt_lw_sfc_up_count", ncol);
+    s.atmos = Array_2d<Count>("rt_lw_atmos_count", grid.nz, ncol);
 
     return s;
 }
@@ -344,13 +345,13 @@ void Raytracer_lw::trace_rays(
                 cdf(i) = running;
         });
 
-    Kokkos::deep_copy(scratch.toa_dn, TF(0.));
-    Kokkos::deep_copy(scratch.toa_up, TF(0.));
-    Kokkos::deep_copy(scratch.tod_dn, TF(0.));
-    Kokkos::deep_copy(scratch.tod_up, TF(0.));
-    Kokkos::deep_copy(scratch.sfc_dn, TF(0.));
-    Kokkos::deep_copy(scratch.sfc_up, TF(0.));
-    Kokkos::deep_copy(scratch.atmos, TF(0.));
+    Kokkos::deep_copy(scratch.toa_dn, Count(0));
+    Kokkos::deep_copy(scratch.toa_up, Count(0));
+    Kokkos::deep_copy(scratch.tod_dn, Count(0));
+    Kokkos::deep_copy(scratch.tod_up, Count(0));
+    Kokkos::deep_copy(scratch.sfc_dn, Count(0));
+    Kokkos::deep_copy(scratch.sfc_up, Count(0));
+    Kokkos::deep_copy(scratch.atmos, Count(0));
 
     Rt_lw_kernels::Scene scene;
     scene.optics = optics;
@@ -361,13 +362,13 @@ void Raytracer_lw::trace_rays(
     scene.cdf = Array_map_1d<const double>(scratch.cdf.data(), nslot);
     scene.nslot = nslot;
 
-    scene.toa_dn = Array_map_1d<TF>(scratch.toa_dn.data(), ncol);
-    scene.toa_up = Array_map_1d<TF>(scratch.toa_up.data(), ncol);
-    scene.tod_dn = Array_map_1d<TF>(scratch.tod_dn.data(), ncol);
-    scene.tod_up = Array_map_1d<TF>(scratch.tod_up.data(), ncol);
-    scene.sfc_dn = Array_map_1d<TF>(scratch.sfc_dn.data(), ncol);
-    scene.sfc_up = Array_map_1d<TF>(scratch.sfc_up.data(), ncol);
-    scene.atmos = Array_map_2d<TF>(scratch.atmos.data(), grid.nz, ncol);
+    scene.toa_dn = Array_map_1d<Count>(scratch.toa_dn.data(), ncol);
+    scene.toa_up = Array_map_1d<Count>(scratch.toa_up.data(), ncol);
+    scene.tod_dn = Array_map_1d<Count>(scratch.tod_dn.data(), ncol);
+    scene.tod_up = Array_map_1d<Count>(scratch.tod_up.data(), ncol);
+    scene.sfc_dn = Array_map_1d<Count>(scratch.sfc_dn.data(), ncol);
+    scene.sfc_up = Array_map_1d<Count>(scratch.sfc_up.data(), ncol);
+    scene.atmos = Array_map_2d<Count>(scratch.atmos.data(), grid.nz, ncol);
 
     scene.grid_cells = grid.cells();
     scene.grid_d = grid.d();
