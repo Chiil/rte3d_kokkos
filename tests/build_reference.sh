@@ -15,14 +15,36 @@
 #
 # Neither needs NetCDF: Python reads the coefficient file and passes arrays in.
 #
-#   ./tests/build_reference.sh [rte-rrtmgp-dir] [output-dir]
+# The reference is rte-rrtmgp v1.9. Its source layout is what the file lists below
+# assume, and its conventions are rte3d's: the longwave quadrature weights scale by pi
+# rather than 2 pi (from v1.8), and logicals are C bool, one byte. An older checkout
+# builds, but its no-scattering longwave fluxes come out twice rte3d's.
+#
+# Build one per precision, to test the matching rte3d build against:
+#
+#   ./tests/build_reference.sh [dp|sp] [rte-rrtmgp-dir] [output-dir]
 #   export RTE3D_FORTRAN_REF=<output-dir>/librte_kernels.<ext>
 #
+# dp, the default, goes to build/reference; sp to build/reference_sp.
 set -euo pipefail
 
-src="${1:-$(dirname "$0")/../rte-rrtmgp}"
-out="${2:-$(dirname "$0")/../build/reference}"
+precision="${1:-dp}"
+case "$precision" in
+    dp) fflags=();              default_out=reference ;;
+    sp) fflags=(-DRTE_USE_SP);  default_out=reference_sp ;;
+    *)  echo "precision must be dp or sp, not '$precision'" >&2; exit 1 ;;
+esac
+
+src="${2:-$(dirname "$0")/../rte-rrtmgp}"
+out="${3:-$(dirname "$0")/../build/$default_out}"
 FC="${FC:-gfortran}"
+
+# -march=native as rte3d's own configs build: it lets the compiler contract a*b + c into
+# a fused multiply-add, as rte3d's does. Without it the two round differently, which in
+# single precision is the whole of the difference in the shortwave two-stream fluxes;
+# with it they come out bit-identical. Override with FFLAGS for another configuration.
+read -ra fflags_opt <<< "${FFLAGS:--O2 -march=native}"
+fflags+=("${fflags_opt[@]}")
 
 ext=so
 [[ "$(uname)" == "Darwin" ]] && ext=dylib
@@ -36,11 +58,8 @@ out="$(cd "$out" && pwd)"
 shim="$(cd "$(dirname "$0")/shim" && pwd)"
 
 # Compiled in dependency order so the .mod files exist when they are needed.
-# Defaults match rte3d: double precision, and the default 4-byte logical kind that
-# rte_kernels.h describes as C int. Add -DRTE_USE_CBOOL here and set
-# RTE3D_FORTRAN_REF_CBOOL for the tests if you want 1-byte logicals instead.
-( cd "$out" && "$FC" -fPIC -O2 -shared -o "librte_kernels.$ext" \
-    "$src/rte-frontend/mo_rte_kind.F90" \
+( cd "$out" && "$FC" -fPIC -shared "${fflags[@]}" -o "librte_kernels.$ext" \
+    "$src/rte-kernels/mo_rte_kind.F90" \
     "$src/rte-kernels/mo_rte_util_array.F90" \
     "$src/rte-kernels/mo_rte_solver_kernels.F90" \
     "$src/rte-kernels/mo_optical_props_kernels.F90" \
@@ -59,8 +78,8 @@ awk 'BEGIN{n=0}
      {print}' \
     "$src/rrtmgp-frontend/mo_gas_optics_rrtmgp.F90" > "$out/mo_gas_optics_rrtmgp_open.F90"
 
-( cd "$out" && "$FC" -fPIC -O2 -shared -o "librte3d_shim.$ext" \
-    "$src/rte-frontend/mo_rte_kind.F90" \
+( cd "$out" && "$FC" -fPIC -shared "${fflags[@]}" -o "librte3d_shim.$ext" \
+    "$src/rte-kernels/mo_rte_kind.F90" \
     "$src/rte-frontend/mo_rte_config.F90" \
     "$src/rte-kernels/mo_rte_util_array.F90" \
     "$src/rte-frontend/mo_rte_util_array_validation.F90" \
@@ -76,6 +95,7 @@ awk 'BEGIN{n=0}
     "$src/gas-optics/mo_gas_optics.F90" \
     "$src/rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90" \
     "$out/mo_gas_optics_rrtmgp_open.F90" \
+    "$src/rrtmgp-kernels/mo_cloud_optics_rrtmgp_kernels.F90" \
     "$src/rrtmgp-frontend/mo_cloud_optics_rrtmgp.F90" \
     "$shim/rte3d_shim.F90" )
 

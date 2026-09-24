@@ -9,7 +9,7 @@ import os
 import numpy as np
 import pytest
 
-from compare import assert_close
+from compare import assert_close, rtol_for
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'extern', 'rrtmgp-data')
 
@@ -60,10 +60,10 @@ def test_cloud_optics_matches_reference(rte3d, fortran_shim, coeff_file, icergh,
 
     if two_stream:
         for name, exp, act in zip(('tau', 'ssa', 'g'), expected, actual):
-            assert_close(act, exp, rtol=1e-12,
+            assert_close(act, exp, rtol=rtol_for(rte3d, 1e-12),
                                        err_msg=f'{name} differs from the reference')
     else:
-        assert_close(actual, expected, rtol=1e-12)
+        assert_close(actual, expected, rtol=rtol_for(rte3d, 1e-12))
 
 
 @requires_data

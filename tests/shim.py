@@ -10,10 +10,10 @@ import ctypes
 
 import numpy as np
 
-NAME_LEN = 32
-FLOAT = np.float64
+from reference import _real_array
 
-_f8 = np.ctypeslib.ndpointer(dtype=FLOAT, flags='C_CONTIGUOUS')
+NAME_LEN = 32
+
 _i4 = np.ctypeslib.ndpointer(dtype=np.int32, flags='C_CONTIGUOUS')
 _p = ctypes.c_void_p
 
@@ -32,13 +32,17 @@ def _i(v):
     return ctypes.byref(ctypes.c_int(int(v)))
 
 
-def _d(v):
-    return ctypes.byref(ctypes.c_double(float(v)))
-
-
 class Shim:
     def __init__(self, lib):
         self.lib = lib
+
+        lib.rte3d_shim_float_bytes.restype = None
+        lib.rte3d_shim_float_bytes.argtypes = [_p]
+        nbytes = ctypes.c_int(0)
+        lib.rte3d_shim_float_bytes(ctypes.byref(nbytes))
+        self.dtype = {8: np.float64, 4: np.float32}[nbytes.value]
+        self.precision = 'double' if nbytes.value == 8 else 'single'
+        _f8 = _real_array(self.dtype)
 
         lib.rte3d_shim_load.restype = None
         lib.rte3d_shim_load.argtypes = (
@@ -64,6 +68,9 @@ class Shim:
             + [_f8]*4         # clwp ciwp reliq reice
             + [_f8]*3         # tau ssa g
             + [_p])           # status
+
+    def _real(self, v):
+        return ctypes.byref(np.ctypeslib.as_ctypes_type(self.dtype)(float(v)))
 
     def load(self, f, available):
         ngas_file = len(f['gas_names'])
@@ -91,7 +98,7 @@ class Shim:
             _names_buf(available),
             f['key_species'], f['band2gpt'], f['band_lims_wavenum'],
             f['press_ref'], f['temp_ref'],
-            _d(f['press_ref_trop']), _d(f['temp_ref_p']), _d(f['temp_ref_t']),
+            self._real(f['press_ref_trop']), self._real(f['temp_ref_p']), self._real(f['temp_ref_t']),
             # load() wants the contributor axis fastest in Fortran, i.e. slowest in C;
             # rte3d stores it the other way, matching load()'s own reduced output.
             f['vmr_ref'], f['kmajor'],
@@ -118,7 +125,7 @@ class Shim:
 
         flavor = np.zeros((nflav, 2), dtype=np.int32)
         gpoint_flavor = np.zeros((ngpt, 2), dtype=np.int32)
-        vmr_ref = np.zeros((ntemp, ngas + 1, 2), dtype=FLOAT)
+        vmr_ref = np.zeros((ntemp, ngas + 1, 2), dtype=self.dtype)
         self.lib.rte3d_shim_get_main(flavor, gpoint_flavor, vmr_ref)
 
         out = dict(gas_names=None, flavor=flavor, gpoint_flavor=gpoint_flavor,
@@ -131,7 +138,7 @@ class Shim:
             idx_minor = np.zeros(nm, dtype=np.int32)
             idx_scaling = np.zeros(nm, dtype=np.int32)
             kminor_start = np.zeros(nm, dtype=np.int32)
-            kminor = np.zeros((nc, neta, ntemp), dtype=FLOAT)
+            kminor = np.zeros((nc, neta, ntemp), dtype=self.dtype)
 
             self.lib.rte3d_shim_get_minor(
                 _i(side), limits, density, complement,
@@ -170,17 +177,17 @@ class Shim:
                 np.stack([edges[:-1], edges[1:]], axis=1))
 
         n = nspec*nlay*ncol
-        tau = np.zeros(n, dtype=FLOAT)
-        ssa = np.zeros(n, dtype=FLOAT)
-        g = np.zeros(n, dtype=FLOAT)
+        tau = np.zeros(n, dtype=self.dtype)
+        ssa = np.zeros(n, dtype=self.dtype)
+        g = np.zeros(n, dtype=self.dtype)
         status = ctypes.c_int(-1)
 
         self.lib.rte3d_shim_cloud_optics(
             _i(nspec), _i(nsize_liq), _i(nsize_ice), _i(nrghice), _i(icergh + 1),
             _i(ncol), _i(nlay), _i(1 if two_stream else 0),
             band_lims,
-            _d(f['radliq_lwr']), _d(f['radliq_upr']),
-            _d(f['radice_lwr']), _d(f['radice_upr']),
+            self._real(f['radliq_lwr']), self._real(f['radliq_upr']),
+            self._real(f['radice_lwr']), self._real(f['radice_upr']),
             f['extliq'], f['ssaliq'], f['asyliq'],
             f['extice'], f['ssaice'], f['asyice'],
             clwp, ciwp, reliq, reice,

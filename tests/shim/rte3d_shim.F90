@@ -21,6 +21,13 @@ module rte3d_shim
 
 contains
 
+  ! The Float this library was compiled with, in bytes: 8, or 4 with -DRTE_USE_SP.
+  subroutine shim_float_bytes(nbytes) bind(C, name="rte3d_shim_float_bytes")
+    integer(c_int), intent(out) :: nbytes
+
+    nbytes = storage_size(1._wp)/8
+  end subroutine shim_float_bytes
+
   ! Unpack a flat buffer of n fixed-width names into a Fortran string array.
   function unpack_names(buf, n) result(names)
     character(kind=c_char), dimension(*), intent(in) :: buf
@@ -61,16 +68,16 @@ contains
     character(kind=c_char), dimension(*), intent(in) :: scaling_gas_lower_buf, scaling_gas_upper_buf
     character(kind=c_char), dimension(*), intent(in) :: avail_names_buf
     integer(c_int), intent(in) :: key_species(2, 2, nbnd), band2gpt(2, nbnd)
-    real(c_double), intent(in) :: band_lims_wavenum(2, nbnd)
-    real(c_double), intent(in) :: press_ref(npres), temp_ref(ntemp)
-    real(c_double), intent(in) :: press_ref_trop, temp_ref_p, temp_ref_t
-    real(c_double), intent(in) :: vmr_ref(2, ngas_file+1, ntemp)
-    real(c_double), intent(in) :: kmajor(ntemp, neta, npres+1, ngpt)
+    real(wp), intent(in) :: band_lims_wavenum(2, nbnd)
+    real(wp), intent(in) :: press_ref(npres), temp_ref(ntemp)
+    real(wp), intent(in) :: press_ref_trop, temp_ref_p, temp_ref_t
+    real(wp), intent(in) :: vmr_ref(2, ngas_file+1, ntemp)
+    real(wp), intent(in) :: kmajor(ntemp, neta, npres+1, ngpt)
     ! Note the ordering: load() takes kminor with the contributor axis fastest, but
     ! stores its reduced result with the contributor axis slowest. rte3d uses the
     ! latter throughout, so tests/shim.py transposes on the way in only.
-    real(c_double), intent(in) :: kminor_lower(ncontrib_lower, neta, ntemp)
-    real(c_double), intent(in) :: kminor_upper(ncontrib_upper, neta, ntemp)
+    real(wp), intent(in) :: kminor_lower(ncontrib_lower, neta, ntemp)
+    real(wp), intent(in) :: kminor_upper(ncontrib_upper, neta, ntemp)
     integer(c_int), intent(in) :: minor_limits_gpt_lower(2, nminor_lower)
     integer(c_int), intent(in) :: minor_limits_gpt_upper(2, nminor_upper)
     integer(c_int), intent(in) :: minor_scales_with_density_lower(nminor_lower)
@@ -78,9 +85,9 @@ contains
     integer(c_int), intent(in) :: scale_by_complement_lower(nminor_lower)
     integer(c_int), intent(in) :: scale_by_complement_upper(nminor_upper)
     integer(c_int), intent(in) :: kminor_start_lower(nminor_lower), kminor_start_upper(nminor_upper)
-    real(c_double), intent(in) :: totplnk(nplancktemp, nbnd)
-    real(c_double), intent(in) :: planck_frac(ntemp, neta, npres+1, ngpt)
-    real(c_double), intent(in) :: optimal_angle_fit(nfit, nbnd)
+    real(wp), intent(in) :: totplnk(nplancktemp, nbnd)
+    real(wp), intent(in) :: planck_frac(ntemp, neta, npres+1, ngpt)
+    real(wp), intent(in) :: optimal_angle_fit(nfit, nbnd)
     integer(c_int), intent(out) :: status
 
     real(wp), dimension(:,:,:), allocatable :: rayl_lower, rayl_upper  ! left unallocated
@@ -142,7 +149,7 @@ contains
 
   subroutine shim_get_main(flavor, gpoint_flavor, vmr_ref) bind(C, name="rte3d_shim_get_main")
     integer(c_int), intent(out) :: flavor(*), gpoint_flavor(*)
-    real(c_double), intent(out) :: vmr_ref(*)
+    real(wp), intent(out) :: vmr_ref(*)
 
     flavor(1:size(k_dist%flavor))               = reshape(k_dist%flavor, [size(k_dist%flavor)])
     gpoint_flavor(1:size(k_dist%gpoint_flavor)) = reshape(k_dist%gpoint_flavor, [size(k_dist%gpoint_flavor)])
@@ -155,7 +162,7 @@ contains
     integer(c_int), intent(in)  :: side   ! 0 lower, 1 upper
     integer(c_int), intent(out) :: limits(*), density(*), complement(*)
     integer(c_int), intent(out) :: idx_minor(*), idx_scaling(*), kminor_start(*)
-    real(c_double), intent(out) :: kminor(*)
+    real(wp), intent(out) :: kminor(*)
 
     if (side == 0) then
       limits(1:size(k_dist%minor_limits_gpt_lower)) = &
@@ -197,16 +204,16 @@ contains
                                tau, ssa, g, status) bind(C, name="rte3d_shim_cloud_optics")
     integer(c_int), intent(in) :: nspec, nsize_liq, nsize_ice, nrghice, icergh
     integer(c_int), intent(in) :: ncol, nlay, two_stream
-    real(c_double), intent(in) :: band_lims_wvn(2, nspec)
-    real(c_double), intent(in) :: radliq_lwr, radliq_upr, radice_lwr, radice_upr
-    real(c_double), intent(in) :: extliq(nsize_liq, nspec), ssaliq(nsize_liq, nspec)
-    real(c_double), intent(in) :: asyliq(nsize_liq, nspec)
-    real(c_double), intent(in) :: extice(nsize_ice, nspec, nrghice)
-    real(c_double), intent(in) :: ssaice(nsize_ice, nspec, nrghice)
-    real(c_double), intent(in) :: asyice(nsize_ice, nspec, nrghice)
-    real(c_double), intent(in) :: clwp(ncol, nlay), ciwp(ncol, nlay)
-    real(c_double), intent(in) :: reliq(ncol, nlay), reice(ncol, nlay)
-    real(c_double), intent(out) :: tau(*), ssa(*), g(*)
+    real(wp), intent(in) :: band_lims_wvn(2, nspec)
+    real(wp), intent(in) :: radliq_lwr, radliq_upr, radice_lwr, radice_upr
+    real(wp), intent(in) :: extliq(nsize_liq, nspec), ssaliq(nsize_liq, nspec)
+    real(wp), intent(in) :: asyliq(nsize_liq, nspec)
+    real(wp), intent(in) :: extice(nsize_ice, nspec, nrghice)
+    real(wp), intent(in) :: ssaice(nsize_ice, nspec, nrghice)
+    real(wp), intent(in) :: asyice(nsize_ice, nspec, nrghice)
+    real(wp), intent(in) :: clwp(ncol, nlay), ciwp(ncol, nlay)
+    real(wp), intent(in) :: reliq(ncol, nlay), reice(ncol, nlay)
+    real(wp), intent(out) :: tau(*), ssa(*), g(*)
     integer(c_int), intent(out) :: status
 
     type(ty_optical_props_1scl) :: props_1scl

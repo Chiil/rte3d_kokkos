@@ -306,6 +306,15 @@ Each is reproduced or worked around deliberately, and pinned by a test.
   see `test_2stream_reference_bug_gpt_indexing`.
 - **`LW_diff_sec = 1.66` is a single-precision literal** promoted to double, so its
   value is 1.65999996662139893. rte3d matches it bit-for-bit rather than "fixing" it.
+- **Since v1.9, `interpolation` indexes `temp_ref` out of bounds** for a temperature
+  off the table: `ftemp` uses the unclamped `jtemp_` (rte-rrtmgp #315). rte3d keeps
+  the clamped index v1.8 used; `test_interpolation_clamps_out_of_range_inputs`
+  compares the weights only where the reference is defined.
+- **`lw_source_2str` is ill-conditioned in single precision** for thin layers. It
+  divides by tau and then differences the results, and its cut-off at tau = 1e-8 is a
+  double-precision one. At tau ~ 1e-6 both the reference and rte3d are tens of W/m2
+  off their double-precision fluxes. The single-precision comparisons therefore draw
+  tau from 0.1 up; see `tau_min_2stream` in `tests/test_rte_lw.py`.
 - **`rte_kernels.h` mis-documents `flux_upJac`** as `(ncol,nlay+1,ngpt)`; the Fortran
   declares it `(ncol,nlay+1)`, since only broadband Jacobians are provided.
 

@@ -17,7 +17,7 @@ cmake --build .
 cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
-pytest tests                                     # 214 tests
+pytest tests                                     # 216 tests
 python cases/rfmip_rte/run_rfmip_rte.py --plot           # a case, end to end
 ```
 
@@ -72,6 +72,26 @@ pytest tests
 
 The library extension is `.dylib` on macOS and `.so` on Linux;
 `build_reference.sh` prints the two `export` lines for your platform when it finishes.
+
+The reference is **rte-rrtmgp v1.9**: point the `rte-rrtmgp` symlink at a checkout of
+that tag (`git worktree add ../rte-rrtmgp-v1.9 v1.9` in your clone keeps it apart
+from a working branch). Older versions build, but before v1.8 the longwave
+quadrature weights scaled by 2π rather than π, so the no-scattering fluxes come out
+at twice rte3d's.
+
+Each precision is tested against a reference built in the same precision; the
+fixtures check this and fail on a mismatch. To run the whole suite in both, with a
+single-precision build in `build_cpu_sp/` (`-DUSESP=1`):
+
+```bash
+./tests/build_reference.sh dp                    # -> build/reference
+./tests/build_reference.sh sp                    # -> build/reference_sp
+./tests/run_all.sh                               # pytest, double then single
+```
+
+The reference builds with `-O2 -march=native`, as rte3d's configs do, so both contract
+to fused multiply-adds alike; set `FFLAGS` to match another configuration.
+`run_all.sh` takes `RTE3D_BUILD_DP` and `RTE3D_BUILD_SP` for other build directories.
 
 | variable | what it unlocks |
 |---|---|

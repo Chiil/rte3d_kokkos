@@ -124,11 +124,25 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1, nmus):
     assert_close(flux_up, expected_up, rtol=tol)
 
 
-def random_2stream_inputs(ngpt, nlay, ncol, seed=0):
+def tau_min_2stream(rte3d):
+    """The thinnest layer the two-stream comparisons against the reference draw.
+
+    lw_source_2str forms Z = (B_bot - B_top)/(tau*(gamma1 + gamma2)) and then differences
+    of terms of size Z, so its rounding error grows like epsilon/tau. Its cut-off at
+    tau = 1e-8 is a double-precision one. In single precision, at tau ~ 1e-6, the
+    reference and rte3d are both tens of W/m2 off their double-precision answers, and
+    what separates them is one ulp -- from an exp, say -- amplified by that. They
+    agree to SINGLE_RTOL from tau = 0.1 up, so single precision compares there; double
+    keeps the whole range.
+    """
+    return 1e-1 if rte3d.runtime().precision == 'single' else 1e-6
+
+
+def random_2stream_inputs(ngpt, nlay, ncol, seed=0, tau_min=1e-6):
     rng = np.random.default_rng(seed)
 
     return dict(
-        tau=10.0**rng.uniform(-6.0, 2.0, (ngpt, nlay, ncol)),
+        tau=10.0**rng.uniform(np.log10(tau_min), 2.0, (ngpt, nlay, ncol)),
         ssa=rng.uniform(0.0, 1.0, (ngpt, nlay, ncol)),
         g=rng.uniform(0.0, 1.0, (ngpt, nlay, ncol)),
         lay_source=rng.uniform(0.0, 100.0, (ngpt, nlay, ncol)),
@@ -152,7 +166,7 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
 
     See test_2stream_reference_bug_gpt_indexing for the defect itself.
     """
-    a = random_2stream_inputs(ngpt, nlay, ncol, seed=11)
+    a = random_2stream_inputs(ngpt, nlay, ncol, seed=11, tau_min=tau_min_2stream(rte3d))
     a['lev_source'] = np.broadcast_to(a['lev_source'][0:1], a['lev_source'].shape).copy()
 
     expected = fortran_ref.lw_solver_2stream(top_at_1, **a)
@@ -175,7 +189,7 @@ def test_2stream_gpt_varying_lev_source(rte3d, fortran_ref, top_at_1):
     just used where it is trustworthy.
     """
     ngpt, nlay, ncol = 4, 6, 3
-    a = random_2stream_inputs(ngpt, nlay, ncol, seed=14)
+    a = random_2stream_inputs(ngpt, nlay, ncol, seed=14, tau_min=tau_min_2stream(rte3d))
 
     per_gpt = [fortran_ref.lw_solver_2stream(top_at_1, **{k: v[i:i+1] for k, v in a.items()})
                for i in range(ngpt)]
@@ -199,7 +213,7 @@ def test_2stream_reference_bug_gpt_indexing(rte3d, fortran_ref, top_at_1):
     mo_rte_solver_kernels.F90:422 and the sibling tests should be simplified.
     """
     ngpt = 4
-    a = random_2stream_inputs(ngpt, 6, 3, seed=14)
+    a = random_2stream_inputs(ngpt, 6, 3, seed=14, tau_min=tau_min_2stream(rte3d))
 
     expected = fortran_ref.lw_solver_2stream(top_at_1, **a)
 

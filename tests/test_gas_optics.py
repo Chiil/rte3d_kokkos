@@ -92,7 +92,13 @@ def test_interpolation_matches_reference(rte3d, fortran_ref, nlay, ncol, zero_co
 
 def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
     """Temperatures and pressures outside the table must clamp to its edges, the same
-    way in both implementations."""
+    way in both implementations.
+
+    The weights are compared only where the reference is well defined. Since v1.9
+    (rte-rrtmgp #315) it computes ftemp from temp_ref(jtemp_) with the *unclamped*
+    index, which for a temperature off the table reads outside temp_ref. rte3d keeps
+    the clamped index v1.8 used, so there the weights extrapolate linearly from the
+    edge interval, and still sum to one."""
     rng = np.random.default_rng(31)
     k = kdist(rng)
     ngas = k['vmr_ref'].shape[1] - 1
@@ -110,9 +116,11 @@ def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
     np.testing.assert_array_equal(actual['jtemp'], expected['jtemp'] - 1)
     np.testing.assert_array_equal(actual['jpress'], expected['jpress'] - 1)
     assert_close(
-        actual['fmajor'],
-        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
+        actual['fmajor'][:, :, :, :, 2:],
+        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2))[:, :, :, :, 2:],
         rtol=tolerance(rte3d))
+    assert_close(
+        actual['fmajor'][:, :, :, :, :2].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))
 
 
 def test_weights_are_a_partition_of_unity(rte3d):

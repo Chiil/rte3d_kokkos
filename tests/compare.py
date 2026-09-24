@@ -32,6 +32,17 @@ DEFAULT_RTOL = 1e-12
 # and a genuine error in a solver shows up as an O(1) discrepancy, not a 1e-10 one.
 RECURRENCE_RTOL = 1e-9
 
+# Against a single-precision reference: a few float epsilons (1.2e-7) of the field's
+# scale, with room for the same last-bit differences between compilers -- FMA
+# contraction above all -- that DEFAULT_RTOL allows for in double.
+SINGLE_RTOL = 1e-5
+
+
+def rtol_for(rte3d, rtol):
+    """rtol in double precision, SINGLE_RTOL in single."""
+    return SINGLE_RTOL if rte3d.runtime().precision == 'single' else rtol
+
+
 # Single precision cannot reach the round-off agreement double precision reaches against
 # a stored reference, so a relative tolerance tuned for double precision is the wrong
 # test for it. The Fortran reference's own CI handles this by judging fluxes against an
