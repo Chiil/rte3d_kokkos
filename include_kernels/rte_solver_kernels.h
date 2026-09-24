@@ -47,35 +47,39 @@ namespace Rte_kernels
     };
 
 
-    // exp(-x) and 1 - exp(-2x) for x >= 0, both to full relative precision with one
-    // transcendental: through expm1 for thin layers, where 1 - exp(-2x) would cancel,
+    // exp(-x) and 1 - exp(-x) for x >= 0, both to full relative precision with one
+    // transcendental: through expm1 for thin layers, where 1 - exp(-x) would cancel,
     // and through exp for thick ones, where 1 + expm1(-x) would lose exp(-x).
     KOKKOS_INLINE_FUNCTION
-    void exp_and_one_minus_exp2(const TF x, TF& exp_minusx, TF& one_minus_exp_minus2x)
+    void exp_and_one_minus_exp(const TF x, TF& exp_minusx, TF& one_minus_exp_minusx)
     {
-        TF expm1_minusx;
         if (x < TF(0.5))
         {
-            expm1_minusx = Kokkos::expm1(-x);
-            exp_minusx = TF(1.) + expm1_minusx;
+            one_minus_exp_minusx = -Kokkos::expm1(-x);
+            exp_minusx = TF(1.) - one_minus_exp_minusx;
         }
         else
         {
             exp_minusx = Kokkos::exp(-x);
-            expm1_minusx = exp_minusx - TF(1.);
+            one_minus_exp_minusx = TF(1.) - exp_minusx;
         }
-        one_minus_exp_minus2x = -expm1_minusx * (TF(1.) + exp_minusx);
     }
 
 
     // Meador and Weaver direct-beam reflectance and transmittance into the diffuse
     // field, Eqs 14-15, at one mu0. RT_term and the exponentials are those of the
     // diffuse solution; Tnoscat is exp(-tau/mu0). Singular at k*mu0 = 1.
+    //
+    // The numerators are regrouped from the reference's so that nothing cancels as
+    // k -> 0: with e1 = exp(-k*tau), e2 = e1^2 and T = Tnoscat, the combinations
+    // 1 + e2 - 2*e1*T and T*(1 + e2) - 2*e1 appear, which are written through 1 - e1
+    // and 1 - T. Their O(1) parts would otherwise cancel to O(k), leaving a relative
+    // error of eps/k -- the reason min_k had to be large.
     KOKKOS_INLINE_FUNCTION
     void sw_direct(
             const TF w0, const TF g, const TF gamma1, const TF gamma2, const TF k,
-            const TF exp_minusktau, const TF exp_minus2ktau, const TF RT_term,
-            const TF mu0, const TF Tnoscat,
+            const TF exp_minusktau, const TF one_minus_exp_minusktau, const TF RT_term,
+            const TF mu0, const TF Tnoscat, const TF one_minus_Tnoscat,
             TF& Rdir, TF& Tdir)
     {
         const TF k_mu = k * mu0;
@@ -88,21 +92,24 @@ namespace Rte_kernels
         const TF alpha1 = gamma1 * gamma4 + gamma2 * gamma3;  // Eq 16
         const TF alpha2 = gamma1 * gamma3 + gamma2 * gamma4;  // Eq 17
 
-        const TF k_gamma3 = k * gamma3;
-        const TF k_gamma4 = k * gamma4;
+        const TF one_minus_e1_sq = one_minus_exp_minusktau * one_minus_exp_minusktau;
+        const TF one_minus_e2 = one_minus_exp_minusktau * (TF(1.) + exp_minusktau);
+        const TF two_e1_one_minus_T = TF(2.) * exp_minusktau * one_minus_Tnoscat;
 
+        // (1 - k*mu0)*(alpha2 + k*gamma3) - (1 + k*mu0)*(alpha2 - k*gamma3)*e2
+        //     - 2*(k*gamma3 - alpha2*k*mu0)*e1*T
         Rdir = RT_term_dir *
-            ((TF(1.) - k_mu) * (alpha2 + k_gamma3)                  -
-             (TF(1.) + k_mu) * (alpha2 - k_gamma3) * exp_minus2ktau -
-             TF(2.) * (k_gamma3 - alpha2 * k_mu) * exp_minusktau * Tnoscat);
+            (k * (gamma3 - mu0 * alpha2) * (one_minus_e1_sq + two_e1_one_minus_T) +
+             one_minus_e2 * (alpha2 - k_mu * k * gamma3));
 
         // Eq 15, top and bottom multiplied by exp(-k*tau) and the whole multiplied
         // through by exp(-tau/mu0) to prefer underflow to overflow. The direct
         // transmittance is omitted.
+        // (1 + k*mu0)*(alpha1 + k*gamma4)*T - (1 - k*mu0)*(alpha1 - k*gamma4)*e2*T
+        //     - 2*(k*gamma4 + alpha1*k*mu0)*e1
         Tdir = -RT_term_dir *
-            ((TF(1.) + k_mu) * (alpha1 + k_gamma4)                  * Tnoscat -
-             (TF(1.) - k_mu) * (alpha1 - k_gamma4) * exp_minus2ktau * Tnoscat -
-             TF(2.) * (k_gamma4 + alpha1 * k_mu) * exp_minusktau);
+            (Tnoscat * one_minus_e2 * (alpha1 + k_mu * k * gamma4) +
+             k * (gamma4 + mu0 * alpha1) * (Tnoscat * one_minus_e1_sq - two_e1_one_minus_T));
     }
 
 
@@ -127,9 +134,10 @@ namespace Rte_kernels
         const TF k = Kokkos::sqrt(Kokkos::max(
                 TF(2.) * (TF(1.) - w0) * (gamma1 + gamma2), min_k()));
 
-        TF exp_minusktau, one_minus_exp_minus2ktau;
-        exp_and_one_minus_exp2(k*tau, exp_minusktau, one_minus_exp_minus2ktau);
+        TF exp_minusktau, one_minus_exp_minusktau;
+        exp_and_one_minus_exp(k*tau, exp_minusktau, one_minus_exp_minusktau);
         const TF exp_minus2ktau = exp_minusktau * exp_minusktau;
+        const TF one_minus_exp_minus2ktau = one_minus_exp_minusktau * (TF(1.) + exp_minusktau);
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
         const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
@@ -142,7 +150,8 @@ namespace Rte_kernels
         // direct beam. Compute with a nominal value here and mask the result at the
         // call site.
         const TF mu0_s = Kokkos::max(Kokkos::sqrt(eps()), mu0);
-        Tnoscat = Kokkos::exp(-tau/mu0_s);
+        TF one_minus_Tnoscat;
+        exp_and_one_minus_exp(tau/mu0_s, Tnoscat, one_minus_Tnoscat);
 
         // Eqs 14-15 have a removable singularity at k*mu0 = 1: numerator and
         // denominator both vanish, and their rounding error grows like eps/|1 - k*mu0|.
@@ -156,19 +165,23 @@ namespace Rte_kernels
         {
             const TF mu0_lo = (TF(1.) - window) / k;
             const TF mu0_hi = (TF(1.) + window) / k;
+            TF T_lo, one_minus_T_lo, T_hi, one_minus_T_hi;
+            exp_and_one_minus_exp(tau/mu0_lo, T_lo, one_minus_T_lo);
+            exp_and_one_minus_exp(tau/mu0_hi, T_hi, one_minus_T_hi);
+
             TF Rdir_lo, Tdir_lo, Rdir_hi, Tdir_hi;
-            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, exp_minus2ktau, RT_term,
-                      mu0_lo, Kokkos::exp(-tau/mu0_lo), Rdir_lo, Tdir_lo);
-            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, exp_minus2ktau, RT_term,
-                      mu0_hi, Kokkos::exp(-tau/mu0_hi), Rdir_hi, Tdir_hi);
+            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, one_minus_exp_minusktau, RT_term,
+                      mu0_lo, T_lo, one_minus_T_lo, Rdir_lo, Tdir_lo);
+            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, one_minus_exp_minusktau, RT_term,
+                      mu0_hi, T_hi, one_minus_T_hi, Rdir_hi, Tdir_hi);
 
             const TF frac = (x + window) / (TF(2.) * window);
             Rdir = Rdir_lo + frac * (Rdir_hi - Rdir_lo);
             Tdir = Tdir_lo + frac * (Tdir_hi - Tdir_lo);
         }
         else
-            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, exp_minus2ktau, RT_term,
-                      mu0_s, Tnoscat, Rdir, Tdir);
+            sw_direct(w0, g, gamma1, gamma2, k, exp_minusktau, one_minus_exp_minusktau, RT_term,
+                      mu0_s, Tnoscat, one_minus_Tnoscat, Rdir, Tdir);
 
         // The beam is reflected, penetrates unscattered, or penetrates and is
         // scattered on the way; the rest is absorbed. Clamping to that budget keeps
@@ -364,9 +377,10 @@ namespace Rte_kernels
         const TF k = Kokkos::sqrt(Kokkos::max(
                 lw_diff_sec * (TF(1.) - w0) * (gamma1 + gamma2), TF(1.e-12)));
 
-        TF exp_minusktau, one_minus_exp_minus2ktau;
-        exp_and_one_minus_exp2(k*tau, exp_minusktau, one_minus_exp_minus2ktau);
+        TF exp_minusktau, one_minus_exp_minusktau;
+        exp_and_one_minus_exp(k*tau, exp_minusktau, one_minus_exp_minusktau);
         const TF exp_minus2ktau = exp_minusktau * exp_minusktau;
+        const TF one_minus_exp_minus2ktau = one_minus_exp_minusktau * (TF(1.) + exp_minusktau);
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
         const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
