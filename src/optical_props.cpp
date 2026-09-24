@@ -59,7 +59,8 @@ void Optical_props::delta_scale_2str(const Optical_props_2str& props)
 
             tau(igpt, ilay, icol) = (TF(1.) - wf) * tau(igpt, ilay, icol);
             ssa(igpt, ilay, icol) = (ssa(igpt, ilay, icol) - wf) / Kokkos::max(eps(), TF(1.) - wf);
-            g  (igpt, ilay, icol) = (g  (igpt, ilay, icol) - f ) / Kokkos::max(eps(), TF(1.) - f );
+            // (g - g^2) / (1 - g^2) reduces to g / (1 + g), which does not cancel as g -> 1.
+            g  (igpt, ilay, icol) = g(igpt, ilay, icol) / (TF(1.) + g(igpt, ilay, icol));
         });
 }
 

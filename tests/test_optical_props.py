@@ -47,8 +47,19 @@ def test_delta_scale_matches_reference(rte3d, fortran_ref, use_f, ngpt, nlay, nc
     expected = fortran_ref.delta_scale_2str(a['tau'], a['ssa'], a['g'], f)
     actual = rte3d.delta_scale_2str(a['tau'], a['ssa'], a['g'], f)
 
-    for name, exp, act in zip(('tau', 'ssa', 'g'), expected, actual):
+    for name, exp, act in zip(('tau', 'ssa'), expected[:2], actual[:2]):
         assert_close(act, exp, rtol=tolerance(rte3d), err_msg=f'{name} differs')
+
+    if use_f:
+        assert_close(actual[2], expected[2], rtol=tolerance(rte3d), err_msg='g differs')
+    else:
+        # With f = g^2 rte3d uses g/(1 + g), not the reference's cancelling
+        # (g - g^2)/(1 - g^2). In single precision that is ~1000x closer to the exact
+        # value than the reference is, so check against the exact value instead.
+        single = rte3d.runtime().precision == 'single'
+        g = a['g'].astype(np.float32 if single else np.float64).astype(np.float64)
+        assert_close(actual[2], g / (1.0 + g), rtol=1e-6 if single else 1e-12,
+                     err_msg='g differs from g/(1 + g)')
 
 
 @pytest.mark.parametrize('ngpt,nlay,ncol', SHAPES)
