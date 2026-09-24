@@ -13,10 +13,13 @@ namespace Rte_kernels
     // passed by reference to Kokkos::max etc., which nvcc rejects in device code.
     KOKKOS_INLINE_FUNCTION constexpr TF eps() { return std::numeric_limits<TF>::epsilon(); }
 
-    // Lower limit on k, suggested by Chiel van Heerwaarden: k = 0 for isotropic,
-    // conservative scattering, and this limit keeps the relative error in Rdif below
-    // 0.1% down to tau = 1e-9 while avoiding the division by zero.
-    KOKKOS_INLINE_FUNCTION constexpr TF min_k() { return TF(1.e4) * eps(); }
+    // Lower limit on k^2, which is 0 for conservative scattering. The reference uses
+    // 1e4*eps in the shortwave, large enough to hide the cancellation of its thin-layer
+    // and direct-beam terms as k -> 0; but in single precision that is 1.2e-3, which
+    // biases k for w0 near 1 by up to 0.6 W/m2 in thick layers. With those terms
+    // written without cancellation the limit only has to avoid dividing by zero, so
+    // both solvers use the longwave's 1e-12.
+    KOKKOS_INLINE_FUNCTION constexpr TF min_k() { return TF(1.e-12); }
 
 
     // Vertical orientation of the arrays. The reference writes every loop out twice,
@@ -372,10 +375,9 @@ namespace Rte_kernels
         gamma2 = lw_diff_sec *           TF(0.5) * w0 * (TF(1.) - g);   // Fu et al. Eq 2.10
 
         // Eq 18; k = sqrt(gamma1^2 - gamma2^2). gamma1 - gamma2 is exactly
-        // lw_diff_sec*(1 - w0); written so, it does not cancel as w0 -> 1. Note the
-        // floor is a plain 1e-12 here, not the epsilon-derived min_k the shortwave uses.
+        // lw_diff_sec*(1 - w0); written so, it does not cancel as w0 -> 1.
         const TF k = Kokkos::sqrt(Kokkos::max(
-                lw_diff_sec * (TF(1.) - w0) * (gamma1 + gamma2), TF(1.e-12)));
+                lw_diff_sec * (TF(1.) - w0) * (gamma1 + gamma2), min_k()));
 
         TF exp_minusktau, one_minus_exp_minusktau;
         exp_and_one_minus_exp(k*tau, exp_minusktau, one_minus_exp_minusktau);

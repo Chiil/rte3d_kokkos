@@ -41,22 +41,28 @@ def random_inputs(ngpt, nlay, ncol, seed=0, conservative=False, night=False):
     )
 
 
-def away_from_resonance(rte3d, a):
+def reference_is_accurate(rte3d, a):
     """(ngpt, ncol) mask of the columns to compare against the reference.
 
-    In single precision the reference loses the direct-beam terms near k*mu0 = 1,
-    where rte3d interpolates across the singularity instead (test_2stream_near_resonance
-    checks that against the exact value). So single precision leaves out the columns
-    with any layer within twice rte3d's interpolation window of it; double keeps them all.
+    In single precision the reference is the less accurate of the two in columns with
+    a layer where
+    - k*mu0 is near 1: it loses the direct-beam terms, where rte3d interpolates across
+      the singularity (test_2stream_near_resonance checks that against the exact value);
+    - k^2 is below its floor of 1e4*eps, 1.2e-3 in single precision, which biases k;
+      rte3d's terms need no such floor.
+    So single precision leaves those columns out, with a margin of 2; double keeps them
+    all.
     """
     w0, g = a['ssa'], a['g']
     if rte3d.runtime().precision != 'single':
         return np.ones((w0.shape[0], w0.shape[2]), dtype=bool)
+    eps = np.finfo(np.float32).eps
     gamma1 = (8.0 - w0*(5.0 + 3.0*g))/4.0
     gamma2 = 3.0*w0*(1.0 - g)/4.0
-    k = np.sqrt((gamma1 - gamma2)*(gamma1 + gamma2))
-    window = 2.0*np.cbrt(np.finfo(np.float32).eps)
-    return ~(np.abs(k*a['mu0'][None] - 1.0) < window).any(axis=1)
+    k2 = (gamma1 - gamma2)*(gamma1 + gamma2)
+    near_resonance = np.abs(np.sqrt(k2)*a['mu0'][None] - 1.0) < 2.0*np.cbrt(eps)
+    below_floor = k2 < 2.0*1e4*eps
+    return ~(near_resonance | below_floor).any(axis=1)
 
 
 def columns(flux, keep):
@@ -82,7 +88,7 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
 
     expected = fortran_ref.sw_solver_2stream(top_at_1, **a)
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
-    keep = away_from_resonance(rte3d, a)
+    keep = reference_is_accurate(rte3d, a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn', 'flux_dir'), expected, actual):
         assert_close(
@@ -99,7 +105,7 @@ def test_2stream_matches_reference_with_diffuse_bc(rte3d, fortran_ref, top_at_1)
 
     expected = fortran_ref.sw_solver_2stream(top_at_1, **a)
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
-    keep = away_from_resonance(rte3d, a)
+    keep = reference_is_accurate(rte3d, a)
 
     for exp, act in zip(expected, actual):
         assert_close(columns(act, keep), columns(exp, keep), rtol=tolerance(rte3d))
@@ -147,21 +153,11 @@ def test_conservative_scattering_conserves_energy(rte3d, top_at_1):
     is independent of height.
 
     Only approximate: the two-stream conservative limit is reached through the min_k
-    floor in sw_two_stream, which the reference documents as giving a relative error
-    below 0.1%. That is still tight enough that a sign or indexing error stands out.
-
-    Double precision only. For conservative scattering gamma1 - gamma2 is zero exactly,
-    so k collapses to sqrt(min_k), and min_k = 1e4*epsilon scales with the working
-    precision: sqrt(min_k) is ~1.5e-6 in double but ~0.035 in single. Over the thick
-    layers in this case that single-precision floor injects real absorption -- the net
-    flux is no longer constant with height at all -- so the conserved-energy property
-    the test checks cannot hold in single precision. This is inherent to the reference
-    algorithm (its own single-precision CI never tests the pure conservative limit),
-    not an rte3d defect, so the test is meaningful only in double precision.
+    floor on k^2 in sw_two_stream, which gives k = 1e-6. That is still tight enough
+    that a sign or indexing error stands out. This used to be double precision only,
+    when min_k was the reference's 1e4*eps: 1.2e-3 in single precision, which injects
+    real absorption over thick layers.
     """
-    if rte3d.runtime().precision == 'single':
-        pytest.skip('conservative limit is unresolvable at single precision (k = sqrt(min_k))')
-
     a = random_inputs(8, 30, 5, seed=6, conservative=True)
     a['sfc_alb_dir'] = np.zeros_like(a['sfc_alb_dir'])
     a['sfc_alb_dif'] = np.zeros_like(a['sfc_alb_dif'])
