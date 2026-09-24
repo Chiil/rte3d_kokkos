@@ -36,27 +36,26 @@ namespace Solver
         Array_2d<const TF> col_dry;  // (nlay, ncol), may be empty
     };
 
-    // Cloud (or aerosol) optical properties, resolved by band. Band-resolved rather
-    // than by g-point because that is how the lookup tables give them; the g-point
-    // loop takes the slice for its own band. Empty tau means no clouds. ssa and g are
-    // empty for an absorption-only set, as the longwave all-sky case uses.
-    struct Band_props
+    // Cloud optical properties of one band, which every g-point of that band shares:
+    // the lookup tables are resolved by band, not by g-point. Empty tau means no
+    // clouds. ssa and g are empty for an absorption-only set, as the longwave all-sky
+    // case uses.
+    struct Cloud_band
     {
-        Array_3d<const TF> tau;   // (nbnd, nlay, ncol)
-        Array_3d<const TF> ssa;   // (nbnd, nlay, ncol), may be empty
-        Array_3d<const TF> g;     // (nbnd, nlay, ncol), may be empty
+        Array_map_2d<const TF> tau;   // (nlay, ncol)
+        Array_map_2d<const TF> ssa;   // (nlay, ncol), may be empty
+        Array_map_2d<const TF> g;     // (nlay, ncol), may be empty
     };
 
-    // The clouds as a caller has them: water paths and particle sizes, with their
-    // optical properties allocated but not computed. make_clouds allocates once and
-    // cloud_props computes into it, so a caller that solves every time step, or times
-    // the solve as rte-rrtmgp-cpp does, pays for the cloud optics only where it runs
-    // them. A null optics means no clouds.
+    // The clouds as a caller has them: water paths and particle sizes, with room for
+    // the optical properties of one band. The solves compute each band's as they come
+    // to it, with cloud_band, so the clouds never cost more than three (nlay, ncol)
+    // arrays whatever the number of bands. A null optics means no clouds.
     struct Cloud_input
     {
         const Cloud_optics* optics = nullptr;
         Array_2d<const TF> clwp, ciwp, reliq, reice;   // (nlay, ncol)
-        Array_3d<TF> tau, ssa, g;   // (nbnd, nlay, ncol); ssa and g only for two_stream
+        Array_3d<TF> tau, ssa, g;   // (1, nlay, ncol); ssa and g only for two_stream
         bool delta_scale = false;
     };
 
@@ -71,9 +70,10 @@ namespace Solver
             const bool two_stream,
             const bool delta_scale);
 
-    // The cloud optical properties by band, delta-scaled when asked, ready to pass to
-    // a solve. Empty when there are no clouds.
-    Band_props cloud_props(const Cloud_input& c);
+    // The cloud optical properties of band ibnd, delta-scaled when asked, computed
+    // into c's one-band arrays: they hold until the next call. Empty when there are
+    // no clouds.
+    Cloud_band cloud_band(const Cloud_input& c, const int ibnd);
 
     // Everything a per-g-point solve needs that does not depend on the g-point, plus
     // the one g-point's working set that every iteration reuses. Built by prepare().
@@ -177,8 +177,8 @@ namespace Solver
     // One g-point, from its block's gas optics to its fluxes: Planck sources, the
     // cloud increment, and transport. islot is igpt's place in the block, whose gas
     // optics must already be in the state; the cloud increment goes into them in
-    // place. The fluxes go wherever the sinks say: a caller after a
-    // single g-point points them at state.flux_up / flux_dn, while solve_lw below
+    // place, and clouds are those of igpt's band, as cloud_band gives them. The
+    // fluxes go wherever the sinks say: a caller after a single g-point points them at state.flux_up / flux_dn, while solve_lw below
     // points them straight at the spectral totals, so that no per-g-point flux is ever
     // written and read back. flux_up_jac is accumulated into if it is not empty.
     //
@@ -196,7 +196,7 @@ namespace Solver
             const Array_1d<const TF>& weights,       // (nmus)
             const Array_map_1d<const TF>& sfc_emis,  // (ncol)
             const Array_map_1d<const TF>& inc_flux,  // (ncol), may be empty
-            const Band_props& clouds,
+            const Cloud_band& clouds,
             const bool scattering,
             const Flux_sink& flux_up,
             const Flux_sink& flux_dn,
@@ -216,7 +216,7 @@ namespace Solver
             const Array_map_1d<const TF>& sfc_alb_dif,   // (ncol)
             const Array_map_1d<const TF>& inc_flux_dir,  // (ncol)
             const Array_map_1d<const TF>& inc_flux_dif,  // (ncol), may be empty
-            const Band_props& clouds,
+            const Cloud_band& clouds,
             const Flux_sink& flux_up,
             const Flux_sink& flux_dn,
             const Flux_sink& flux_dir);
@@ -233,7 +233,7 @@ namespace Solver
             const Array_1d<const TF>& weights,     // (nmus)
             const Array_2d<const TF>& sfc_emis,    // (ngpt, ncol)
             const Array_2d<const TF>& inc_flux,    // (ngpt, ncol), may be empty
-            const Band_props& clouds,
+            const Cloud_input& clouds,
             const bool scattering,                 // solve with scattering, not by quadrature
             const Fluxes_out& fluxes,
             const int gpt_block = 1);
@@ -248,7 +248,7 @@ namespace Solver
             const Array_2d<const TF>& sfc_alb_dif,     // (ngpt, ncol)
             const Array_2d<const TF>& inc_flux_dir,    // (ngpt, ncol)
             const Array_2d<const TF>& inc_flux_dif,    // (ngpt, ncol), may be empty
-            const Band_props& clouds,
+            const Cloud_input& clouds,
             const Fluxes_out& fluxes,
             const int gpt_block = 1);
 
@@ -277,7 +277,7 @@ namespace Solver
             const TF azi,
             const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
             const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
-            const Band_props& clouds,
+            const Cloud_input& clouds,
             const Raytracer::Fluxes_rt& fluxes,
             const int gpt_block = 1);
 
@@ -326,7 +326,7 @@ namespace Solver
             const Array_2d<const TF>& secants,    // (nmus, ncol) for the fallback
             const Array_1d<const TF>& weights,    // (nmus)
             const TF min_mfp_grid_ratio,
-            const Band_props& clouds,
+            const Cloud_input& clouds,
             const bool scattering,
             const bool lump_above,
             const Raytracer_lw::Fluxes_lw& fluxes,

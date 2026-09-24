@@ -18,9 +18,9 @@ namespace
         return a.has_value() ? Numpy::to_device_2d<TF>(*a, name) : Array_2d<TF>();
     }
 
-    // The clouds as the caller gives them, uploaded, with their optical properties
-    // allocated but not computed. Solver::cloud_props computes them inside the timed
-    // region, as rte-rrtmgp-cpp's cloud optics runs inside its own.
+    // The clouds as the caller gives them, uploaded, with room for one band's optical
+    // properties. The solve computes them band by band inside the timed region, as
+    // rte-rrtmgp-cpp's cloud optics runs inside its own.
     Solver::Cloud_input upload_clouds(
             const Cloud_optics* optics,
             const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
@@ -159,7 +159,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_lw(
                         k, gas_concs, atm, top_at_1,
                         secants_d, weights_d, sfc_emis_d, inc_flux_d,
-                        Solver::cloud_props(clouds), scattering, fluxes, gpt_block);
+                        clouds, scattering, fluxes, gpt_block);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -234,7 +234,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw(
                         k, gas_concs, atm, top_at_1,
                         mu0_d, sfc_alb_dir_d, sfc_alb_dif_d, inc_flux_dir_d, inc_flux_dif_d,
-                        Solver::cloud_props(clouds), fluxes, gpt_block);
+                        clouds, fluxes, gpt_block);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -321,7 +321,7 @@ void Solver::init_python_bindings(py::module_& m)
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column,
                         sfc_emis_d, secants_d, weights_d,
-                        min_mfp_grid_ratio, Solver::cloud_props(clouds), scattering, lump_above,
+                        min_mfp_grid_ratio, clouds, scattering, lump_above,
                         fluxes, gpt_block);
             });
 
@@ -429,7 +429,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw_rt(
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column, mu0, azi,
-                        toa_src_h, sfc_alb_dir_d, Solver::cloud_props(clouds), fluxes,
+                        toa_src_h, sfc_alb_dir_d, clouds, fluxes,
                         gpt_block);
             });
 

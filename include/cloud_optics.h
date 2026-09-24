@@ -58,6 +58,8 @@ namespace Clouds
 {
     // Cloud optical properties for a two-stream calculation. Water paths in g/m2,
     // particle sizes in microns. A layer is cloudy where its water path is positive.
+    // The outputs hold the spectral points [ispec0, ispec0 + tau.extent(0)) of the
+    // tables, so that a caller after one band at a time need hold only that band.
     void compute(
             const Cloud_optics& c,
             const Array_2d<const TF>& clwp,   // (nlay, ncol) liquid water path
@@ -66,7 +68,8 @@ namespace Clouds
             const Array_2d<const TF>& reice,  // (nlay, ncol) ice particle size
             const Array_3d<TF>& tau,          // (nspec, nlay, ncol)
             const Array_3d<TF>& ssa,
-            const Array_3d<TF>& g);
+            const Array_3d<TF>& g,
+            const int ispec0 = 0);
 
     // Absorption optical depth only, for a longwave calculation without scattering:
     // (1 - ssa) * tau, summed over liquid and ice.
@@ -76,7 +79,8 @@ namespace Clouds
             const Array_2d<const TF>& ciwp,
             const Array_2d<const TF>& reliq,
             const Array_2d<const TF>& reice,
-            const Array_3d<TF>& tau);
+            const Array_3d<TF>& tau,
+            const int ispec0 = 0);
 
     void init_python_bindings(py::module_& m);
 }

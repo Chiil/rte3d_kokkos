@@ -28,17 +28,17 @@ Solver::Cloud_input Solver::make_clouds(
     c.reliq = reliq;
     c.reice = reice;
 
-    const int nspec = static_cast<int>(optics->lut_extliq.extent(0));
     const int nlay = static_cast<int>(clwp.extent(0));
     const int ncol = static_cast<int>(clwp.extent(1));
 
+    // One band's worth; cloud_band overwrites it band by band.
     const auto no_init = Kokkos::WithoutInitializing;
-    c.tau = Array_3d<TF>(Kokkos::view_alloc("cloud_tau", no_init), nspec, nlay, ncol);
+    c.tau = Array_3d<TF>(Kokkos::view_alloc("cloud_tau", no_init), 1, nlay, ncol);
 
     if (two_stream)
     {
-        c.ssa = Array_3d<TF>(Kokkos::view_alloc("cloud_ssa", no_init), nspec, nlay, ncol);
-        c.g = Array_3d<TF>(Kokkos::view_alloc("cloud_g", no_init), nspec, nlay, ncol);
+        c.ssa = Array_3d<TF>(Kokkos::view_alloc("cloud_ssa", no_init), 1, nlay, ncol);
+        c.g = Array_3d<TF>(Kokkos::view_alloc("cloud_g", no_init), 1, nlay, ncol);
         c.delta_scale = delta_scale;
     }
 
@@ -46,27 +46,29 @@ Solver::Cloud_input Solver::make_clouds(
 }
 
 
-Solver::Band_props Solver::cloud_props(const Cloud_input& c)
+Solver::Cloud_band Solver::cloud_band(const Cloud_input& c, const int ibnd)
 {
-    Band_props props;
+    Cloud_band band;
     if (c.optics == nullptr)
-        return props;
+        return band;
+
+    const auto slot = [](const Array_3d<const TF>& a) { return slice_2d(a, 0); };
 
     if (c.ssa.size() == 0)
     {
-        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau);
-        props.tau = c.tau;
-        return props;
+        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, ibnd);
+        band.tau = slot(c.tau);
+        return band;
     }
 
-    Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g);
+    Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g, ibnd);
     if (c.delta_scale)
         Optical_props::delta_scale_2str(Optical_props_2str{c.tau, c.ssa, c.g});
 
-    props.tau = c.tau;
-    props.ssa = c.ssa;
-    props.g = c.g;
-    return props;
+    band.tau = slot(c.tau);
+    band.ssa = slot(c.ssa);
+    band.g = slot(c.g);
+    return band;
 }
 
 
@@ -142,20 +144,6 @@ Solver::Solve_state Solver::prepare(
 }
 
 
-namespace
-{
-    // This g-point's band slice of a band-resolved property set, or an empty view when
-    // the set is absent.
-    Array_map_2d<const TF> band_slice(const Array_3d<const TF>& a, const int ibnd)
-    {
-        if (a.size() == 0)
-            return Array_map_2d<const TF>();
-
-        return slice_2d(a, ibnd);
-    }
-}
-
-
 void Solver::gas_optics_lw_block(
         const Kdist_gas& k,
         const Solve_state& state,
@@ -200,7 +188,7 @@ void Solver::solve_lw_gpt(
         const Array_1d<const TF>& weights,
         const Array_map_1d<const TF>& sfc_emis,
         const Array_map_1d<const TF>& inc_flux,
-        const Band_props& clouds,
+        const Cloud_band& clouds,
         const bool scattering,
         const Flux_sink& flux_up,
         const Flux_sink& flux_dn,
@@ -213,8 +201,7 @@ void Solver::solve_lw_gpt(
             k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
             state.sources(), opt.pfrac);
 
-    const int ibnd = k.gpt_band_h(igpt);
-    const auto cloud_tau = band_slice(clouds.tau, ibnd);
+    const auto cloud_tau = clouds.tau;
 
     if (!scattering)
     {
@@ -240,7 +227,7 @@ void Solver::solve_lw_gpt(
     if (cloud_tau.size() > 0)
         Optical_props::increment_2stream_by_2stream(
                 opt.tau, opt.ssa, opt.g,
-                cloud_tau, band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+                cloud_tau, clouds.ssa, clouds.g);
 
     Rte_lw::solver_2stream(
             top_at_1, opt.tau, opt.ssa, opt.g, state.sources(), sfc_emis,
@@ -260,13 +247,12 @@ void Solver::solve_sw_gpt(
         const Array_map_1d<const TF>& sfc_alb_dif,
         const Array_map_1d<const TF>& inc_flux_dir,
         const Array_map_1d<const TF>& inc_flux_dif,
-        const Band_props& clouds,
+        const Cloud_band& clouds,
         const Flux_sink& flux_up,
         const Flux_sink& flux_dn,
         const Flux_sink& flux_dir)
 {
-    const int ibnd = k.gpt_band_h(igpt);
-    const auto cloud_tau = band_slice(clouds.tau, ibnd);
+    const auto cloud_tau = clouds.tau;
 
     const auto opt = state.optics(islot);
     const auto tau = opt.tau;
@@ -281,7 +267,7 @@ void Solver::solve_sw_gpt(
     if (cloud_tau.size() > 0)
         Optical_props::increment_2stream_by_2stream(
                 tau, ssa, g,
-                cloud_tau, band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+                cloud_tau, clouds.ssa, clouds.g);
 
     Rte_sw::solver_2stream(
             top_at_1, tau, ssa, g, mu0,
@@ -304,6 +290,19 @@ namespace
         return Flux_sink{
                 gpt, broadband,
                 byband.size() > 0 ? slice_2d(byband, ibnd) : Array_map_2d<TF>()};
+    }
+
+    // Band ibnd's clouds into band, unless they are there already: blocks never span
+    // bands, but a band may take several blocks, and its clouds are the same for all.
+    void enter_band(
+            const Solver::Cloud_input& clouds, const int ibnd,
+            int& ibnd_now, Solver::Cloud_band& band)
+    {
+        if (ibnd == ibnd_now)
+            return;
+
+        band = Solver::cloud_band(clouds, ibnd);
+        ibnd_now = ibnd;
     }
 
     void zero(const Array_2d<TF>& a)
@@ -329,7 +328,7 @@ void Solver::solve_lw(
         const Array_1d<const TF>& weights,
         const Array_2d<const TF>& sfc_emis,
         const Array_2d<const TF>& inc_flux,
-        const Band_props& clouds,
+        const Cloud_input& clouds,
         const bool scattering,
         const Fluxes_out& fluxes,
         const int gpt_block)
@@ -345,9 +344,13 @@ void Solver::solve_lw(
     zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
     zero(fluxes.up_byband); zero(fluxes.dn_byband);
 
+    Cloud_band cloud;
+    int cloud_ibnd = -1;
+
     for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         gas_optics_lw_block(k, state, atm, igpt0, igpt1);
+        enter_band(clouds, k.gpt_band_h(igpt0), cloud_ibnd, cloud);
 
         for (int igpt=igpt0; igpt<igpt1; ++igpt)
         {
@@ -359,7 +362,7 @@ void Solver::solve_lw(
                     k, state, atm, top_at_1, igpt, igpt - igpt0, secants, weights,
                     slice_1d(sfc_emis, igpt),
                     inc_flux.size() > 0 ? slice_1d(inc_flux, igpt) : Array_map_1d<const TF>(),
-                    clouds, scattering,
+                    cloud, scattering,
                     sink(ibnd, fluxes.up, fluxes.up_byband),
                     sink(ibnd, fluxes.dn, fluxes.dn_byband),
                     fluxes.up_jac);
@@ -378,7 +381,7 @@ void Solver::solve_sw(
         const Array_2d<const TF>& sfc_alb_dif,
         const Array_2d<const TF>& inc_flux_dir,
         const Array_2d<const TF>& inc_flux_dif,
-        const Band_props& clouds,
+        const Cloud_input& clouds,
         const Fluxes_out& fluxes,
         const int gpt_block)
 {
@@ -391,9 +394,13 @@ void Solver::solve_sw(
     // g is only worth zeroing when clouds are going to add to it.
     const bool with_g = clouds.tau.size() > 0;
 
+    Cloud_band cloud;
+    int cloud_ibnd = -1;
+
     for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         gas_optics_sw_block(k, state, atm, igpt0, igpt1, with_g);
+        enter_band(clouds, k.gpt_band_h(igpt0), cloud_ibnd, cloud);
 
         for (int igpt=igpt0; igpt<igpt1; ++igpt)
         {
@@ -407,7 +414,7 @@ void Solver::solve_sw(
                     slice_1d(inc_flux_dir, igpt),
                     inc_flux_dif.size() > 0 ? slice_1d(inc_flux_dif, igpt)
                                             : Array_map_1d<const TF>(),
-                    clouds,
+                    cloud,
                     sink(ibnd, fluxes.up, fluxes.up_byband),
                     sink(ibnd, fluxes.dn, fluxes.dn_byband),
                     sink(ibnd, fluxes.dir, fluxes.dir_byband, state.flux_dir));
@@ -428,7 +435,7 @@ void Solver::solve_sw_rt(
         const TF azi,
         const Array_1d_h<const TF>& toa_src,
         const Array_2d<const TF>& sfc_alb_dir,
-        const Band_props& clouds,
+        const Cloud_input& clouds,
         const Raytracer::Fluxes_rt& fluxes,
         const int gpt_block)
 {
@@ -438,23 +445,24 @@ void Solver::solve_sw_rt(
 
     fluxes.zero();
 
+    Cloud_band cloud;
+    int cloud_ibnd = -1;
+
     for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         // Absorption and Rayleigh scattering, as the two-stream path computes them.
         // The asymmetry parameter is not asked for: the gas scatters by the Rayleigh
         // phase function, which the tracer samples directly.
         gas_optics_sw_block(k, state, atm, igpt0, igpt1, false);
+        enter_band(clouds, k.gpt_band_h(igpt0), cloud_ibnd, cloud);
 
         for (int igpt=igpt0; igpt<igpt1; ++igpt)
         {
-            const int ibnd = k.gpt_band_h(igpt);
             const auto opt = state.optics(igpt - igpt0);
 
             Raytracer::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                    opt.tau, opt.ssa,
-                    band_slice(clouds.tau, ibnd), band_slice(clouds.ssa, ibnd),
-                    band_slice(clouds.g, ibnd),
+                    opt.tau, opt.ssa, cloud.tau, cloud.ssa, cloud.g,
                     slice_1d(sfc_alb_dir, igpt),
                     mu0, azi, toa_src(igpt)*mu0, TF(0.),
                     fluxes, scratch);
@@ -565,7 +573,7 @@ int Solver::solve_lw_rt(
         const Array_2d<const TF>& secants,
         const Array_1d<const TF>& weights,
         const TF min_mfp_grid_ratio,
-        const Band_props& clouds,
+        const Cloud_input& clouds,
         const bool scattering,
         const bool lump_above,
         const Raytracer_lw::Fluxes_lw& fluxes,
@@ -621,6 +629,9 @@ int Solver::solve_lw_rt(
     int iblk = -1;
     int igpt0 = 0;
 
+    Cloud_band cloud;
+    int cloud_ibnd = -1;
+
     for (int igpt=0; igpt<ngpt; ++igpt)
     {
         const int ibnd = k.gpt_band_h(igpt);
@@ -632,6 +643,7 @@ int Solver::solve_lw_rt(
             ++iblk;
             igpt0 = blocks[iblk].first;
             gas_optics_lw_block(k, state, atm, igpt0, blocks[iblk].second);
+            enter_band(clouds, ibnd, cloud_ibnd, cloud);
         }
 
         const auto opt = state.optics(igpt - igpt0);
@@ -669,7 +681,7 @@ int Solver::solve_lw_rt(
         {
             solve_lw_gpt(k, state, atm, top_at_1, igpt, igpt - igpt0, secants, weights,
                          slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
-                         clouds, scattering,
+                         cloud, scattering,
                          Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
                          Flux_sink{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()},
                          Array_2d<TF>());
@@ -716,9 +728,7 @@ int Solver::solve_lw_rt(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
                     box_rows(opt.tau), box_rows(Array_map_2d<const TF>(
                             ssa_gas.data(), ssa_gas.extent(0), ssa_gas.extent(1))),
-                    box_rows(band_slice(clouds.tau, ibnd)),
-                    box_rows(band_slice(clouds.ssa, ibnd)),
-                    box_rows(band_slice(clouds.g, ibnd)),
+                    box_rows(cloud.tau), box_rows(cloud.ssa), box_rows(cloud.g),
                     box_rows(state.lay_source), state.sfc_source,
                     slice_1d(sfc_emis, igpt),
                     inc_dif,
@@ -738,7 +748,7 @@ int Solver::solve_lw_rt(
         {
             // Opaque within a cell: solve the column instead, with whichever solver a
             // plane-parallel run of this case would have used.
-            const auto cloud_tau = band_slice(clouds.tau, ibnd);
+            const auto cloud_tau = cloud.tau;
             const Flux_sink up{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()};
             const Flux_sink dn{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()};
 
@@ -750,7 +760,7 @@ int Solver::solve_lw_rt(
                 if (cloud_tau.size() > 0)
                     Optical_props::increment_2stream_by_2stream(
                             opt.tau, opt.ssa, opt.g, cloud_tau,
-                            band_slice(clouds.ssa, ibnd), band_slice(clouds.g, ibnd));
+                            cloud.ssa, cloud.g);
             }
             else if (cloud_tau.size() > 0)
                 Optical_props::increment_1scalar_by_1scalar(opt.tau, cloud_tau);

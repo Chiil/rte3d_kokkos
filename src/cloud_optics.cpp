@@ -131,11 +131,15 @@ void Clouds::compute(
         const Array_2d<const TF>& reice,
         const Array_3d<TF>& tau,
         const Array_3d<TF>& ssa,
-        const Array_3d<TF>& g)
+        const Array_3d<TF>& g,
+        const int ispec0)
 {
     const int nspec = static_cast<int>(tau.extent(0));
     const int nlay = static_cast<int>(tau.extent(1));
     const int ncol = static_cast<int>(tau.extent(2));
+
+    if (ispec0 < 0 || ispec0 + nspec > static_cast<int>(c.lut_extliq.extent(0)))
+        throw std::invalid_argument("The spectral points asked for are outside the tables.");
 
     const int nsize_liq = static_cast<int>(c.lut_extliq.extent(1));
     const int nsize_ice = static_cast<int>(c.lut_extice.extent(1));
@@ -148,7 +152,7 @@ void Clouds::compute(
             TF t, ts, tsg;
             cloud_totals(c, clwp(ilay, icol), ciwp(ilay, icol),
                          reliq(ilay, icol), reice(ilay, icol),
-                         ispec, nsize_liq, nsize_ice, t, ts, tsg);
+                         ispec0 + ispec, nsize_liq, nsize_ice, t, ts, tsg);
 
             g(ispec, ilay, icol) = tsg / Kokkos::max(eps, ts);
             ssa(ispec, ilay, icol) = ts / Kokkos::max(eps, t);
@@ -163,11 +167,15 @@ void Clouds::compute(
         const Array_2d<const TF>& ciwp,
         const Array_2d<const TF>& reliq,
         const Array_2d<const TF>& reice,
-        const Array_3d<TF>& tau)
+        const Array_3d<TF>& tau,
+        const int ispec0)
 {
     const int nspec = static_cast<int>(tau.extent(0));
     const int nlay = static_cast<int>(tau.extent(1));
     const int ncol = static_cast<int>(tau.extent(2));
+
+    if (ispec0 < 0 || ispec0 + nspec > static_cast<int>(c.lut_extliq.extent(0)))
+        throw std::invalid_argument("The spectral points asked for are outside the tables.");
 
     const int nsize_liq = static_cast<int>(c.lut_extliq.extent(1));
     const int nsize_ice = static_cast<int>(c.lut_extice.extent(1));
@@ -187,7 +195,7 @@ void Clouds::compute(
                 Cloud_optics_kernels::lookup(
                         clwp(ilay, icol), reliq(ilay, icol), nsize_liq,
                         c.liq_step_size, c.radliq_lwr,
-                        c.lut_extliq, c.lut_ssaliq, c.lut_asyliq, ispec, t, ts, tsg);
+                        c.lut_extliq, c.lut_ssaliq, c.lut_asyliq, ispec0 + ispec, t, ts, tsg);
 
                 absorption += t - ts;
             }
@@ -198,7 +206,7 @@ void Clouds::compute(
                 Cloud_optics_kernels::lookup(
                         ciwp(ilay, icol), reice(ilay, icol), nsize_ice,
                         c.ice_step_size, c.radice_lwr,
-                        c.lut_extice, c.lut_ssaice, c.lut_asyice, ispec, t, ts, tsg);
+                        c.lut_extice, c.lut_ssaice, c.lut_asyice, ispec0 + ispec, t, ts, tsg);
 
                 absorption += t - ts;
             }
