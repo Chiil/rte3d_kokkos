@@ -330,3 +330,22 @@ def test_planck_sources_feed_the_longwave_solver(rte3d):
 
     assert np.all(np.isfinite(flux_up)) and np.all(np.isfinite(flux_dn))
     assert np.all(flux_up >= 0.0) and np.all(flux_dn >= 0.0)
+
+
+def test_eta_one_weights_the_last_node(rte3d):
+    """With a flavour's second gas absent, eta is exactly 1 and all eta weight belongs
+    on the last node, neta-1. The reference takes the fraction as loceta - floor(loceta)
+    against an index clamped to neta-2, so there it puts all weight on node neta-2
+    instead; rte3d takes it relative to the clamped index."""
+    rng = np.random.default_rng(33)
+    k = kdist(rng, ngas=4, nflav=2)
+    k['flavor'] = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    a = atmosphere(rng, 4, 5, 3)
+    a['col_gas'][[2, 4]] = 0.0
+
+    out = rte3d.interpolation(**k, **a)
+
+    np.testing.assert_array_equal(out['jeta'], k['neta'] - 2)
+    # fminor is (nflav, itemp, ieta, nlay, ncol).
+    np.testing.assert_array_equal(out['fminor'][:, :, 0], 0.0)
+    assert_close(out['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))

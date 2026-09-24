@@ -61,8 +61,11 @@ namespace Gas_optics_kernels
                 eta = TF(0.5);
 
             const TF loceta = eta * static_cast<TF>(neta - 1);
+            // The fraction is relative to the clamped index, not the reference's
+            // loceta - floor(loceta): at eta = 1, which a flavour's absent second gas
+            // gives exactly, that would be 0 and put all weight on node neta-2.
             jeta[itemp] = Kokkos::min(static_cast<int>(loceta), neta - 2);
-            feta[itemp] = loceta - Kokkos::floor(loceta);
+            feta[itemp] = loceta - static_cast<TF>(jeta[itemp]);
         }
     }
 
