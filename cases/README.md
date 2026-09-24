@@ -306,11 +306,10 @@ OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare
 | `--compare-fortran` | off | also time the reference Fortran kernels and report the ratio. Needs `RTE3D_FORTRAN_REF`. |
 | `--input PATH` | the copy in `rte-rrtmgp-cpp` | where `rcemip_input.nc` lives |
 
-**Memory.** Nothing in the solve holds more of the spectrum than one band of gas
-optics, so the full `--ncol 4096` needs about 1.1 GB for both bands. `--breakdown` is
-the exception: timing gas optics and transport separately means holding the whole
-spectrum between them, which is roughly 11 GB at 4096 columns. Use it at 1024 or
-below.
+**Memory.** Nothing in the solve carries a g-point dimension, so the full `--ncol 4096`
+needs about 1.1 GB for both bands. `--breakdown` is the exception: timing gas optics
+and transport separately means holding the whole spectrum between them, which is
+roughly 11 GB at 4096 columns. Use it at 1024 or below.
 
 For what `--compare-fortran` actually times, where rte3d stands against the reference
 on a host, and where it stands on a GPU, see [`RESULTS.md`](RESULTS.md).

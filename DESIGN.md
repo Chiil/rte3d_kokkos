@@ -177,31 +177,28 @@ the physics once.
 ## One g-point at a time
 
 `Solver::solve_lw` and `solve_sw` are the way to run a case. They loop g-points,
-and for each one increment the clouds for that g-point's band, run transport, and
-accumulate the flux. Nothing in that pipeline carries the spectrum, so the working set
-is the same whether the k-distribution has 16 g-points or 256: RCEMIP's full 4096
-columns needs 1.1 GB rather than the 28 GB the spectrally resolved version would have.
+and for each one compute the optical properties, compute the clouds when the loop
+enters a new band, increment them, run transport, and accumulate the flux. Nothing in
+that pipeline carries the spectrum, so the working set is the same whether the
+k-distribution has 16 g-points or 256: RCEMIP's full 4096 columns needs 1.1 GB rather
+than the 28 GB the spectrally resolved version would have.
 
-The exception is gas optics, which runs a band at a time — at most
-`Gas_optics::max_gpt_block`, 16 g-points — into `(16, nlay, ncol)` block arrays that
-the g-point loop then reads a slice at a time. Everything in the optical depth except
-the table lookups is the same for every g-point of a band: the interpolation state,
-the binary-species interpolation and its weights, the minor absorbers' scaling. Done
-once per band instead of once per g-point, that takes a third off gas optics in the
-longwave and more than half in the shortwave on the GPU, and nearly halves the whole
-solve on one CPU thread. The block arrays are a few hundred MB at 4096 columns, bounded
-by the band width and not by the spectrum, and stay below the peak the case reaches
-outside the solve, so the 1.1 GB above stands.
+Gas optics could share the work that is the same for every g-point of a band -- the
+interpolation state, the binary-species interpolation and its weights, the minor
+absorbers' scaling -- by computing a band at a time, and for a while it did. On the
+LES cloud field that bought about 10 percent on the plane-parallel solves and nothing
+on the ray tracers, where the trace is the cost, for one `(nlay, ncol)` array per
+g-point of the band per optical property. It was not worth the memory or the code.
 
-The loop body is public as `gas_optics_lw_block` / `gas_optics_sw_block` and
+The loop body is public as `gas_optics_lw_gpt` / `gas_optics_sw_gpt` and
 `solve_lw_gpt` / `solve_sw_gpt`, for callers that want a single g-point — the Monte
 Carlo ray tracer, and the tests. `Solve_state` holds what does not depend on the
-g-point (the column gas amounts, the table interpolation), the block arrays, and the
-one working set every iteration reuses.
+g-point (the column gas amounts, the table interpolation) plus the one working set
+every iteration reuses.
 
 This driver is its own module, `namespace Solver` in `include/solver.h` and
 `src/solver.cpp`. It is neither gas optics nor transport but the thing that runs both,
-so it sits above `Gas_optics`, which hands it a band's optical properties, and
+so it sits above `Gas_optics`, which hands it one g-point's optical properties, and
 above `Rte_lw` / `Rte_sw`, whose kernels it drives.
 
 Doing it this way is also why the solvers are fast on a CPU: the vertical recurrences

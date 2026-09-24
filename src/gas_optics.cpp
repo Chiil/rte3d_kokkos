@@ -250,82 +250,37 @@ void Minor_absorbers::build_map(
     Kokkos::deep_copy(gpt_minor, minor_h);
     Kokkos::deep_copy(flavor, flavor_h);
 
-    minor_limits_gpt_h = Array_2d_h<int>(
-            Kokkos::view_alloc("minor_limits_gpt_h", Kokkos::WithoutInitializing), nminor, 2);
-    Kokkos::deep_copy(minor_limits_gpt_h, limits_h);
 }
 
 
 namespace
 {
-    // The g-point limits of the minor absorbers that can touch the block [igpt0,
-    // igpt1): the first and one past the last whose range overlaps it, from the host
-    // copy of the limits. The absorbers come in band order, so the span is tight;
-    // the kernel still checks each absorber in it.
-    void minor_span(
-            const Minor_absorbers& m, const int igpt0, const int igpt1, int& lo, int& hi)
-    {
-        const auto& lim = m.minor_limits_gpt_h;
-        const int nminor = static_cast<int>(lim.extent(0));
-
-        lo = nminor;
-        hi = 0;
-
-        for (int imnr=0; imnr<nminor; ++imnr)
-            if (lim(imnr, 0) < igpt1 && lim(imnr, 1) >= igpt0)
-            {
-                lo = std::min(lo, imnr);
-                hi = imnr + 1;
-            }
-    }
-
-
-    // A single g-point's (nlay, ncol) output as a block of one.
-    Array_map_3d<TF> as_block(const Array_map_2d<TF>& a)
-    {
-        return Array_map_3d<TF>(a.data(), a.size() > 0 ? 1 : 0, a.extent(0), a.extent(1));
-    }
-
-
     // Absorption optical depth, and for the shortwave the Rayleigh scattering that
     // goes with it. One kernel for both because the two read the same interpolation
     // state and, since Rayleigh takes the same flavour as the major species, the same
     // reconstructed weights: the scattering costs one more table interpolation and no
     // extra memory traffic at all.
     //
-    // One launch covers a block of g-points [igpt0, igpt1) from a single band. All
-    // that does not depend on the g-point -- the interpolation state, the band's
-    // binary-species interpolation and weights, and each minor absorber's scaling --
-    // is then done once per block instead of once per g-point, and the tables are all
-    // that is left to read per g-point. Each g-point still sums its terms in the order
-    // the per-g-point kernel did.
-    //
     // With do_rayleigh, tau comes out as the total extinction and ssa as the Rayleigh
     // fraction of it, and g is zeroed -- what combine_abs_and_rayleigh does in the
     // reference. Without it, ssa and g are unused and tau is absorption alone.
-    //
-    // max_blk is the block width the g-point loops are unrolled to; see
-    // compute_tau_block, which picks it.
-    template<bool do_rayleigh, bool do_pfrac, int max_blk>
+    template<bool do_rayleigh, bool do_pfrac>
     void compute_tau_impl(
             const Kdist_gas& k,
             const Interp_state& state,
             const Array_2d<const TF>& play,
             const Array_2d<const TF>& tlay,
             const Array_3d<const TF>& col_gas,
-            const int igpt0,
-            const int igpt1,
-            const Array_map_3d<TF>& tau,
-            const Array_map_3d<TF>& ssa,
-            const Array_map_3d<TF>& g,
-            const Array_map_3d<TF>& pfrac)
+            const int igpt,
+            const Array_map_2d<TF>& tau,
+            const Array_map_2d<TF>& ssa,
+            const Array_map_2d<TF>& g,
+            const Array_map_2d<TF>& pfrac)
     {
-        const int nblk = igpt1 - igpt0;
-
         const bool write_g = g.size() > 0;
 
-        const int nlay = static_cast<int>(tau.extent(1));
-        const int ncol = static_cast<int>(tau.extent(2));
+        const int nlay = static_cast<int>(tau.extent(0));
+        const int ncol = static_cast<int>(tau.extent(1));
 
         const auto jtemp = state.jtemp;
         const auto ftemp = state.ftemp;
@@ -354,16 +309,9 @@ namespace
         const Minor_absorbers lower = k.lower;
         const Minor_absorbers upper = k.upper;
 
-        int lower_lo, lower_hi, upper_lo, upper_hi;
-        minor_span(lower, igpt0, igpt1, lower_lo, lower_hi);
-        minor_span(upper, igpt0, igpt1, upper_lo, upper_hi);
-
         const char* name = do_rayleigh ? "compute_tau_sw"
                          : do_pfrac ? "compute_tau_lw" : "compute_tau_absorption";
 
-        // The g-point loops below run to the compile-time max_blk and test against
-        // nblk inside, rather than stopping at nblk, so that they unroll and tau_l
-        // stays in registers.
         parallel_for_2d(name, {0, 0}, {nlay, ncol},
             KOKKOS_LAMBDA(const int ilay, const int icol)
             {
@@ -372,8 +320,8 @@ namespace
                 const TF ft = ftemp(ilay, icol);
                 const TF fp = fpress(ilay, icol);
 
-                TF tau_l[max_blk];
-                TF tau_rayleigh_l[max_blk];
+                TF tau_l;
+                TF tau_rayleigh_l = TF(0.);
 
                 // The binary-species interpolation for the flavour in hand. Held across
                 // the minor-absorber loop below, which mostly asks for the same flavour
@@ -383,9 +331,9 @@ namespace
                 int iflav_have = -1;
 
                 // ---- major species -------------------------------------------------
-                // The flavour comes from the first g-point of the block's band.
+                // The flavour comes from the first g-point of this g-point's band.
                 {
-                    const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt0)), itropo);
+                    const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
 
                     Gas_optics_kernels::eta_interp(
                             flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
@@ -399,47 +347,36 @@ namespace
                     // jpress+itropo; 0-based that is jpress+itropo and one beyond.
                     const int jp0 = jpress(ilay, icol) + itropo;
 
-                    // Rayleigh scales with the water vapour and dry air columns.
-                    const TF col_rayleigh = do_rayleigh
-                            ? col_gas(idx_h2o, ilay, icol) + col_gas(0, ilay, icol) : TF(0.);
+                    tau_l = Gas_optics_kernels::interp_major(
+                            kmajor, igpt, jp0, jt, jeta, fmaj, col_mix);
 
-                    for (int ig=0; ig<max_blk; ++ig)
+                    // The Planck fraction is that same interpolation of another table,
+                    // with unit column mixing: this g-point's share of its band's
+                    // Planck irradiance.
+                    if (do_pfrac)
                     {
-                        if (ig >= nblk)
-                            continue;
+                        const TF unit_weight[2] = {TF(1.), TF(1.)};
 
-                        const int igpt = igpt0 + ig;
+                        pfrac(ilay, icol) = Gas_optics_kernels::interp_major(
+                                pfracin, igpt, jp0, jt, jeta, fmaj, unit_weight);
+                    }
 
-                        tau_l[ig] = Gas_optics_kernels::interp_major(
-                                kmajor, igpt, jp0, jt, jeta, fmaj, col_mix);
-
-                        // The Planck fraction is that same interpolation of another
-                        // table, with unit column mixing: this g-point's share of its
-                        // band's Planck irradiance.
-                        if (do_pfrac)
+                    // A plain if, not if constexpr: nvcc will not let an extended
+                    // device lambda first-capture a variable inside a constexpr-if,
+                    // and do_rayleigh is a compile-time constant either way, so the
+                    // dead branch still costs nothing.
+                    if (do_rayleigh)
+                    {
+                        TF kr = TF(0.);
+                        for (int itemp=0; itemp<2; ++itemp)
                         {
-                            const TF unit_weight[2] = {TF(1.), TF(1.)};
-
-                            pfrac(ig, ilay, icol) = Gas_optics_kernels::interp_major(
-                                    pfracin, igpt, jp0, jt, jeta, fmaj, unit_weight);
+                            const int je = jeta[itemp];
+                            for (int ieta=0; ieta<2; ++ieta)
+                                kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
                         }
 
-                        // A plain if, not if constexpr: nvcc will not let an extended
-                        // device lambda first-capture a variable inside a constexpr-if,
-                        // and do_rayleigh is a compile-time constant either way, so the
-                        // dead branch still costs nothing.
-                        if (do_rayleigh)
-                        {
-                            TF kr = TF(0.);
-                            for (int itemp=0; itemp<2; ++itemp)
-                            {
-                                const int je = jeta[itemp];
-                                for (int ieta=0; ieta<2; ++ieta)
-                                    kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
-                            }
-
-                            tau_rayleigh_l[ig] = kr * col_rayleigh;
-                        }
+                        tau_rayleigh_l = kr * (col_gas(idx_h2o, ilay, icol)
+                                               + col_gas(0, ilay, icol));
                     }
                 }
 
@@ -456,18 +393,9 @@ namespace
                     if (ilay + 1 < limits(icol, 0) || ilay + 1 > limits(icol, 1))
                         continue;
 
-                    const int imnr_lo = side == 0 ? lower_lo : upper_lo;
-                    const int imnr_hi = side == 0 ? lower_hi : upper_hi;
-
-                    // Ascending absorber index, which is the order the per-g-point sum
-                    // takes them in.
-                    for (int imnr=imnr_lo; imnr<imnr_hi; ++imnr)
+                    for (int i=m.gpt_offset(igpt); i<m.gpt_offset(igpt + 1); ++i)
                     {
-                        const int gpt_lo = m.minor_limits_gpt(imnr, 0);
-                        const int gpt_hi = m.minor_limits_gpt(imnr, 1);
-
-                        if (gpt_lo >= igpt1 || gpt_hi < igpt0)
-                            continue;
+                        const int imnr = m.gpt_minor(i);
 
                         TF scaling = col_gas(m.idx_minor(imnr), ilay, icol);
 
@@ -489,6 +417,7 @@ namespace
                         }
 
                         const int iflav = m.flavor(imnr);
+                        const int ik = m.kminor_start(imnr) + (igpt - m.minor_limits_gpt(imnr, 0));
 
                         if (iflav != iflav_have)
                         {
@@ -501,121 +430,38 @@ namespace
                         TF fmin[2][2], fmaj[2][2][2];
                         Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
 
-                        const int ik0 = m.kminor_start(imnr) - gpt_lo;
-
-                        for (int ig=0; ig<max_blk; ++ig)
+                        TF acc = TF(0.);
+                        for (int itemp=0; itemp<2; ++itemp)
                         {
-                            const int igpt = igpt0 + ig;
-
-                            if (ig >= nblk || igpt < gpt_lo || igpt > gpt_hi)
-                                continue;
-
-                            const int ik = ik0 + igpt;
-
-                            TF acc = TF(0.);
-                            for (int itemp=0; itemp<2; ++itemp)
-                            {
-                                const int je = jeta[itemp];
-                                for (int ieta=0; ieta<2; ++ieta)
-                                    acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
-                            }
-
-                            tau_l[ig] += scaling * acc;
+                            const int je = jeta[itemp];
+                            for (int ieta=0; ieta<2; ++ieta)
+                                acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
                         }
+
+                        tau_l += scaling * acc;
                     }
                 }
 
-                for (int ig=0; ig<max_blk; ++ig)
+                if (do_rayleigh)
                 {
-                    if (ig >= nblk)
-                        continue;
+                    // Combine, as combine_abs_and_rayleigh does: tau becomes the total
+                    // extinction and ssa the scattering fraction of it. g is zero for a
+                    // pure gas atmosphere.
+                    const TF t = tau_l + tau_rayleigh_l;
 
-                    if (do_rayleigh)
-                    {
-                        // Combine, as combine_abs_and_rayleigh does: tau becomes the
-                        // total extinction and ssa the scattering fraction of it. g is
-                        // zero for a pure gas atmosphere.
-                        const TF t = tau_l[ig] + tau_rayleigh_l[ig];
+                    tau(ilay, icol) = t;
+                    ssa(ilay, icol) = t > TF(2.) * Gas_optics_kernels::tiny()
+                            ? tau_rayleigh_l / t : TF(0.);
 
-                        tau(ig, ilay, icol) = t;
-                        ssa(ig, ilay, icol) = t > TF(2.) * Gas_optics_kernels::tiny()
-                                ? tau_rayleigh_l[ig] / t : TF(0.);
-
-                        // Zero for a pure gas atmosphere, and left empty when nothing
-                        // downstream is going to add to it.
-                        if (write_g)
-                            g(ig, ilay, icol) = TF(0.);
-                    }
-                    else
-                        tau(ig, ilay, icol) = tau_l[ig];
+                    // Zero for a pure gas atmosphere, and left empty when nothing
+                    // downstream is going to add to it.
+                    if (write_g)
+                        g(ilay, icol) = TF(0.);
                 }
+                else
+                    tau(ilay, icol) = tau_l;
             });
     }
-
-
-    // Run compute_tau_impl unrolled to the narrowest width that holds the block. The
-    // width costs registers whether or not the g-points are there, so a lone g-point
-    // must not pay for sixteen.
-    template<bool do_rayleigh, bool do_pfrac>
-    void compute_tau_block(
-            const Kdist_gas& k,
-            const Interp_state& state,
-            const Array_2d<const TF>& play,
-            const Array_2d<const TF>& tlay,
-            const Array_3d<const TF>& col_gas,
-            const int igpt0,
-            const int igpt1,
-            const Array_map_3d<TF>& tau,
-            const Array_map_3d<TF>& ssa,
-            const Array_map_3d<TF>& g,
-            const Array_map_3d<TF>& pfrac)
-    {
-        static_assert(Gas_optics::max_gpt_block == 16);
-
-        const int nblk = igpt1 - igpt0;
-        if (nblk < 1 || nblk > Gas_optics::max_gpt_block)
-            throw std::invalid_argument("A g-point block must hold 1 to max_gpt_block g-points.");
-
-        // The major flavour is taken per band, so a block must not straddle two.
-        if (k.gpt_band_h.size() > 0 && k.gpt_band_h(igpt0) != k.gpt_band_h(igpt1 - 1))
-            throw std::invalid_argument("A g-point block must lie within one band.");
-
-        if (nblk == 1)
-            compute_tau_impl<do_rayleigh, do_pfrac, 1>(
-                    k, state, play, tlay, col_gas, igpt0, igpt1, tau, ssa, g, pfrac);
-        else if (nblk <= 4)
-            compute_tau_impl<do_rayleigh, do_pfrac, 4>(
-                    k, state, play, tlay, col_gas, igpt0, igpt1, tau, ssa, g, pfrac);
-        else if (nblk <= 8)
-            compute_tau_impl<do_rayleigh, do_pfrac, 8>(
-                    k, state, play, tlay, col_gas, igpt0, igpt1, tau, ssa, g, pfrac);
-        else
-            compute_tau_impl<do_rayleigh, do_pfrac, 16>(
-                    k, state, play, tlay, col_gas, igpt0, igpt1, tau, ssa, g, pfrac);
-    }
-}
-
-
-std::vector<std::pair<int, int>> Gas_optics::gpt_blocks(
-        const Kdist_gas& k, const int width)
-{
-    if (width < 1 || width > max_gpt_block)
-        throw std::invalid_argument("A g-point block must hold 1 to max_gpt_block g-points.");
-
-    const int ngpt = static_cast<int>(k.gpt_band_h.extent(0));
-
-    std::vector<std::pair<int, int>> blocks;
-
-    int igpt0 = 0;
-    for (int igpt=1; igpt<=ngpt; ++igpt)
-        if (igpt == ngpt || k.gpt_band_h(igpt) != k.gpt_band_h(igpt0)
-                || igpt - igpt0 == width)
-        {
-            blocks.emplace_back(igpt0, igpt);
-            igpt0 = igpt;
-        }
-
-    return blocks;
 }
 
 
@@ -628,9 +474,9 @@ void Gas_optics::compute_tau_absorption(
         const int igpt,
         const Array_map_2d<TF>& tau)
 {
-    compute_tau_block<false, false>(
-            k, state, play, tlay, col_gas, igpt, igpt + 1, as_block(tau),
-            Array_map_3d<TF>(), Array_map_3d<TF>(), Array_map_3d<TF>());
+    compute_tau_impl<false, false>(
+            k, state, play, tlay, col_gas, igpt, tau,
+            Array_map_2d<TF>(), Array_map_2d<TF>(), Array_map_2d<TF>());
 }
 
 
@@ -644,9 +490,9 @@ void Gas_optics::compute_tau_lw(
         const Array_map_2d<TF>& tau,
         const Array_map_2d<TF>& pfrac)
 {
-    compute_tau_block<false, true>(
-            k, state, play, tlay, col_gas, igpt, igpt + 1, as_block(tau),
-            Array_map_3d<TF>(), Array_map_3d<TF>(), as_block(pfrac));
+    compute_tau_impl<false, true>(
+            k, state, play, tlay, col_gas, igpt, tau,
+            Array_map_2d<TF>(), Array_map_2d<TF>(), pfrac);
 }
 
 
@@ -661,43 +507,8 @@ void Gas_optics::compute_tau_sw(
         const Array_map_2d<TF>& ssa,
         const Array_map_2d<TF>& g)
 {
-    compute_tau_block<true, false>(
-            k, state, play, tlay, col_gas, igpt, igpt + 1,
-            as_block(tau), as_block(ssa), as_block(g), Array_map_3d<TF>());
-}
-
-
-void Gas_optics::compute_tau_lw_block(
-        const Kdist_gas& k,
-        const Interp_state& state,
-        const Array_2d<const TF>& play,
-        const Array_2d<const TF>& tlay,
-        const Array_3d<const TF>& col_gas,
-        const int igpt0,
-        const int igpt1,
-        const Array_map_3d<TF>& tau,
-        const Array_map_3d<TF>& pfrac)
-{
-    compute_tau_block<false, true>(
-            k, state, play, tlay, col_gas, igpt0, igpt1, tau,
-            Array_map_3d<TF>(), Array_map_3d<TF>(), pfrac);
-}
-
-
-void Gas_optics::compute_tau_sw_block(
-        const Kdist_gas& k,
-        const Interp_state& state,
-        const Array_2d<const TF>& play,
-        const Array_2d<const TF>& tlay,
-        const Array_3d<const TF>& col_gas,
-        const int igpt0,
-        const int igpt1,
-        const Array_map_3d<TF>& tau,
-        const Array_map_3d<TF>& ssa,
-        const Array_map_3d<TF>& g)
-{
-    compute_tau_block<true, false>(
-            k, state, play, tlay, col_gas, igpt0, igpt1, tau, ssa, g, Array_map_3d<TF>());
+    compute_tau_impl<true, false>(
+            k, state, play, tlay, col_gas, igpt, tau, ssa, g, Array_map_2d<TF>());
 }
 
 
@@ -1069,20 +880,16 @@ void Gas_optics::gas_optics_lw(
     auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
     const int sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
 
-    // One block's Planck fractions, allocated once.
-    Array_3d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing),
-                       max_gpt_block, nlay, ncol);
+    // One g-point's Planck fraction, allocated once.
+    Array_2d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), nlay, ncol);
 
-    for (const auto& [igpt0, igpt1] : gpt_blocks(k))
+    const int ngpt = static_cast<int>(tau.extent(0));
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
     {
-        compute_tau_lw_block(
-                k, state, play, tlay, col_gas, igpt0, igpt1,
-                slice_block(tau, igpt0, igpt1), slice_block(pfrac, 0, igpt1 - igpt0));
-
-        for (int igpt=igpt0; igpt<igpt1; ++igpt)
-            compute_planck_source(
-                    k, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt),
-                    slice_2d(pfrac, igpt - igpt0));
+        compute_tau_lw(k, state, play, tlay, col_gas, igpt, slice_2d(tau, igpt), pfrac);
+        compute_planck_source(
+                k, tlay, tlev, tsfc, sfc_lay, igpt, sources.gpt(igpt), pfrac);
     }
 }
 
@@ -1106,9 +913,10 @@ void Gas_optics::gas_optics_sw(
     const Interp_state state = interpolate(k, play, tlay, col_gas);
 
     // Absorption, Rayleigh and their combination in one pass, as the solver does it.
-    for (const auto& [igpt0, igpt1] : gpt_blocks(k))
-        compute_tau_sw_block(
-                k, state, play, tlay, col_gas, igpt0, igpt1,
-                slice_block(tau, igpt0, igpt1), slice_block(ssa, igpt0, igpt1),
-                Array_map_3d<TF>());
+    const int ngpt = static_cast<int>(tau.extent(0));
+
+    for (int igpt=0; igpt<ngpt; ++igpt)
+        compute_tau_sw(
+                k, state, play, tlay, col_gas, igpt,
+                slice_2d(tau, igpt), slice_2d(ssa, igpt), Array_map_2d<TF>());
 }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "gas_concs.h"
@@ -74,9 +73,8 @@ struct Minor_absorbers
     Array_1d<int> gpt_offset;            // (ngpt+1) CSR row offsets
     Array_1d<int> gpt_minor;             // (nnz)    absorber index per entry
     Array_1d<int> flavor;                // (nminor) 0-based flavour, from the range's first g-point
-    Array_2d_h<int> minor_limits_gpt_h;  // (nminor, 2) host copy, to find a g-point block's absorbers
 
-    // Build gpt_offset, gpt_minor, flavor and minor_limits_gpt_h. gpoint_flavor is (ngpt, 2), 0-based;
+    // Build gpt_offset, gpt_minor and flavor. gpoint_flavor is (ngpt, 2), 0-based;
     // itropo selects its column (0 lower, 1 upper).
     void build_map(const Array_2d<const int>& gpoint_flavor, const int ngpt, const int itropo);
 };
@@ -248,44 +246,6 @@ namespace Gas_optics
             const Array_map_2d<TF>& tau,        // (nlay, ncol)
             const Array_map_2d<TF>& ssa,        // (nlay, ncol)
             const Array_map_2d<TF>& g);         // (nlay, ncol)
-
-    // The most g-points one block kernel computes. Each thread holds an optical depth
-    // per g-point of its block in registers, so this is a compile-time bound; 16 is the
-    // widest band of the 256- and 224-point sets.
-    constexpr int max_gpt_block = 16;
-
-    // The spectrum cut into blocks [igpt0, igpt1) for the block kernels: whole bands,
-    // split where one is wider than width, which runs from 1 to max_gpt_block. A
-    // caller holds one block's optical properties at a time, so the width trades the
-    // memory of width (nlay, ncol) arrays against redoing the work the block shares.
-    std::vector<std::pair<int, int>> gpt_blocks(
-            const Kdist_gas& k, const int width = max_gpt_block);
-
-    // compute_tau_lw and compute_tau_sw for the g-points [igpt0, igpt1) of one band at
-    // once: the work that does not depend on the g-point is done once per block
-    // rather than once per g-point. Index 0 of the outputs is igpt0.
-    void compute_tau_lw_block(
-            const Kdist_gas& k,
-            const Interp_state& state,
-            const Array_2d<const TF>& play,     // (nlay, ncol)
-            const Array_2d<const TF>& tlay,     // (nlay, ncol)
-            const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
-            const int igpt0,
-            const int igpt1,
-            const Array_map_3d<TF>& tau,        // (igpt1-igpt0, nlay, ncol)
-            const Array_map_3d<TF>& pfrac);     // (igpt1-igpt0, nlay, ncol)
-
-    void compute_tau_sw_block(
-            const Kdist_gas& k,
-            const Interp_state& state,
-            const Array_2d<const TF>& play,     // (nlay, ncol)
-            const Array_2d<const TF>& tlay,     // (nlay, ncol)
-            const Array_3d<const TF>& col_gas,  // (ngas+1, nlay, ncol)
-            const int igpt0,
-            const int igpt1,
-            const Array_map_3d<TF>& tau,        // (igpt1-igpt0, nlay, ncol)
-            const Array_map_3d<TF>& ssa,        // (igpt1-igpt0, nlay, ncol)
-            const Array_map_3d<TF>& g);         // (igpt1-igpt0, nlay, ncol), may be empty
 
     // Dry air column amount [molecules/cm2] from the water vapour mixing ratio and
     // the level pressures. Reference: get_col_dry.
