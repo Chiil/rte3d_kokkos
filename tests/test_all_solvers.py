@@ -100,13 +100,12 @@ def case_scripts():
 
 
 def solve_everything(rte3d, atm, files, photons, delta_cloud=True,
-                     min_mfp_grid_ratio=0.0, gpt_block=1):
+                     min_mfp_grid_ratio=0.0):
     """Run all seven solvers over one atmosphere and return their output by name.
 
     The two bands each load their own k-distribution and cloud coefficients once, and
     every solver of that band works from them, so what differs between the entries
-    below is the transport and nothing else. gpt_block is the gas optics' g-point
-    block width, passed to every solver.
+    below is the transport and nothing else.
     """
     from rte3d.case import (gpoint_bands, make_gas_concs, solve_lw, solve_lw_rt,
                             solve_sw, solve_sw_rt)
@@ -125,23 +124,21 @@ def solve_everything(rte3d, atm, files, photons, delta_cloud=True,
         args = (rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics)
 
         if band == 'lw':
-            out['lw_noscat'] = solve_lw(*args, delta_cloud=delta_cloud,
-                                        gpt_block=gpt_block)
-            out['lw_2str'] = solve_lw(*args, scattering=True, delta_cloud=delta_cloud,
-                                      gpt_block=gpt_block)
+            out['lw_noscat'] = solve_lw(*args, delta_cloud=delta_cloud)
+            out['lw_2str'] = solve_lw(*args, scattering=True, delta_cloud=delta_cloud)
 
             for name, icol in (('lw_rt_1d', True), ('lw_rt_3d', False)):
                 out[name] = solve_lw_rt(*args, photons_per_pixel=photons,
                                         independent_column=icol,
                                         min_mfp_grid_ratio=min_mfp_grid_ratio,
-                                        delta_cloud=delta_cloud, gpt_block=gpt_block)
+                                        delta_cloud=delta_cloud)
         else:
-            out['sw_2str'] = solve_sw(*args, delta_cloud=delta_cloud, gpt_block=gpt_block)
+            out['sw_2str'] = solve_sw(*args, delta_cloud=delta_cloud)
 
             for name, icol in (('sw_rt_1d', True), ('sw_rt_3d', False)):
                 out[name] = solve_sw_rt(*args, delta_cloud=delta_cloud,
                                         photons_per_pixel=photons,
-                                        independent_column=icol, gpt_block=gpt_block)
+                                        independent_column=icol)
 
         out[f'ngpt_{band}'] = kdist.ngpt
 
@@ -269,27 +266,6 @@ def test_rcemip_runs_every_solver(rcemip):
 
         # Part of the spectrum went plane-parallel, and part of it was traced.
         assert 0 < int(out[name]['n_gpt_traced']) < out['ngpt_lw']
-
-
-@requires_data
-@pytest.mark.parametrize('gpt_block', [4, 16])
-def test_rcemip_gpt_block_width_changes_nothing(rcemip, rte3d, gpt_block):
-    """A wider g-point block only shares the gas optics' g-point-independent work.
-
-    Each g-point's optical depth is the same arithmetic whatever block it sits in, so
-    every solver, the tracers' photon walks included, gives the same bits.
-    """
-    atm, out = rcemip
-    wide = solve_everything(rte3d, atm, default_files(), PHOTONS,
-                            min_mfp_grid_ratio=MIN_MFP_GRID_RATIO, gpt_block=gpt_block)
-
-    for name, fluxes in out.items():
-        if not isinstance(fluxes, dict):
-            continue
-
-        for key, flux in fluxes.items():
-            if key != 'solve_time':
-                np.testing.assert_array_equal(wide[name][key], flux, err_msg=f'{name} {key}')
 
 
 @requires_data
