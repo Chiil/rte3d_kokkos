@@ -80,7 +80,8 @@ Solver::Solve_state Solver::prepare(
         const bool do_jacobian,
         const Array_1d<const TF>& weights,
         const bool lw_scattering,
-        const int gpt_block)
+        const int gpt_block,
+        const bool with_transport)
 {
     const auto no_init = Kokkos::WithoutInitializing;
 
@@ -125,6 +126,11 @@ Solver::Solve_state Solver::prepare(
         s.sfc_source_jac = Array_1d<TF>(
                 Kokkos::view_alloc("sfc_source_jac", no_init), do_jacobian ? ncol : 0);
     }
+
+    // What only the plane-parallel transport needs: a caller that traces every
+    // g-point has no use for it.
+    if (!with_transport)
+        return s;
 
     s.flux_up = Array_2d<TF>(Kokkos::view_alloc("flux_up_gpt", no_init), nlev, ncol);
     s.flux_dn = Array_2d<TF>(Kokkos::view_alloc("flux_dn_gpt", no_init), nlev, ncol);
@@ -439,8 +445,9 @@ void Solver::solve_sw_rt(
         const Raytracer::Fluxes_rt& fluxes,
         const int gpt_block)
 {
+    // Every g-point is traced, so there is no plane-parallel solve to prepare for.
     const Solve_state state = prepare(
-            k, gas_concs, atm, false, false, Array_1d<const TF>(), false, gpt_block);
+            k, gas_concs, atm, false, false, Array_1d<const TF>(), false, gpt_block, false);
     const auto scratch = Raytracer::Scratch::make(grid);
 
     fluxes.zero();

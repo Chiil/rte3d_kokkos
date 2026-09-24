@@ -130,6 +130,8 @@ namespace Solver
     // host mirror the no-scattering solver needs, and is ignored otherwise.
     // lw_scattering allocates the two-stream working set instead of the quadrature's.
     // gpt_block is the width of the g-point block, 1 to Gas_optics::max_gpt_block.
+    // Without with_transport the per-g-point fluxes and the transport solvers' working
+    // set are left out, for a caller that traces rays instead.
     Solve_state prepare(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -138,7 +140,8 @@ namespace Solver
             const bool do_jacobian = false,
             const Array_1d<const TF>& weights = Array_1d<const TF>(),
             const bool lw_scattering = false,
-            const int gpt_block = 1);
+            const int gpt_block = 1,
+            const bool with_transport = true);
 
     // Where the accumulated fluxes go. The broadband views are required; the by-band
     // ones may be empty, in which case no by-band reduction is done. dir is shortwave
