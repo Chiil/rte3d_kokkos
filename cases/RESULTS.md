@@ -11,12 +11,15 @@ ray tracer's benchmark: single precision, which is what the tracer is run at, on
 RTX A4500, with the settings file as it stands -- 512 photons per pixel in both bands.
 Best of three runs of `run_case.py`, which spread by under 6 percent, against best of
 three of `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt` on the same field with the same
-settings:
+settings. The plane-parallel solves the case runs beside the tracers are in the table
+too:
 
-| | rte3d, solver | rte3d, wall | rte-rrtmgp-cpp | |
-|---|---|---|---|---|
-| longwave, 62 of 128 g-points traced | **1449 ms** | 1506 ms | 3546 ms | 2.4x |
-| shortwave, 112 g-points | **2899 ms** | 2948 ms | 5503 ms | 1.9x |
+| | rte3d, solver | rte3d, wall | rte-rrtmgp-cpp | | rte3d, memory | rte-rrtmgp-cpp, memory |
+|---|---|---|---|---|---|---|
+| longwave, traced, 62 of 128 g-points | **1449 ms** | 1506 ms | 3579 ms | 2.5x | **1326 MiB** | 1722-2106 MiB |
+| shortwave, traced, 112 g-points | **2899 ms** | 2948 ms | 5425 ms | 1.9x | **1012 MiB** | 1496 MiB |
+| longwave, two-stream | **335 ms** | 390 ms | 778 ms | 2.3x | **1186 MiB** | 1754-1786 MiB |
+| shortwave, two-stream | **292 ms** | 360 ms | 600 ms | 2.1x | **1218 MiB** | 1592-1656 MiB |
 
 The solver column is what to compare. It is the `solve_time` each solver returns:
 device time between two fences, with every input already uploaded and every output
@@ -25,7 +28,24 @@ optics, cloud optics and transport on both sides. The wall column is the whole P
 call and adds the copies to and from numpy, 60 ms here. It used to add much more: the
 case driver computed the cloud optics on the device, copied 2 GB of it into numpy and
 handed it back, until the solvers took the cloud physics and did that themselves. The
-wall time was then 1870 and 3218 ms, the fluxes the same bit for bit.
+tracers' wall time was then 1870 and 3218 ms, the fluxes the same bit for bit.
+
+Memory is the peak GPU memory of the whole process, one band and one solver per
+process, as `nvidia-smi --query-compute-apps` reports it polled every 10 ms. It
+includes the CUDA context and every input and output field on the device, so it
+overstates what the radiation adds to a host model that already holds those fields
+there. rte3d takes a quarter to a third less than the reference, on every solver. rte3d peaks at the same value in every run. The reference does not: its
+stream-ordered memory pool reserves and releases in bursts that the polling catches
+or misses, so it is given as the range over three runs. What rte3d holds is one
+g-point's working set -- the gas optics' interpolation state and column amounts for the
+whole domain, one g-point's optical properties, one band's cloud properties, and the
+transport or tracer scratch -- and nothing with a spectral dimension.
+
+The two-stream rows are the reference's `test_rte_rrtmgp_rt` too, with `raytracing =
+false` and `plane_parallel = true`, which runs the two-stream solver a g-point at a time
+as rte3d does. Its other driver, `test_rte_rrtmgp`, solves the whole spectrum for
+blocks of 1024 columns instead; that was not run here, and it would hold a fixed
+amount of memory whatever the domain.
 
 The reference was run from a copy of its `les_cloudfield` directory, with `test.ini`
 set to match `les_cloudfield.toml`: `samples = 512` in the shortwave and `23` in the
@@ -46,8 +66,7 @@ the columns. Seeding each thread's generator directly, rather than skipping it a
 to a subsequence of its own, took 10 percent off both bands; `include/random.h` says
 why.
 
-The plane-parallel solves beside them take 335 and 292 ms of solver time, 390 and 360
-ms wall. An earlier measurement on one MI250X GCD, in double precision and at 256
+An earlier measurement of the tracers on one MI250X GCD, in double precision and at 256
 photons per pixel, gave 3045 and 7950 ms; it is not comparable with the above and is
 kept only for the record.
 
