@@ -366,18 +366,9 @@ namespace
                     // and do_rayleigh is a compile-time constant either way, so the
                     // dead branch still costs nothing.
                     if (do_rayleigh)
-                    {
-                        TF kr = TF(0.);
-                        for (int itemp=0; itemp<2; ++itemp)
-                        {
-                            const int je = jeta[itemp];
-                            for (int ieta=0; ieta<2; ++ieta)
-                                kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
-                        }
-
-                        tau_rayleigh_l = kr * (col_gas(idx_h2o, ilay, icol)
-                                               + col_gas(0, ilay, icol));
-                    }
+                        tau_rayleigh_l = Gas_optics_kernels::interp_minor(
+                                krayl, jt, jeta, fmin, itropo, igpt)
+                                * (col_gas(idx_h2o, ilay, icol) + col_gas(0, ilay, icol));
                 }
 
                 // ---- minor species -------------------------------------------------
@@ -430,15 +421,8 @@ namespace
                         TF fmin[2][2], fmaj[2][2][2];
                         Gas_optics_kernels::interp_weights(ft, fp, feta[0], feta[1], fmin, fmaj);
 
-                        TF acc = TF(0.);
-                        for (int itemp=0; itemp<2; ++itemp)
-                        {
-                            const int je = jeta[itemp];
-                            for (int ieta=0; ieta<2; ++ieta)
-                                acc += fmin[itemp][ieta] * m.kminor(ik, je + ieta, jt + itemp);
-                        }
-
-                        tau_l += scaling * acc;
+                        tau_l += scaling * Gas_optics_kernels::interp_minor(
+                                m.kminor, jt, jeta, fmin, ik);
                     }
                 }
 
@@ -512,6 +496,78 @@ void Gas_optics::compute_tau_sw(
 }
 
 
+namespace
+{
+    // The Rayleigh optical depth or the Planck fraction on its own, each of which
+    // compute_tau_impl otherwise computes alongside the absorption. Test support: the
+    // kernel-by-kernel tests compare them against the reference's separate routines.
+    template<bool do_rayleigh>
+    void compute_major_alone(
+            const Kdist_gas& k,
+            const Interp_state& state,
+            const Array_2d<const TF>& col_dry,
+            const Array_3d<const TF>& col_gas,
+            const int igpt,
+            const Array_map_2d<TF>& out)
+    {
+        const int nlay = static_cast<int>(out.extent(0));
+        const int ncol = static_cast<int>(out.extent(1));
+
+        const auto jtemp = state.jtemp;
+        const auto ftemp = state.ftemp;
+        const auto jpress = state.jpress;
+        const auto fpress = state.fpress;
+        const auto tropo = state.tropo;
+
+        const auto flavor = k.flavor;
+        const auto vmr_ref = k.vmr_ref;
+        const int neta = k.neta;
+
+        const auto gpoint_flavor = k.gpoint_flavor;
+        const auto band_gpt_start = k.band_gpt_start;
+        const auto gpt_band = k.gpt_band;
+        const auto krayl = k.krayl;
+        const auto pfracin = k.pfracin;
+        const int idx_h2o = k.idx_h2o;
+
+        parallel_for_2d(do_rayleigh ? "compute_tau_rayleigh" : "planck_pfrac",
+            {0, 0}, {nlay, ncol},
+            KOKKOS_LAMBDA(const int ilay, const int icol)
+            {
+                const int itropo = tropo(ilay, icol) ? 0 : 1;
+                const int jt = jtemp(ilay, icol);
+
+                // As for the major species, the flavour comes from the first g-point
+                // of this g-point's band.
+                const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
+
+                TF col_mix[2], feta[2];
+                int jeta[2];
+                Gas_optics_kernels::eta_interp(
+                        flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
+                        col_mix, jeta, feta);
+
+                TF fmin[2][2], fmaj[2][2][2];
+                Gas_optics_kernels::interp_weights(
+                        ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
+
+                if (do_rayleigh)
+                    out(ilay, icol) = Gas_optics_kernels::interp_minor(
+                            krayl, jt, jeta, fmin, itropo, igpt)
+                            * (col_gas(idx_h2o, ilay, icol) + col_dry(ilay, icol));
+                else
+                {
+                    const TF unit_weight[2] = {TF(1.), TF(1.)};
+
+                    out(ilay, icol) = Gas_optics_kernels::interp_major(
+                            pfracin, igpt, jpress(ilay, icol) + itropo, jt, jeta, fmaj,
+                            unit_weight);
+                }
+            });
+    }
+}
+
+
 void Gas_optics::compute_tau_rayleigh(
         const Kdist_gas& k,
         const Interp_state& state,
@@ -520,55 +576,7 @@ void Gas_optics::compute_tau_rayleigh(
         const int igpt,
         const Array_map_2d<TF>& tau_rayleigh)
 {
-    const int nlay = static_cast<int>(tau_rayleigh.extent(0));
-    const int ncol = static_cast<int>(tau_rayleigh.extent(1));
-
-    const auto jtemp = state.jtemp;
-    const auto ftemp = state.ftemp;
-    const auto fpress = state.fpress;
-    const auto tropo = state.tropo;
-
-    const auto flavor = k.flavor;
-    const auto vmr_ref = k.vmr_ref;
-    const int neta = k.neta;
-
-    const auto gpoint_flavor = k.gpoint_flavor;
-    const auto band_gpt_start = k.band_gpt_start;
-    const auto gpt_band = k.gpt_band;
-    const auto krayl = k.krayl;
-    const int idx_h2o = k.idx_h2o;
-
-    parallel_for_2d("compute_tau_rayleigh", {0, 0}, {nlay, ncol},
-        KOKKOS_LAMBDA(const int ilay, const int icol)
-        {
-            const int itropo = tropo(ilay, icol) ? 0 : 1;
-            const int jt = jtemp(ilay, icol);
-
-            // As for the major species, the flavour comes from the first g-point of
-            // this g-point's band.
-            const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
-
-            TF col_mix[2], feta[2];
-            int jeta[2];
-            Gas_optics_kernels::eta_interp(
-                    flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
-                    col_mix, jeta, feta);
-
-            TF fmin[2][2], fmaj[2][2][2];
-            Gas_optics_kernels::interp_weights(
-                    ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
-
-            TF kr = TF(0.);
-            for (int itemp=0; itemp<2; ++itemp)
-            {
-                const int je = jeta[itemp];
-                for (int ieta=0; ieta<2; ++ieta)
-                    kr += fmin[itemp][ieta] * krayl(itropo, igpt, je + ieta, jt + itemp);
-            }
-
-            tau_rayleigh(ilay, icol) =
-                    kr * (col_gas(idx_h2o, ilay, icol) + col_dry(ilay, icol));
-        });
+    compute_major_alone<true>(k, state, col_dry, col_gas, igpt, tau_rayleigh);
 }
 
 
@@ -579,46 +587,7 @@ void Gas_optics::compute_pfrac(
         const int igpt,
         const Array_map_2d<TF>& pfrac)
 {
-    const int nlay = static_cast<int>(pfrac.extent(0));
-    const int ncol = static_cast<int>(pfrac.extent(1));
-
-    const auto jtemp = state.jtemp;
-    const auto ftemp = state.ftemp;
-    const auto jpress = state.jpress;
-    const auto fpress = state.fpress;
-    const auto tropo = state.tropo;
-
-    const auto flavor = k.flavor;
-    const auto vmr_ref = k.vmr_ref;
-    const int neta = k.neta;
-
-    const auto gpoint_flavor = k.gpoint_flavor;
-    const auto band_gpt_start = k.band_gpt_start;
-    const auto gpt_band = k.gpt_band;
-    const auto pfracin = k.pfracin;
-
-    parallel_for_2d("planck_pfrac", {0, 0}, {nlay, ncol},
-        KOKKOS_LAMBDA(const int ilay, const int icol)
-        {
-            const int itropo = tropo(ilay, icol) ? 0 : 1;
-            const int jt = jtemp(ilay, icol);
-            const int iflav = gpoint_flavor(band_gpt_start(gpt_band(igpt)), itropo);
-
-            TF col_mix[2], feta[2];
-            int jeta[2];
-            Gas_optics_kernels::eta_interp(
-                    flavor, vmr_ref, col_gas, neta, iflav, itropo, jt, ilay, icol,
-                    col_mix, jeta, feta);
-
-            TF fmin[2][2], fmaj[2][2][2];
-            Gas_optics_kernels::interp_weights(
-                    ftemp(ilay, icol), fpress(ilay, icol), feta[0], feta[1], fmin, fmaj);
-
-            const TF unit_weight[2] = {TF(1.), TF(1.)};
-
-            pfrac(ilay, icol) = Gas_optics_kernels::interp_major(
-                    pfracin, igpt, jpress(ilay, icol) + itropo, jt, jeta, fmaj, unit_weight);
-        });
+    compute_major_alone<false>(k, state, Array_2d<const TF>(), col_gas, igpt, pfrac);
 }
 
 

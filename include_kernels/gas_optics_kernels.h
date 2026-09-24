@@ -131,6 +131,28 @@ namespace Gas_optics_kernels
     }
 
 
+    // The 2x2 temperature-eta interpolation of a table whose last two axes are
+    // (eta, temp), at the leading indices idx: a minor absorber's kminor, or the
+    // Rayleigh table krayl.
+    template<typename Table, typename... Idx>
+    KOKKOS_INLINE_FUNCTION
+    TF interp_minor(
+            const Table& table, const int jtemp, const int jeta[2], const TF fminor[2][2],
+            const Idx... idx)
+    {
+        TF sum = TF(0.);
+
+        for (int itemp=0; itemp<2; ++itemp)
+        {
+            const int je = jeta[itemp];
+            for (int ieta=0; ieta<2; ++ieta)
+                sum += fminor[itemp][ieta] * table(idx..., je + ieta, jtemp + itemp);
+        }
+
+        return sum;
+    }
+
+
     // Linear interpolation along the last axis of a two-dimensional table, for one
     // entry of the first. Reference: interpolate1D.
     //
