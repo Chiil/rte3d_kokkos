@@ -47,6 +47,27 @@ namespace Rte_kernels
     };
 
 
+    // exp(-x) and 1 - exp(-2x) for x >= 0, both to full relative precision with one
+    // transcendental: through expm1 for thin layers, where 1 - exp(-2x) would cancel,
+    // and through exp for thick ones, where 1 + expm1(-x) would lose exp(-x).
+    KOKKOS_INLINE_FUNCTION
+    void exp_and_one_minus_exp2(const TF x, TF& exp_minusx, TF& one_minus_exp_minus2x)
+    {
+        TF expm1_minusx;
+        if (x < TF(0.5))
+        {
+            expm1_minusx = Kokkos::expm1(-x);
+            exp_minusx = TF(1.) + expm1_minusx;
+        }
+        else
+        {
+            exp_minusx = Kokkos::exp(-x);
+            expm1_minusx = exp_minusx - TF(1.);
+        }
+        one_minus_exp_minus2x = -expm1_minusx * (TF(1.) + exp_minusx);
+    }
+
+
     // Meador and Weaver direct-beam reflectance and transmittance into the diffuse
     // field, Eqs 14-15, at one mu0. RT_term and the exponentials are those of the
     // diffuse solution; Tnoscat is exp(-tau/mu0). Singular at k*mu0 = 1.
@@ -101,16 +122,21 @@ namespace Rte_kernels
         const TF gamma2 = (TF(3.) * (w0 * (TF(1.) - g))) * TF(0.25);
 
         // Eq 18; k = sqrt(gamma1^2 - gamma2^2), limited below to avoid dividing by 0.
-        const TF k = Kokkos::sqrt(Kokkos::max((gamma1 - gamma2) * (gamma1 + gamma2), min_k()));
-        const TF exp_minusktau = Kokkos::exp(-tau*k);
+        // gamma1 - gamma2 is exactly 2*(1 - w0); written so, it does not cancel as
+        // w0 -> 1.
+        const TF k = Kokkos::sqrt(Kokkos::max(
+                TF(2.) * (TF(1.) - w0) * (gamma1 + gamma2), min_k()));
+
+        TF exp_minusktau, one_minus_exp_minus2ktau;
+        exp_and_one_minus_exp2(k*tau, exp_minusktau, one_minus_exp_minus2ktau);
         const TF exp_minus2ktau = exp_minusktau * exp_minusktau;
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
         const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
-                                     gamma1 * (TF(1.) - exp_minus2ktau));
+                                     gamma1 * one_minus_exp_minus2ktau);
 
-        Rdif = RT_term * gamma2 * (TF(1.) - exp_minus2ktau);  // Eq 25
-        Tdif = RT_term * TF(2.) * k * exp_minusktau;          // Eq 26
+        Rdif = RT_term * gamma2 * one_minus_exp_minus2ktau;  // Eq 25
+        Tdif = RT_term * TF(2.) * k * exp_minusktau;         // Eq 26
 
         // On a round earth mu0 can increase with depth, so levels with mu0 <= 0 have no
         // direct beam. Compute with a nominal value here and mask the result at the
@@ -332,19 +358,22 @@ namespace Rte_kernels
         gamma1 = lw_diff_sec * (TF(1.) - TF(0.5) * w0 * (TF(1.) + g));  // Fu et al. Eq 2.9
         gamma2 = lw_diff_sec *           TF(0.5) * w0 * (TF(1.) - g);   // Fu et al. Eq 2.10
 
-        // Eq 18; k = sqrt(gamma1^2 - gamma2^2). Note the floor is a plain 1e-12 here,
-        // not the epsilon-derived min_k the shortwave uses.
-        const TF k = Kokkos::sqrt(Kokkos::max((gamma1 - gamma2) * (gamma1 + gamma2), TF(1.e-12)));
+        // Eq 18; k = sqrt(gamma1^2 - gamma2^2). gamma1 - gamma2 is exactly
+        // lw_diff_sec*(1 - w0); written so, it does not cancel as w0 -> 1. Note the
+        // floor is a plain 1e-12 here, not the epsilon-derived min_k the shortwave uses.
+        const TF k = Kokkos::sqrt(Kokkos::max(
+                lw_diff_sec * (TF(1.) - w0) * (gamma1 + gamma2), TF(1.e-12)));
 
-        const TF exp_minusktau = Kokkos::exp(-tau*k);
+        TF exp_minusktau, one_minus_exp_minus2ktau;
+        exp_and_one_minus_exp2(k*tau, exp_minusktau, one_minus_exp_minus2ktau);
         const TF exp_minus2ktau = exp_minusktau * exp_minusktau;
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
         const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
-                                     gamma1 * (TF(1.) - exp_minus2ktau));
+                                     gamma1 * one_minus_exp_minus2ktau);
 
-        Rdif = RT_term * gamma2 * (TF(1.) - exp_minus2ktau);  // Eq 25
-        Tdif = RT_term * TF(2.) * k * exp_minusktau;          // Eq 26
+        Rdif = RT_term * gamma2 * one_minus_exp_minus2ktau;  // Eq 25
+        Tdif = RT_term * TF(2.) * k * exp_minusktau;         // Eq 26
     }
 
 
