@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cloud_optics.h"
 #include "gas_concs.h"
 #include "gas_optics.h"
 #include "raytracer.h"
@@ -45,6 +46,34 @@ namespace Solver
         Array_3d<const TF> ssa;   // (nbnd, nlay, ncol), may be empty
         Array_3d<const TF> g;     // (nbnd, nlay, ncol), may be empty
     };
+
+    // The clouds as a caller has them: water paths and particle sizes, with their
+    // optical properties allocated but not computed. make_clouds allocates once and
+    // cloud_props computes into it, so a caller that solves every time step, or times
+    // the solve as rte-rrtmgp-cpp does, pays for the cloud optics only where it runs
+    // them. A null optics means no clouds.
+    struct Cloud_input
+    {
+        const Cloud_optics* optics = nullptr;
+        Array_2d<const TF> clwp, ciwp, reliq, reice;   // (nlay, ncol)
+        Array_3d<TF> tau, ssa, g;   // (nbnd, nlay, ncol); ssa and g only for two_stream
+        bool delta_scale = false;
+    };
+
+    // Without two_stream the clouds only absorb, which is what a no-scattering
+    // longwave solve takes, and delta_scale is ignored.
+    Cloud_input make_clouds(
+            const Cloud_optics* optics,
+            const Array_2d<const TF>& clwp,
+            const Array_2d<const TF>& ciwp,
+            const Array_2d<const TF>& reliq,
+            const Array_2d<const TF>& reice,
+            const bool two_stream,
+            const bool delta_scale);
+
+    // The cloud optical properties by band, delta-scaled when asked, ready to pass to
+    // a solve. Empty when there are no clouds.
+    Band_props cloud_props(const Cloud_input& c);
 
     // Everything a per-g-point solve needs that does not depend on the g-point, plus
     // the one g-point's working set that every iteration reuses. Built by prepare().

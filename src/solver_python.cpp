@@ -3,7 +3,6 @@
 #include <pybind11/stl.h>
 
 #include "cloud_optics.h"
-#include "optical_props.h"
 #include "raytracer.h"
 #include "raytracer_lw.h"
 #include "runtime.h"
@@ -19,77 +18,28 @@ namespace
         return a.has_value() ? Numpy::to_device_2d<TF>(*a, name) : Array_2d<TF>();
     }
 
-    // The clouds as the caller gives them: water paths and particle sizes, uploaded and
-    // with their optical properties allocated, but not computed. That is left to
-    // cloud_props, so that it can run inside the timed region, as rte-rrtmgp-cpp's
-    // cloud optics does inside its own.
-    struct Cloud_input
-    {
-        const Cloud_optics* optics = nullptr;
-        Array_2d<TF> clwp, ciwp, reliq, reice;
-        Array_3d<TF> tau, ssa, g;   // (nbnd, nlay, ncol); ssa and g only for two_stream
-        bool delta_scale = false;
-    };
-
-    Cloud_input upload_clouds(
+    // The clouds as the caller gives them, uploaded, with their optical properties
+    // allocated but not computed. Solver::cloud_props computes them inside the timed
+    // region, as rte-rrtmgp-cpp's cloud optics runs inside its own.
+    Solver::Cloud_input upload_clouds(
             const Cloud_optics* optics,
             const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
             const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
             const bool two_stream, const bool delta_scale)
     {
-        Cloud_input c;
         if (optics == nullptr)
-            return c;
+            return Solver::Cloud_input();
 
         if (!(clwp.has_value() && ciwp.has_value() && reliq.has_value() && reice.has_value()))
             throw std::invalid_argument("cloud_optics needs clwp, ciwp, reliq and reice");
 
-        c.optics = optics;
-        c.clwp = Numpy::to_device_2d<TF>(*clwp, "clwp");
-        c.ciwp = Numpy::to_device_2d<TF>(*ciwp, "ciwp");
-        c.reliq = Numpy::to_device_2d<TF>(*reliq, "reliq");
-        c.reice = Numpy::to_device_2d<TF>(*reice, "reice");
-
-        const int nspec = static_cast<int>(optics->lut_extliq.extent(0));
-        const int nlay = static_cast<int>(c.clwp.extent(0));
-        const int ncol = static_cast<int>(c.clwp.extent(1));
-
-        const auto no_init = Kokkos::WithoutInitializing;
-        c.tau = Array_3d<TF>(Kokkos::view_alloc("cloud_tau", no_init), nspec, nlay, ncol);
-
-        if (two_stream)
-        {
-            c.ssa = Array_3d<TF>(Kokkos::view_alloc("cloud_ssa", no_init), nspec, nlay, ncol);
-            c.g = Array_3d<TF>(Kokkos::view_alloc("cloud_g", no_init), nspec, nlay, ncol);
-            c.delta_scale = delta_scale;
-        }
-
-        return c;
-    }
-
-    // The cloud optical properties by band, delta-scaled when asked. Without ssa and g
-    // the clouds only absorb, which is what a no-scattering longwave solve takes.
-    Solver::Band_props cloud_props(const Cloud_input& c)
-    {
-        Solver::Band_props props;
-        if (c.optics == nullptr)
-            return props;
-
-        if (c.ssa.size() == 0)
-        {
-            Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau);
-            props.tau = c.tau;
-            return props;
-        }
-
-        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g);
-        if (c.delta_scale)
-            Optical_props::delta_scale_2str(Optical_props_2str{c.tau, c.ssa, c.g});
-
-        props.tau = c.tau;
-        props.ssa = c.ssa;
-        props.g = c.g;
-        return props;
+        return Solver::make_clouds(
+                optics,
+                Numpy::to_device_2d<TF>(*clwp, "clwp"),
+                Numpy::to_device_2d<TF>(*ciwp, "ciwp"),
+                Numpy::to_device_2d<TF>(*reliq, "reliq"),
+                Numpy::to_device_2d<TF>(*reice, "reice"),
+                two_stream, delta_scale);
     }
 
     // The duration of solve in seconds, fenced at both ends, with every input already
@@ -194,7 +144,7 @@ void Solver::init_python_bindings(py::module_& m)
 
             // Without scattering the clouds only absorb; with it they are two-stream,
             // and delta_cloud then decides whether they are delta-scaled.
-            const Cloud_input clouds = upload_clouds(
+            const Solver::Cloud_input clouds = upload_clouds(
                     cloud_optics, clwp, ciwp, reliq, reice, scattering, delta_cloud);
 
             const auto secants_d = Numpy::to_device_2d<TF>(secants, "secants");
@@ -209,7 +159,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_lw(
                         k, gas_concs, atm, top_at_1,
                         secants_d, weights_d, sfc_emis_d, inc_flux_d,
-                        cloud_props(clouds), scattering, fluxes);
+                        Solver::cloud_props(clouds), scattering, fluxes);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -263,7 +213,7 @@ void Solver::init_python_bindings(py::module_& m)
             const int ncol = static_cast<int>(atm.plev.extent(1));
             const int nbnd = static_cast<int>(k.band_lims_gpt.extent(0));
 
-            const Cloud_input clouds = upload_clouds(
+            const Solver::Cloud_input clouds = upload_clouds(
                     cloud_optics, clwp, ciwp, reliq, reice, true, delta_cloud);
 
             const auto mu0_d = Numpy::to_device_2d<TF>(mu0, "mu0");
@@ -280,7 +230,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw(
                         k, gas_concs, atm, top_at_1,
                         mu0_d, sfc_alb_dir_d, sfc_alb_dif_d, inc_flux_dir_d, inc_flux_dif_d,
-                        cloud_props(clouds), fluxes);
+                        Solver::cloud_props(clouds), fluxes);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -346,7 +296,7 @@ void Solver::init_python_bindings(py::module_& m)
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
 
-            const Cloud_input clouds = upload_clouds(
+            const Solver::Cloud_input clouds = upload_clouds(
                     cloud_optics, clwp, ciwp, reliq, reice, scattering, delta_cloud);
 
             const auto sfc_emis_d = Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis");
@@ -362,7 +312,7 @@ void Solver::init_python_bindings(py::module_& m)
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column,
                         sfc_emis_d, secants_d, weights_d,
-                        min_mfp_grid_ratio, cloud_props(clouds), scattering, lump_above,
+                        min_mfp_grid_ratio, Solver::cloud_props(clouds), scattering, lump_above,
                         fluxes);
             });
 
@@ -452,7 +402,7 @@ void Solver::init_python_bindings(py::module_& m)
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
 
-            const Cloud_input clouds = upload_clouds(
+            const Solver::Cloud_input clouds = upload_clouds(
                     cloud_optics, clwp, ciwp, reliq, reice, true, delta_cloud);
 
             const auto toa_src_h = Numpy::to_host_1d<TF>(toa_src, "toa_src");
@@ -465,7 +415,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw_rt(
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column, mu0, azi,
-                        toa_src_h, sfc_alb_dir_d, cloud_props(clouds), fluxes);
+                        toa_src_h, sfc_alb_dir_d, Solver::cloud_props(clouds), fluxes);
             });
 
             py::dict out;

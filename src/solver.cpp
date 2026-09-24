@@ -9,6 +9,67 @@
 #include "solver.h"
 
 
+Solver::Cloud_input Solver::make_clouds(
+        const Cloud_optics* optics,
+        const Array_2d<const TF>& clwp,
+        const Array_2d<const TF>& ciwp,
+        const Array_2d<const TF>& reliq,
+        const Array_2d<const TF>& reice,
+        const bool two_stream,
+        const bool delta_scale)
+{
+    Cloud_input c;
+    if (optics == nullptr)
+        return c;
+
+    c.optics = optics;
+    c.clwp = clwp;
+    c.ciwp = ciwp;
+    c.reliq = reliq;
+    c.reice = reice;
+
+    const int nspec = static_cast<int>(optics->lut_extliq.extent(0));
+    const int nlay = static_cast<int>(clwp.extent(0));
+    const int ncol = static_cast<int>(clwp.extent(1));
+
+    const auto no_init = Kokkos::WithoutInitializing;
+    c.tau = Array_3d<TF>(Kokkos::view_alloc("cloud_tau", no_init), nspec, nlay, ncol);
+
+    if (two_stream)
+    {
+        c.ssa = Array_3d<TF>(Kokkos::view_alloc("cloud_ssa", no_init), nspec, nlay, ncol);
+        c.g = Array_3d<TF>(Kokkos::view_alloc("cloud_g", no_init), nspec, nlay, ncol);
+        c.delta_scale = delta_scale;
+    }
+
+    return c;
+}
+
+
+Solver::Band_props Solver::cloud_props(const Cloud_input& c)
+{
+    Band_props props;
+    if (c.optics == nullptr)
+        return props;
+
+    if (c.ssa.size() == 0)
+    {
+        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau);
+        props.tau = c.tau;
+        return props;
+    }
+
+    Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g);
+    if (c.delta_scale)
+        Optical_props::delta_scale_2str(Optical_props_2str{c.tau, c.ssa, c.g});
+
+    props.tau = c.tau;
+    props.ssa = c.ssa;
+    props.g = c.g;
+    return props;
+}
+
+
 Solver::Solve_state Solver::prepare(
         const Kdist_gas& k,
         const Gas_concs& gas_concs,
