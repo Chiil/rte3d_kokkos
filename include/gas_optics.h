@@ -255,8 +255,11 @@ namespace Gas_optics
     constexpr int max_gpt_block = 16;
 
     // The spectrum cut into blocks [igpt0, igpt1) for the block kernels: whole bands,
-    // split where one is wider than max_gpt_block.
-    std::vector<std::pair<int, int>> gpt_blocks(const Kdist_gas& k);
+    // split where one is wider than width, which runs from 1 to max_gpt_block. A
+    // caller holds one block's optical properties at a time, so the width trades the
+    // memory of width (nlay, ncol) arrays against redoing the work the block shares.
+    std::vector<std::pair<int, int>> gpt_blocks(
+            const Kdist_gas& k, const int width = max_gpt_block);
 
     // compute_tau_lw and compute_tau_sw for the g-points [igpt0, igpt1) of one band at
     // once: the work that does not depend on the g-point is done once per block

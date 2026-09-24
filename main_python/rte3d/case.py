@@ -211,7 +211,8 @@ def cloud_args(cloud_optics, atm):
 
 
 def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
-             cloud_optics=None, byband=False, scattering=False, delta_cloud=False):
+             cloud_optics=None, byband=False, scattering=False, delta_cloud=False,
+             gpt_block=1):
     """Longwave fluxes for the case. Returns the solver's dict as it stands.
 
     Without scattering the solver is the multi-angle no-scattering one and clouds enter
@@ -221,6 +222,10 @@ def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
 
     Besides the fluxes, the dict holds solve_time: the solver's own device time, which
     leaves out the copies to and from numpy, as rte-rrtmgp-cpp's timer does.
+
+    gpt_block is how many g-points of a band the gas optics computes at once, 1 to 16,
+    here and in the other solves: wider saves the work the block shares, at the price
+    of one (nlay, ncol) array per g-point of it per optical property.
     """
 
     return rte3d.solve_lw(
@@ -230,11 +235,11 @@ def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
         weights=np.array([1.0]),
         sfc_emis=expand_bands(atm['sfc_emis'], gpt_band),
         col_dry=atm.get('col_dry'), byband=byband, scattering=scattering,
-        delta_cloud=delta_cloud, **cloud_args(cloud_optics, atm))
+        delta_cloud=delta_cloud, gpt_block=gpt_block, **cloud_args(cloud_optics, atm))
 
 
 def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
-             cloud_optics=None, byband=False, delta_cloud=True):
+             cloud_optics=None, byband=False, delta_cloud=True, gpt_block=1):
     """Shortwave fluxes for the case.
 
     Night-time columns -- those with mu0 at or below zero -- are solved with mu0 = 1
@@ -257,7 +262,7 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
         sfc_alb_dif=expand_bands(atm['sfc_alb_dif'], gpt_band),
         inc_flux_dir=np.ascontiguousarray(toa),
         col_dry=atm.get('col_dry'), byband=byband, delta_cloud=delta_cloud,
-        **cloud_args(cloud_optics, atm))
+        gpt_block=gpt_block, **cloud_args(cloud_optics, atm))
 
     for name, flux in out.items():
         if name.startswith('flux'):
@@ -268,7 +273,8 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
 def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
                 photons_per_pixel=256, independent_column=False, scattering=False,
-                min_mfp_grid_ratio=0.0, lump_above=True, delta_cloud=False):
+                min_mfp_grid_ratio=0.0, lump_above=True, delta_cloud=False,
+                gpt_block=1):
     """Longwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The counterpart of solve_sw_rt, and it returns the same shape of answer: the
@@ -314,11 +320,13 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         lump_above=lump_above,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column, delta_cloud=delta_cloud,
+        gpt_block=gpt_block,
         col_dry=atm.get('col_dry'), **grid, **cloud_args(cloud_optics, atm))
 
 
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
-                delta_cloud=True, photons_per_pixel=256, independent_column=False):
+                delta_cloud=True, photons_per_pixel=256, independent_column=False,
+                gpt_block=1):
     """Shortwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The tracer follows photons through the whole domain at once, so unlike the
@@ -344,7 +352,7 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         toa_src=toa_src,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
-        delta_cloud=delta_cloud,
+        delta_cloud=delta_cloud, gpt_block=gpt_block,
         col_dry=atm.get('col_dry'), **atm['grid'], **cloud_args(cloud_optics, atm))
 
 

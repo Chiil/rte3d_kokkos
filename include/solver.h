@@ -12,7 +12,7 @@
 
 
 // Running a case. solve_lw and solve_sw run gas optics a block of g-points at a time
-// -- a band, at most Gas_optics::max_gpt_block wide -- and then the cloud increment and
+// -- a band, at most gpt_block wide -- and then the cloud increment and
 // transport for one g-point of the block at a time, accumulating the fluxes. So no
 // array in the pipeline carries more of the spectrum than one block. The loop body is
 // public as gas_optics_lw_block / gas_optics_sw_block and solve_lw_gpt / solve_sw_gpt,
@@ -82,12 +82,14 @@ namespace Solver
         Array_3d<TF> col_gas;   // (ngas+1, nlay, ncol)
         Interp_state interp;
         int sfc_lay = 0;        // 0-based layer adjacent to the surface
+        int gpt_block = 1;      // g-points per block, 1 to Gas_optics::max_gpt_block
 
-        // One block of g-points' optical properties, (max_gpt_block, nlay, ncol),
+        // One block of g-points' optical properties, (gpt_block, nlay, ncol),
         // overwritten each block and read a g-point at a time through optics(). Gas
         // optics does the work that does not depend on the g-point once per block, so
-        // it is worth holding a band; it is still never (ngpt, nlay, ncol). ssa and g
-        // are empty for the longwave without scattering, pfrac for the shortwave.
+        // a wider block saves that work at the price of gpt_block (nlay, ncol) arrays
+        // each; it is never (ngpt, nlay, ncol). ssa and g are empty for the longwave
+        // without scattering, pfrac for the shortwave.
         Array_3d<TF> tau, ssa, g, pfrac;
 
         // One g-point's Planck sources, overwritten each iteration.
@@ -127,6 +129,7 @@ namespace Solver
     // sources and finds the surface layer; weights is the longwave quadrature, whose
     // host mirror the no-scattering solver needs, and is ignored otherwise.
     // lw_scattering allocates the two-stream working set instead of the quadrature's.
+    // gpt_block is the width of the g-point block, 1 to Gas_optics::max_gpt_block.
     Solve_state prepare(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -134,7 +137,8 @@ namespace Solver
             const bool do_lw,
             const bool do_jacobian = false,
             const Array_1d<const TF>& weights = Array_1d<const TF>(),
-            const bool lw_scattering = false);
+            const bool lw_scattering = false,
+            const int gpt_block = 1);
 
     // Where the accumulated fluxes go. The broadband views are required; the by-band
     // ones may be empty, in which case no by-band reduction is done. dir is shortwave
@@ -217,7 +221,9 @@ namespace Solver
             const Flux_sink& flux_dn,
             const Flux_sink& flux_dir);
 
-    // The whole spectrum: prepare, then loop the above and accumulate.
+    // The whole spectrum: prepare, then loop the above and accumulate. gpt_block is
+    // the width of the gas optics' g-point block, as prepare takes it, here and in the
+    // two ray-tracer solves below.
     void solve_lw(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -229,7 +235,8 @@ namespace Solver
             const Array_2d<const TF>& inc_flux,    // (ngpt, ncol), may be empty
             const Band_props& clouds,
             const bool scattering,                 // solve with scattering, not by quadrature
-            const Fluxes_out& fluxes);
+            const Fluxes_out& fluxes,
+            const int gpt_block = 1);
 
     void solve_sw(
             const Kdist_gas& k,
@@ -242,7 +249,8 @@ namespace Solver
             const Array_2d<const TF>& inc_flux_dir,    // (ngpt, ncol)
             const Array_2d<const TF>& inc_flux_dif,    // (ngpt, ncol), may be empty
             const Band_props& clouds,
-            const Fluxes_out& fluxes);
+            const Fluxes_out& fluxes,
+            const int gpt_block = 1);
 
     // The whole shortwave spectrum through the Monte Carlo ray tracer instead of the
     // two-stream solver. Same gas optics and the same cloud properties; only the
@@ -270,7 +278,8 @@ namespace Solver
             const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
             const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
             const Band_props& clouds,
-            const Raytracer::Fluxes_rt& fluxes);
+            const Raytracer::Fluxes_rt& fluxes,
+            const int gpt_block = 1);
 
     // The whole longwave spectrum through the Monte Carlo ray tracer instead of the
     // no-scattering solver, as solve_sw_rt is for the shortwave.
@@ -320,7 +329,8 @@ namespace Solver
             const Band_props& clouds,
             const bool scattering,
             const bool lump_above,
-            const Raytracer_lw::Fluxes_lw& fluxes);
+            const Raytracer_lw::Fluxes_lw& fluxes,
+            const int gpt_block = 1);
 
     void init_python_bindings(py::module_& m);
 }

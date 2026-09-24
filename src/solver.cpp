@@ -77,7 +77,8 @@ Solver::Solve_state Solver::prepare(
         const bool do_lw,
         const bool do_jacobian,
         const Array_1d<const TF>& weights,
-        const bool lw_scattering)
+        const bool lw_scattering,
+        const int gpt_block)
 {
     const auto no_init = Kokkos::WithoutInitializing;
 
@@ -86,7 +87,11 @@ Solver::Solve_state Solver::prepare(
     const int nlev = nlay + 1;
     const int ngas = static_cast<int>(k.gas_names.size());
 
+    if (gpt_block < 1 || gpt_block > Gas_optics::max_gpt_block)
+        throw std::invalid_argument("gpt_block must run from 1 to max_gpt_block.");
+
     Solve_state s;
+    s.gpt_block = gpt_block;
 
     s.col_gas = Array_3d<TF>("col_gas", ngas + 1, nlay, ncol);
     Gas_optics::compute_col_gas(
@@ -100,7 +105,7 @@ Solver::Solve_state Solver::prepare(
 
     // One block of g-points. The longwave without scattering has no use for ssa and
     // g, and only the longwave has a Planck fraction.
-    const int nblk = Gas_optics::max_gpt_block;
+    const int nblk = gpt_block;
     const bool with_ssa = !do_lw || lw_scattering;
 
     s.tau = Array_3d<TF>(Kokkos::view_alloc("tau", no_init), nblk, nlay, ncol);
@@ -326,19 +331,21 @@ void Solver::solve_lw(
         const Array_2d<const TF>& inc_flux,
         const Band_props& clouds,
         const bool scattering,
-        const Fluxes_out& fluxes)
+        const Fluxes_out& fluxes,
+        const int gpt_block)
 {
     if (scattering && fluxes.up_jac.size() > 0)
         throw std::invalid_argument(
                 "The longwave two-stream solver does not produce a surface Jacobian.");
 
     const Solve_state state = prepare(
-            k, gas_concs, atm, true, fluxes.up_jac.size() > 0, weights, scattering);
+            k, gas_concs, atm, true, fluxes.up_jac.size() > 0, weights, scattering,
+            gpt_block);
 
     zero(fluxes.up);       zero(fluxes.dn);       zero(fluxes.up_jac);
     zero(fluxes.up_byband); zero(fluxes.dn_byband);
 
-    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         gas_optics_lw_block(k, state, atm, igpt0, igpt1);
 
@@ -372,9 +379,11 @@ void Solver::solve_sw(
         const Array_2d<const TF>& inc_flux_dir,
         const Array_2d<const TF>& inc_flux_dif,
         const Band_props& clouds,
-        const Fluxes_out& fluxes)
+        const Fluxes_out& fluxes,
+        const int gpt_block)
 {
-    const Solve_state state = prepare(k, gas_concs, atm, false);
+    const Solve_state state = prepare(
+            k, gas_concs, atm, false, false, Array_1d<const TF>(), false, gpt_block);
 
     zero(fluxes.up); zero(fluxes.dn); zero(fluxes.dir);
     zero(fluxes.up_byband); zero(fluxes.dn_byband); zero(fluxes.dir_byband);
@@ -382,7 +391,7 @@ void Solver::solve_sw(
     // g is only worth zeroing when clouds are going to add to it.
     const bool with_g = clouds.tau.size() > 0;
 
-    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         gas_optics_sw_block(k, state, atm, igpt0, igpt1, with_g);
 
@@ -420,14 +429,16 @@ void Solver::solve_sw_rt(
         const Array_1d_h<const TF>& toa_src,
         const Array_2d<const TF>& sfc_alb_dir,
         const Band_props& clouds,
-        const Raytracer::Fluxes_rt& fluxes)
+        const Raytracer::Fluxes_rt& fluxes,
+        const int gpt_block)
 {
-    const Solve_state state = prepare(k, gas_concs, atm, false);
+    const Solve_state state = prepare(
+            k, gas_concs, atm, false, false, Array_1d<const TF>(), false, gpt_block);
     const auto scratch = Raytracer::Scratch::make(grid);
 
     fluxes.zero();
 
-    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k))
+    for (const auto& [igpt0, igpt1] : Gas_optics::gpt_blocks(k, state.gpt_block))
     {
         // Absorption and Rayleigh scattering, as the two-stream path computes them.
         // The asymmetry parameter is not asked for: the gas scatters by the Rayleigh
@@ -557,14 +568,15 @@ int Solver::solve_lw_rt(
         const Band_props& clouds,
         const bool scattering,
         const bool lump_above,
-        const Raytracer_lw::Fluxes_lw& fluxes)
+        const Raytracer_lw::Fluxes_lw& fluxes,
+        const int gpt_block)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
     const int nlay = static_cast<int>(atm.play.extent(0));
     const int ncol = static_cast<int>(atm.play.extent(1));
 
     const Solve_state state = prepare(
-            k, gas_concs, atm, true, false, weights, scattering);
+            k, gas_concs, atm, true, false, weights, scattering, gpt_block);
     const auto scratch = Raytracer_lw::Scratch::make(grid);
 
     // The gas does not scatter in the longwave, and the tracer wants that as an array
@@ -605,7 +617,7 @@ int Solver::solve_lw_rt(
 
     int traced = 0;
 
-    const auto blocks = Gas_optics::gpt_blocks(k);
+    const auto blocks = Gas_optics::gpt_blocks(k, state.gpt_block);
     int iblk = -1;
     int igpt0 = 0;
 

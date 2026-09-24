@@ -126,7 +126,7 @@ void Solver::init_python_bindings(py::module_& m)
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool scattering,
-           const bool byband, const bool jacobian) -> py::dict
+           const bool byband, const bool jacobian, const int gpt_block) -> py::dict
         {
             Runtime::get();
 
@@ -159,7 +159,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_lw(
                         k, gas_concs, atm, top_at_1,
                         secants_d, weights_d, sfc_emis_d, inc_flux_d,
-                        Solver::cloud_props(clouds), scattering, fluxes);
+                        Solver::cloud_props(clouds), scattering, fluxes, gpt_block);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -175,6 +175,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("delta_cloud") = true,
         py::arg("col_dry") = py::none(), py::arg("scattering") = false,
         py::arg("byband") = false, py::arg("jacobian") = false,
+        py::arg("gpt_block") = 1,
         "Longwave gas optics, clouds and transport, one g-point at a time. Nothing "
         "allocated here carries a g-point dimension. secants is (nmus, ncol) and "
         "sfc_emis (ngpt, ncol). Clouds, if cloud_optics is given, come from clwp, "
@@ -185,7 +186,10 @@ void Solver::init_python_bindings(py::module_& m)
         "and the clouds then scatter too, delta-scaled if delta_cloud; it has no "
         "Jacobian. "
         "solve_time is the device time of the clouds, gas optics and transport, in "
-        "seconds, without the copies to and from numpy.");
+        "seconds, without the copies to and from numpy. gpt_block, 1 to 16, is how "
+        "many g-points of a band the gas optics computes at once: wider saves work "
+        "shared across the block at the price of one (nlay, ncol) array per g-point "
+        "of it per optical property.");
 
     m.def("solve_sw",
         [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
@@ -199,7 +203,7 @@ void Solver::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
-           const bool byband) -> py::dict
+           const bool byband, const int gpt_block) -> py::dict
         {
             Runtime::get();
 
@@ -230,7 +234,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw(
                         k, gas_concs, atm, top_at_1,
                         mu0_d, sfc_alb_dir_d, sfc_alb_dif_d, inc_flux_dir_d, inc_flux_dif_d,
-                        Solver::cloud_props(clouds), fluxes);
+                        Solver::cloud_props(clouds), fluxes, gpt_block);
             });
 
             py::dict out = fluxes_dict(fluxes);
@@ -247,13 +251,17 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("delta_cloud") = true,
         py::arg("col_dry") = py::none(),
         py::arg("byband") = false,
+        py::arg("gpt_block") = 1,
         "Shortwave gas optics, clouds and transport, one g-point at a time. mu0 is "
         "(nlay, ncol); the boundary conditions are (ngpt, ncol). Clouds come from "
         "clwp, ciwp, reliq and reice as for solve_lw, delta-scaled if delta_cloud. "
         "Returns a dict with flux_up, flux_dn and flux_dir, plus the by-band totals "
         "when byband, and solve_time. "
         "solve_time is the device time of the clouds, gas optics and transport, in "
-        "seconds, without the copies to and from numpy.");
+        "seconds, without the copies to and from numpy. gpt_block, 1 to 16, is how "
+        "many g-points of a band the gas optics computes at once: wider saves work "
+        "shared across the block at the price of one (nlay, ncol) array per g-point "
+        "of it per optical property.");
 
 
     m.def("solve_lw_rt",
@@ -272,7 +280,8 @@ void Solver::init_python_bindings(py::module_& m)
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool scattering, const bool lump_above,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const int gpt_block) -> py::dict
         {
             Runtime::get();
 
@@ -313,7 +322,7 @@ void Solver::init_python_bindings(py::module_& m)
                         photons_per_pixel, independent_column,
                         sfc_emis_d, secants_d, weights_d,
                         min_mfp_grid_ratio, Solver::cloud_props(clouds), scattering, lump_above,
-                        fluxes);
+                        fluxes, gpt_block);
             });
 
             py::dict out;
@@ -347,6 +356,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("col_dry") = py::none(),
         py::arg("scattering") = false, py::arg("lump_above") = true,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("gpt_block") = 1,
         "Longwave gas optics, Planck sources, clouds and the Monte Carlo ray tracer, "
         "one g-point at a time. The columns are the tracer's horizontal grid, "
         "ncol = nx*ny with the column index i + j*nx, and layers from nz-1 upward are "
@@ -364,7 +374,10 @@ void Solver::init_python_bindings(py::module_& m)
         "without it nz must count only the resolved cells and the air above enters as "
         "the downward flux a plane-parallel solve of the full column leaves there. "
         "solve_time is the device time of the clouds, gas optics and transport, in "
-        "seconds, without the copies to and from numpy.");
+        "seconds, without the copies to and from numpy. gpt_block, 1 to 16, is how "
+        "many g-points of a band the gas optics computes at once: wider saves work "
+        "shared across the block at the price of one (nlay, ncol) array per g-point "
+        "of it per optical property.");
 
 
     m.def("solve_sw_rt",
@@ -380,7 +393,8 @@ void Solver::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const int gpt_block) -> py::dict
         {
             Runtime::get();
 
@@ -415,7 +429,8 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw_rt(
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column, mu0, azi,
-                        toa_src_h, sfc_alb_dir_d, Solver::cloud_props(clouds), fluxes);
+                        toa_src_h, sfc_alb_dir_d, Solver::cloud_props(clouds), fluxes,
+                        gpt_block);
             });
 
             py::dict out;
@@ -443,6 +458,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("delta_cloud") = true,
         py::arg("col_dry") = py::none(),
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("gpt_block") = 1,
         "Shortwave gas optics, clouds and the Monte Carlo ray tracer, one g-point at a "
         "time. The columns are the tracer's horizontal grid, ncol = nx*ny with the "
         "column index i + j*nx, and layers from nz-1 upward are lumped into the top "
@@ -451,5 +467,8 @@ void Solver::init_python_bindings(py::module_& m)
         "fluxes, (ncol) each, the absorbed flux per unit height, (nz, ncol), and "
         "solve_time. Clouds come from clwp, ciwp, reliq and reice as for solve_sw. "
         "solve_time is the device time of the clouds, gas optics and transport, in "
-        "seconds, without the copies to and from numpy.");
+        "seconds, without the copies to and from numpy. gpt_block, 1 to 16, is how "
+        "many g-points of a band the gas optics computes at once: wider saves work "
+        "shared across the block at the price of one (nlay, ncol) array per g-point "
+        "of it per optical property.");
 }

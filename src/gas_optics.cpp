@@ -596,8 +596,12 @@ namespace
 }
 
 
-std::vector<std::pair<int, int>> Gas_optics::gpt_blocks(const Kdist_gas& k)
+std::vector<std::pair<int, int>> Gas_optics::gpt_blocks(
+        const Kdist_gas& k, const int width)
 {
+    if (width < 1 || width > max_gpt_block)
+        throw std::invalid_argument("A g-point block must hold 1 to max_gpt_block g-points.");
+
     const int ngpt = static_cast<int>(k.gpt_band_h.extent(0));
 
     std::vector<std::pair<int, int>> blocks;
@@ -605,7 +609,7 @@ std::vector<std::pair<int, int>> Gas_optics::gpt_blocks(const Kdist_gas& k)
     int igpt0 = 0;
     for (int igpt=1; igpt<=ngpt; ++igpt)
         if (igpt == ngpt || k.gpt_band_h(igpt) != k.gpt_band_h(igpt0)
-                || igpt - igpt0 == max_gpt_block)
+                || igpt - igpt0 == width)
         {
             blocks.emplace_back(igpt0, igpt);
             igpt0 = igpt;
