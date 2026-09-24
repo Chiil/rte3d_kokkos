@@ -99,8 +99,7 @@ Solver::Solve_state Solver::prepare(
     s.interp = Gas_optics::interpolate(k, atm.play, atm.tlay, s.col_gas);
 
     // The surface is the layer at whichever end of the array is at higher pressure.
-    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, atm.play);
-    s.sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
+    s.sfc_lay = Gas_optics::is_top_at_1(atm.play) ? nlay - 1 : 0;
 
     // One g-point's optical properties. The longwave without scattering has no use
     // for ssa and g, and only the longwave has a Planck fraction.

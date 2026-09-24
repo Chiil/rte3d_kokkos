@@ -38,6 +38,15 @@ Interp_state Interp_state::create(
 }
 
 
+bool Gas_optics::is_top_at_1(const Array_2d<const TF>& play)
+{
+    const auto play_h = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, Kokkos::subview(play, Kokkos::ALL, 0));
+
+    return play_h(0) < play_h(play_h.extent(0) - 1);
+}
+
+
 void Gas_optics::interpolation(
         const Array_2d<const int>& flavor,
         const Array_1d<const TF>& press_ref_log,
@@ -128,9 +137,7 @@ void Gas_optics::interpolation(
     const auto lower_limits = state.lower_limits;
     const auto upper_limits = state.upper_limits;
 
-    // top_at_1 is decided from the first column, as in the reference.
-    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
-    const bool top_at_1 = play_h(0, 0) < play_h(nlay - 1, 0);
+    const bool top_at_1 = is_top_at_1(play);
 
     parallel_for_1d("interpolation_limits", 0, ncol,
         KOKKOS_LAMBDA(const int icol)
@@ -846,8 +853,7 @@ void Gas_optics::gas_optics_lw(
     const Interp_state state = interpolate(k, play, tlay, col_gas);
 
     // The surface is the layer at whichever end of the array is at higher pressure.
-    auto play_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, play);
-    const int sfc_lay = play_h(0, 0) > play_h(nlay - 1, 0) ? 0 : nlay - 1;
+    const int sfc_lay = is_top_at_1(play) ? nlay - 1 : 0;
 
     // One g-point's Planck fraction, allocated once.
     Array_2d<TF> pfrac(Kokkos::view_alloc("pfrac", Kokkos::WithoutInitializing), nlay, ncol);

@@ -205,6 +205,11 @@ namespace Gas_optics
             const Array_2d<const TF>& tlay,      // (nlay, ncol)
             const Array_3d<const TF>& col_gas);  // (ngas+1, nlay, ncol)
 
+    // Whether the layers run from the top of the atmosphere down, which is to say
+    // pressure increases along them. Decided from the first column, as the reference
+    // does.
+    bool is_top_at_1(const Array_2d<const TF>& play);   // (nlay, ncol)
+
     // Absorption optical depth from major and minor gases, for one g-point.
     // Overwrites tau. The reference accumulates into it, but every caller here gives
     // the kernel a g-point slice of its own, so the accumulation only ever bought a
