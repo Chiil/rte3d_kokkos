@@ -40,10 +40,14 @@ Interp_state Interp_state::create(
 
 bool Gas_optics::is_top_at_1(const Array_2d<const TF>& play)
 {
-    const auto play_h = Kokkos::create_mirror_view_and_copy(
-            Kokkos::HostSpace{}, Kokkos::subview(play, Kokkos::ALL, 0));
+    const int nlay = static_cast<int>(play.extent(0));
 
-    return play_h(0) < play_h(play_h.extent(0) - 1);
+    // Two numbers, not the column: a strided view cannot be copied off a GPU.
+    TF p_first, p_last;
+    Kokkos::deep_copy(p_first, Kokkos::subview(play, 0, 0));
+    Kokkos::deep_copy(p_last, Kokkos::subview(play, nlay - 1, 0));
+
+    return p_first < p_last;
 }
 
 
