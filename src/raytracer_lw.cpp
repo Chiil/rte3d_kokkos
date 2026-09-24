@@ -26,7 +26,9 @@ namespace
             const Array_map_2d<const TF>& tau_cld, const Array_map_2d<const TF>& ssa_cld,
             const bool clouds, const bool cld_scatters, const int ilay, const int icol)
     {
-        const TF gas = tau_gas(ilay, icol)*(TF(1.) - ssa_gas(ilay, icol));
+        // An empty ssa_gas is a gas that does not scatter.
+        const TF ssa = ssa_gas.size() > 0 ? ssa_gas(ilay, icol) : TF(0.);
+        const TF gas = tau_gas(ilay, icol)*(TF(1.) - ssa);
         const TF cld = !clouds ? TF(0.)
                 : (cld_scatters ? tau_cld(ilay, icol)*(TF(1.) - ssa_cld(ilay, icol))
                                 : tau_cld(ilay, icol));

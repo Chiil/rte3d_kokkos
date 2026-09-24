@@ -578,10 +578,6 @@ int Solver::solve_lw_rt(
             k, gas_concs, atm, true, false, weights, scattering);
     const auto scratch = Raytracer_lw::Scratch::make(grid);
 
-    // The gas does not scatter in the longwave, and the tracer wants that as an array
-    // rather than as a special case. Allocated once and left at zero.
-    const Array_2d<TF> ssa_gas("lw_rt_ssa_gas", nlay, ncol);
-
     // The shortest gas mean free path the box may hold before the tracer gives up on
     // it, as an optical depth per cell: a mean free path of ratio*min(dx, dy) is an
     // optical depth of dz/(ratio*min(dx, dy)) across a cell of depth dz.
@@ -710,8 +706,7 @@ int Solver::solve_lw_rt(
 
             Raytracer_lw::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                    box_rows(state.tau), box_rows(Array_map_2d<const TF>(
-                            ssa_gas.data(), ssa_gas.extent(0), ssa_gas.extent(1))),
+                    box_rows(state.tau), Array_map_2d<const TF>(),
                     box_rows(cloud.tau), box_rows(cloud.ssa), box_rows(cloud.g),
                     box_rows(state.lay_source), state.sfc_source,
                     slice_1d(sfc_emis, igpt),

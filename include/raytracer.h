@@ -174,11 +174,12 @@ namespace Raytracer
     // depths; only the sources and the scoring differ between the two.
     //
     // Gas and cloud stay apart: a scattering event has to pick which of the two did
-    // it, and each has its own phase function. The cloud triple may be empty.
+    // it, and each has its own phase function. The cloud triple may be empty, and so
+    // may ssa_gas, for a gas that does not scatter.
     void bundle_optics(
             const Grid& grid, const bool top_at_1, const int nlay,
             const Array_map_2d<const TF>& tau_gas,   // (nlay, ncol)
-            const Array_map_2d<const TF>& ssa_gas,   // (nlay, ncol)
+            const Array_map_2d<const TF>& ssa_gas,   // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& tau_cld,   // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& ssa_cld,   // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& asy_cld,   // (nlay, ncol), may be empty

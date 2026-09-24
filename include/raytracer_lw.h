@@ -91,12 +91,12 @@ namespace Raytracer_lw
     // Trace one g-point.
     //
     // tau_gas and ssa_gas are the gas optical depth and its single-scattering albedo,
-    // as Gas_optics::compute_tau_lw produces them -- the second is zero unless the
-    // caller has folded something scattering into the gas. The cloud triple may be
-    // empty, which means a clear sky. lay_source is the Planck source at the layer
-    // average temperature, and sfc_source its surface counterpart, both as
-    // Source_func_lw holds them: radiances, so the emission carries the pi that
-    // Rte_lw::solver_2stream also applies.
+    // the second empty, or zero, unless the caller has folded something scattering
+    // into the gas. The cloud triple may be empty, which means a clear sky.
+    // lay_source is the Planck source at the layer average temperature, and
+    // sfc_source its surface counterpart, both as Source_func_lw holds them:
+    // radiances, so the emission carries the pi that Rte_lw::solver_2stream also
+    // applies.
     //
     // All of the (nlay, ncol) arrays are read in the caller's own vertical
     // orientation, given by top_at_1, and nlay may exceed nz: the layers from nz-1
@@ -117,7 +117,7 @@ namespace Raytracer_lw
             const int photons_per_pixel,
             const int igpt,
             const Array_map_2d<const TF>& tau_gas,     // (nlay, ncol)
-            const Array_map_2d<const TF>& ssa_gas,     // (nlay, ncol)
+            const Array_map_2d<const TF>& ssa_gas,     // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& tau_cld,     // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& ssa_cld,     // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& asy_cld,     // (nlay, ncol), may be empty
