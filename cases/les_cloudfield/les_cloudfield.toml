@@ -46,8 +46,9 @@ independent-column = false
 # 0.00 percent in the mean over the 200 shared cells. rte3d reports one cell more
 # than the reference: index 200 holds the layers above the box, lumped.
 #
-# To reproduce, set sza and azi explicitly in the reference's test.ini -- sza = 30,
-# azi = 108.8975, the input file's own sun. Its documented fallback, "mu0 from input
+# To reproduce, set sza and azi explicitly in the reference's test.ini -- sza = 30.0,
+# azi = 108.8975, the input file's own sun. Write sza as a float: sza = 30 is a TOML
+# integer, which the reference ignores for its default of -1. Its documented fallback, "mu0 from input
 # file is used if sza < 0", did not do that in the build tested here: the whole solve
 # came out as though mu0 were 1, which transmits 15 percent more direct beam and
 # makes the reference look both brighter and faster than it is.

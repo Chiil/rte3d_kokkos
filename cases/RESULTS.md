@@ -9,30 +9,47 @@ The three-dimensional cloud field the ray tracer was validated on, described in
 [`README.md`](README.md#les_cloudfield--a-three-dimensional-cloud-field). This is the
 ray tracer's benchmark: single precision, which is what the tracer is run at, on an
 RTX A4500, with the settings file as it stands -- 512 photons per pixel in both bands.
-Best of three runs of `run_case.py`, which spread by under 3 percent:
+Best of three runs of `run_case.py`, which spread by under 6 percent, against best of
+three of `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt` on the same field with the same
+settings:
 
-| | time | per column |
-|---|---|---|
-| longwave, 62 of 128 g-points traced | 1870 ms | 114 us |
-| shortwave, 112 g-points | 3218 ms | 196 us |
+| | rte3d, solver | rte3d, wall | rte-rrtmgp-cpp | |
+|---|---|---|---|---|
+| longwave, 62 of 128 g-points traced | **1400 ms** | 1464 ms | 3546 ms | 2.5x |
+| shortwave, 112 g-points | **2871 ms** | 2928 ms | 5503 ms | 1.9x |
+
+The solver column is what to compare. It is the `solve_time` each solver returns:
+device time between two fences, with every input already uploaded and every output
+still on the device -- the span `rte-rrtmgp-cpp` times with CUDA events, covering gas
+optics, cloud optics and transport on both sides. The wall column is the whole Python
+call and adds the copies to and from numpy, 60 ms here. It used to add much more: the
+case driver computed the cloud optics on the device, copied 2 GB of it into numpy and
+handed it back, until the solvers took the cloud physics and did that themselves. The
+wall time was then 1870 and 3218 ms, the fluxes the same bit for bit.
+
+The reference was run from a copy of its `les_cloudfield` directory, with `test.ini`
+set to match `les_cloudfield.toml`: `samples = 512` in the shortwave and `23` in the
+longwave (2^23 photons over 128 x 128 columns is 512 per pixel), longwave
+`scattering = true`, backward tracing off, and the input file's own sun, `sza = 30.0`
+and `azi = 108.8975`. The sun has to be written as a float: `sza = 30` is a TOML
+integer, which the reference ignores for its default of -1, and the run then
+transmits 20 percent more direct beam. With the settings matched, the shortwave
+surface and top-of-domain fluxes agree to 0.04 percent and the longwave surface up to
+0.01; longwave surface down differs by 0.7 percent, which is the air above the box
+that the reference discards -- see below. Its timer excludes the first launch's
+autotuning, since the tuned configurations are read from the case directory.
 
 The runs agree bit for bit: the photon counts are summed in fixed point, so the order
 the GPU's atomics land in does not matter. That cost 1 and 3 percent against the
-floating-point counters, which gave 2487 and 3550 ms and differed from run to run in
-the last bits of a third of the columns. Seeding each thread's generator directly,
-rather than skipping it ahead to a subsequence of its own, took 10 percent off both
-bands again; `include/random.h` says why. The longwave then lost another 380 ms by
-no longer delta-scaling its clouds when `delta-cloud` says not to, which it used to do
-regardless.
+floating-point counters, which differed from run to run in the last bits of a third of
+the columns. Seeding each thread's generator directly, rather than skipping it ahead
+to a subsequence of its own, took 10 percent off both bands; `include/random.h` says
+why.
 
-Part of every one of these timings is not the solver at all: the case driver computes
-the cloud optics on the GPU, copies them into numpy and hands them back, which is 2 GB
-over PCIe for this field. That is 342 ms of the longwave trace and 299 of the
-shortwave one, and about 43 percent of each plane-parallel solve below.
-
-The plane-parallel solves beside them take 802 and 720 ms. An earlier measurement on
-one MI250X GCD, in double precision and at 256 photons per pixel, gave 3045 and 7950
-ms; it is not comparable with the above and is kept only for the record.
+The plane-parallel solves beside them take 305 and 270 ms of solver time, 378 and 352
+ms wall. An earlier measurement on one MI250X GCD, in double precision and at 256
+photons per pixel, gave 3045 and 7950 ms; it is not comparable with the above and is
+kept only for the record.
 
 ### The reference fluxes, and what they can check
 
