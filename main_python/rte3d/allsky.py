@@ -67,10 +67,6 @@ def solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm):
     longwave solver used is the no-scattering one, so the cloud contribution enters as
     an absorption optical depth added by band.
     """
-    cloud_tau = rte3d.cloud_optics(
-        cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-        reliq=atm['rel'], reice=atm['rei'], two_stream=False)
-
     ngpt = kdist.ngpt
     ncol = atm['play'].shape[1]
 
@@ -81,7 +77,8 @@ def solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm):
         secants=np.full((1, ncol), 1.0/0.6096748751),
         weights=np.array([1.0]),
         sfc_emis=np.full((ngpt, ncol), SFC_EMIS),
-        cloud_tau=cloud_tau)
+        cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
+        reliq=atm['rel'], reice=atm['rei'])
 
     return out['flux_up'], out['flux_dn']
 
@@ -92,12 +89,6 @@ def solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm):
     Cloud properties are delta-scaled before being added, as the driver does. They stay
     band-resolved: the solve takes the slice for each g-point's own band.
     """
-    cloud_tau, cloud_ssa, cloud_g = rte3d.cloud_optics(
-        cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-        reliq=atm['rel'], reice=atm['rei'])
-
-    cloud_tau, cloud_ssa, cloud_g = rte3d.delta_scale_2str(cloud_tau, cloud_ssa, cloud_g)
-
     ngpt = kdist.ngpt
     nlay, ncol = atm['play'].shape
 
@@ -111,6 +102,7 @@ def solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm):
         atm['play'], atm['plev'], atm['tlay'],
         mu0=np.full((nlay, ncol), MU0),
         sfc_alb_dir=albedo, sfc_alb_dif=albedo, inc_flux_dir=toa,
-        cloud_tau=cloud_tau, cloud_ssa=cloud_ssa, cloud_g=cloud_g)
+        cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
+        reliq=atm['rel'], reice=atm['rei'], delta_cloud=True)
 
     return out['flux_up'], out['flux_dn'], out['flux_dir']

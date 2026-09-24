@@ -49,11 +49,17 @@ def write_fluxes(path, fluxes, plev, extra_attrs=None):
 
 
 class Timer:
-    """Wall-clock timing with a warm-up, since the first call pays for allocation."""
+    """Wall-clock timing with a warm-up, since the first call pays for allocation.
+
+    A solver that times itself returns solve_time in its dict: the device time with the
+    copies to and from numpy left out, which is the span rte-rrtmgp-cpp's drivers time.
+    That is taken out of the result and reported beside the wall-clock time.
+    """
 
     def __init__(self, label):
         self.label = label
         self.times = []
+        self.solve_times = []
 
     def run(self, fn, repeats=3, warmup=1):
         for _ in range(warmup):
@@ -62,6 +68,9 @@ class Timer:
             start = time.perf_counter()
             result = fn()
             self.times.append(time.perf_counter() - start)
+
+            if isinstance(result, dict) and 'solve_time' in result:
+                self.solve_times.append(result.pop('solve_time'))
 
         return result
 
@@ -74,4 +83,6 @@ class Timer:
         if ncol is not None:
             per_col = self.best/ncol*1e6
             line += f'   {per_col:8.2f} us/column'
+        if self.solve_times:
+            line += f'   solver {min(self.solve_times)*1e3:9.1f} ms'
         return line

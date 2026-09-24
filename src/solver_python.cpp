@@ -2,6 +2,8 @@
 
 #include <pybind11/stl.h>
 
+#include "cloud_optics.h"
+#include "optical_props.h"
 #include "raytracer.h"
 #include "raytracer_lw.h"
 #include "runtime.h"
@@ -17,9 +19,90 @@ namespace
         return a.has_value() ? Numpy::to_device_2d<TF>(*a, name) : Array_2d<TF>();
     }
 
-    Array_3d<TF> optional_3d(const std::optional<Numpy::In<TF>>& a, const std::string& name)
+    // The clouds as the caller gives them: water paths and particle sizes, uploaded and
+    // with their optical properties allocated, but not computed. That is left to
+    // cloud_props, so that it can run inside the timed region, as rte-rrtmgp-cpp's
+    // cloud optics does inside its own.
+    struct Cloud_input
     {
-        return a.has_value() ? Numpy::to_device_3d<TF>(*a, name) : Array_3d<TF>();
+        const Cloud_optics* optics = nullptr;
+        Array_2d<TF> clwp, ciwp, reliq, reice;
+        Array_3d<TF> tau, ssa, g;   // (nbnd, nlay, ncol); ssa and g only for two_stream
+        bool delta_scale = false;
+    };
+
+    Cloud_input upload_clouds(
+            const Cloud_optics* optics,
+            const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
+            const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
+            const bool two_stream, const bool delta_scale)
+    {
+        Cloud_input c;
+        if (optics == nullptr)
+            return c;
+
+        if (!(clwp.has_value() && ciwp.has_value() && reliq.has_value() && reice.has_value()))
+            throw std::invalid_argument("cloud_optics needs clwp, ciwp, reliq and reice");
+
+        c.optics = optics;
+        c.clwp = Numpy::to_device_2d<TF>(*clwp, "clwp");
+        c.ciwp = Numpy::to_device_2d<TF>(*ciwp, "ciwp");
+        c.reliq = Numpy::to_device_2d<TF>(*reliq, "reliq");
+        c.reice = Numpy::to_device_2d<TF>(*reice, "reice");
+
+        const int nspec = static_cast<int>(optics->lut_extliq.extent(0));
+        const int nlay = static_cast<int>(c.clwp.extent(0));
+        const int ncol = static_cast<int>(c.clwp.extent(1));
+
+        const auto no_init = Kokkos::WithoutInitializing;
+        c.tau = Array_3d<TF>(Kokkos::view_alloc("cloud_tau", no_init), nspec, nlay, ncol);
+
+        if (two_stream)
+        {
+            c.ssa = Array_3d<TF>(Kokkos::view_alloc("cloud_ssa", no_init), nspec, nlay, ncol);
+            c.g = Array_3d<TF>(Kokkos::view_alloc("cloud_g", no_init), nspec, nlay, ncol);
+            c.delta_scale = delta_scale;
+        }
+
+        return c;
+    }
+
+    // The cloud optical properties by band, delta-scaled when asked. Without ssa and g
+    // the clouds only absorb, which is what a no-scattering longwave solve takes.
+    Solver::Band_props cloud_props(const Cloud_input& c)
+    {
+        Solver::Band_props props;
+        if (c.optics == nullptr)
+            return props;
+
+        if (c.ssa.size() == 0)
+        {
+            Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau);
+            props.tau = c.tau;
+            return props;
+        }
+
+        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g);
+        if (c.delta_scale)
+            Optical_props::delta_scale_2str(Optical_props_2str{c.tau, c.ssa, c.g});
+
+        props.tau = c.tau;
+        props.ssa = c.ssa;
+        props.g = c.g;
+        return props;
+    }
+
+    // The duration of solve in seconds, fenced at both ends, with every input already
+    // on the device and every output left there. That is the span rte-rrtmgp-cpp's
+    // drivers time with CUDA events, so the two can be compared directly.
+    template<typename F>
+    double timed(F&& solve)
+    {
+        Kokkos::fence();
+        Kokkos::Timer timer;
+        solve();
+        Kokkos::fence();
+        return timer.seconds();
     }
 
     Solver::Fluxes_out fluxes_out(
@@ -87,9 +170,10 @@ void Solver::init_python_bindings(py::module_& m)
            const Numpy::In<TF>& secants, const Numpy::In<TF>& weights,
            const Numpy::In<TF>& sfc_emis,
            const std::optional<Numpy::In<TF>>& inc_flux,
-           const std::optional<Numpy::In<TF>>& cloud_tau,
-           const std::optional<Numpy::In<TF>>& cloud_ssa,
-           const std::optional<Numpy::In<TF>>& cloud_g,
+           const Cloud_optics* cloud_optics,
+           const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
+           const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
+           const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool scattering,
            const bool byband, const bool jacobian) -> py::dict
@@ -108,38 +192,50 @@ void Solver::init_python_bindings(py::module_& m)
             const int ncol = static_cast<int>(atm.plev.extent(1));
             const int nbnd = static_cast<int>(k.band_lims_gpt.extent(0));
 
-            Solver::Band_props clouds;
-            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
-            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
-            clouds.g = optional_3d(cloud_g, "cloud_g");
+            // Without scattering the clouds only absorb; with it they are two-stream,
+            // and delta_cloud then decides whether they are delta-scaled.
+            const Cloud_input clouds = upload_clouds(
+                    cloud_optics, clwp, ciwp, reliq, reice, scattering, delta_cloud);
+
+            const auto secants_d = Numpy::to_device_2d<TF>(secants, "secants");
+            const auto weights_d = Numpy::to_device_1d<TF>(weights, "weights");
+            const auto sfc_emis_d = Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis");
+            const auto inc_flux_d = optional_2d(inc_flux, "inc_flux");
 
             const auto fluxes = fluxes_out(nlev, ncol, nbnd, byband, false, jacobian);
 
-            Solver::solve_lw(
-                    k, gas_concs, atm, top_at_1,
-                    Numpy::to_device_2d<TF>(secants, "secants"),
-                    Numpy::to_device_1d<TF>(weights, "weights"),
-                    Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
-                    optional_2d(inc_flux, "inc_flux"),
-                    clouds, scattering, fluxes);
-            Kokkos::fence();
+            const double solve_time = timed([&]
+            {
+                Solver::solve_lw(
+                        k, gas_concs, atm, top_at_1,
+                        secants_d, weights_d, sfc_emis_d, inc_flux_d,
+                        cloud_props(clouds), scattering, fluxes);
+            });
 
-            return fluxes_dict(fluxes);
+            py::dict out = fluxes_dict(fluxes);
+            out["solve_time"] = solve_time;
+            return out;
         },
         py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
         py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("tlev"), py::arg("tsfc"),
         py::arg("secants"), py::arg("weights"), py::arg("sfc_emis"),
-        py::arg("inc_flux") = py::none(), py::arg("cloud_tau") = py::none(),
-        py::arg("cloud_ssa") = py::none(), py::arg("cloud_g") = py::none(),
+        py::arg("inc_flux") = py::none(), py::arg("cloud_optics") = py::none(),
+        py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),
+        py::arg("reliq") = py::none(), py::arg("reice") = py::none(),
+        py::arg("delta_cloud") = true,
         py::arg("col_dry") = py::none(), py::arg("scattering") = false,
         py::arg("byband") = false, py::arg("jacobian") = false,
         "Longwave gas optics, clouds and transport, one g-point at a time. Nothing "
         "allocated here carries a g-point dimension. secants is (nmus, ncol) and "
-        "sfc_emis (ngpt, ncol); cloud_tau, if given, is (nbnd, nlay, ncol). Returns a "
-        "dict with flux_up and flux_dn, plus flux_up_byband / flux_dn_byband when "
-        "byband, and flux_up_jac when jacobian. scattering solves with the two-stream "
-        "solver instead of the quadrature, and then takes cloud_ssa and cloud_g too; "
-        "it has no Jacobian.");
+        "sfc_emis (ngpt, ncol). Clouds, if cloud_optics is given, come from clwp, "
+        "ciwp, reliq and reice, (nlay, ncol) each, and cloud_optics must be a -bnd "
+        "table. Returns a dict with flux_up and flux_dn, plus flux_up_byband / "
+        "flux_dn_byband when byband, flux_up_jac when jacobian, and solve_time. "
+        "scattering solves with the two-stream solver instead of the quadrature, "
+        "and the clouds then scatter too, delta-scaled if delta_cloud; it has no "
+        "Jacobian. "
+        "solve_time is the device time of the clouds, gas optics and transport, in "
+        "seconds, without the copies to and from numpy.");
 
     m.def("solve_sw",
         [](const Kdist_gas& k, const Gas_concs& gas_concs, const bool top_at_1,
@@ -148,9 +244,10 @@ void Solver::init_python_bindings(py::module_& m)
            const Numpy::In<TF>& sfc_alb_dir, const Numpy::In<TF>& sfc_alb_dif,
            const Numpy::In<TF>& inc_flux_dir,
            const std::optional<Numpy::In<TF>>& inc_flux_dif,
-           const std::optional<Numpy::In<TF>>& cloud_tau,
-           const std::optional<Numpy::In<TF>>& cloud_ssa,
-           const std::optional<Numpy::In<TF>>& cloud_g,
+           const Cloud_optics* cloud_optics,
+           const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
+           const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
+           const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool byband) -> py::dict
         {
@@ -166,36 +263,47 @@ void Solver::init_python_bindings(py::module_& m)
             const int ncol = static_cast<int>(atm.plev.extent(1));
             const int nbnd = static_cast<int>(k.band_lims_gpt.extent(0));
 
-            Solver::Band_props clouds;
-            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
-            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
-            clouds.g = optional_3d(cloud_g, "cloud_g");
+            const Cloud_input clouds = upload_clouds(
+                    cloud_optics, clwp, ciwp, reliq, reice, true, delta_cloud);
+
+            const auto mu0_d = Numpy::to_device_2d<TF>(mu0, "mu0");
+            const auto sfc_alb_dir_d = Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir");
+            const auto sfc_alb_dif_d = Numpy::to_device_2d<TF>(sfc_alb_dif, "sfc_alb_dif");
+            const auto inc_flux_dir_d =
+                    Numpy::to_device_2d<TF>(inc_flux_dir, "inc_flux_dir");
+            const auto inc_flux_dif_d = optional_2d(inc_flux_dif, "inc_flux_dif");
 
             const auto fluxes = fluxes_out(nlev, ncol, nbnd, byband, true, false);
 
-            Solver::solve_sw(
-                    k, gas_concs, atm, top_at_1,
-                    Numpy::to_device_2d<TF>(mu0, "mu0"),
-                    Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir"),
-                    Numpy::to_device_2d<TF>(sfc_alb_dif, "sfc_alb_dif"),
-                    Numpy::to_device_2d<TF>(inc_flux_dir, "inc_flux_dir"),
-                    optional_2d(inc_flux_dif, "inc_flux_dif"),
-                    clouds, fluxes);
-            Kokkos::fence();
+            const double solve_time = timed([&]
+            {
+                Solver::solve_sw(
+                        k, gas_concs, atm, top_at_1,
+                        mu0_d, sfc_alb_dir_d, sfc_alb_dif_d, inc_flux_dir_d, inc_flux_dif_d,
+                        cloud_props(clouds), fluxes);
+            });
 
-            return fluxes_dict(fluxes);
+            py::dict out = fluxes_dict(fluxes);
+            out["solve_time"] = solve_time;
+            return out;
         },
         py::arg("kdist"), py::arg("gas_concs"), py::arg("top_at_1"),
         py::arg("play"), py::arg("plev"), py::arg("tlay"), py::arg("mu0"),
         py::arg("sfc_alb_dir"), py::arg("sfc_alb_dif"), py::arg("inc_flux_dir"),
         py::arg("inc_flux_dif") = py::none(),
-        py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
-        py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
+        py::arg("cloud_optics") = py::none(),
+        py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),
+        py::arg("reliq") = py::none(), py::arg("reice") = py::none(),
+        py::arg("delta_cloud") = true,
+        py::arg("col_dry") = py::none(),
         py::arg("byband") = false,
         "Shortwave gas optics, clouds and transport, one g-point at a time. mu0 is "
-        "(nlay, ncol); the boundary conditions are (ngpt, ncol); the cloud properties, "
-        "if given, are (nbnd, nlay, ncol) and already delta-scaled. Returns a dict "
-        "with flux_up, flux_dn and flux_dir, plus the by-band totals when byband.");
+        "(nlay, ncol); the boundary conditions are (ngpt, ncol). Clouds come from "
+        "clwp, ciwp, reliq and reice as for solve_lw, delta-scaled if delta_cloud. "
+        "Returns a dict with flux_up, flux_dn and flux_dir, plus the by-band totals "
+        "when byband, and solve_time. "
+        "solve_time is the device time of the clouds, gas optics and transport, in "
+        "seconds, without the copies to and from numpy.");
 
 
     m.def("solve_lw_rt",
@@ -208,9 +316,10 @@ void Solver::init_python_bindings(py::module_& m)
            const int nx, const int ny, const int nz,
            const TF dx, const TF dy, const TF dz,
            const int photons_per_pixel, const bool independent_column,
-           const std::optional<Numpy::In<TF>>& cloud_tau,
-           const std::optional<Numpy::In<TF>>& cloud_ssa,
-           const std::optional<Numpy::In<TF>>& cloud_g,
+           const Cloud_optics* cloud_optics,
+           const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
+           const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
+           const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool scattering, const bool lump_above,
            const int kn_x, const int kn_y, const int kn_z) -> py::dict
@@ -237,21 +346,25 @@ void Solver::init_python_bindings(py::module_& m)
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
 
-            Solver::Band_props clouds;
-            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
-            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
-            clouds.g = optional_3d(cloud_g, "cloud_g");
+            const Cloud_input clouds = upload_clouds(
+                    cloud_optics, clwp, ciwp, reliq, reice, scattering, delta_cloud);
+
+            const auto sfc_emis_d = Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis");
+            const auto secants_d = Numpy::to_device_2d<TF>(secants, "secants");
+            const auto weights_d = Numpy::to_device_1d<TF>(weights, "weights");
 
             const auto fluxes = Raytracer_lw::Fluxes_lw::make(grid);
 
-            const int traced = Solver::solve_lw_rt(
-                    k, gas_concs, atm, top_at_1, grid,
-                    photons_per_pixel, independent_column,
-                    Numpy::to_device_2d<TF>(sfc_emis, "sfc_emis"),
-                    Numpy::to_device_2d<TF>(secants, "secants"),
-                    Numpy::to_device_1d<TF>(weights, "weights"),
-                    min_mfp_grid_ratio, clouds, scattering, lump_above, fluxes);
-            Kokkos::fence();
+            int traced = 0;
+            const double solve_time = timed([&]
+            {
+                traced = Solver::solve_lw_rt(
+                        k, gas_concs, atm, top_at_1, grid,
+                        photons_per_pixel, independent_column,
+                        sfc_emis_d, secants_d, weights_d,
+                        min_mfp_grid_ratio, cloud_props(clouds), scattering, lump_above,
+                        fluxes);
+            });
 
             py::dict out;
             // Named as rte-rrtmgp-cpp names them in its own output, so that a run
@@ -265,6 +378,7 @@ void Solver::init_python_bindings(py::module_& m)
             out["rt_lw_flux_sfc_up"] = Numpy::from_device(fluxes.sfc_up);
             out["rt_lw_flux_abs"] = Numpy::from_device(fluxes.flux_net);
             out["n_gpt_traced"] = traced;
+            out["solve_time"] = solve_time;
 
             return out;
         },
@@ -276,24 +390,31 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
         py::arg("dx"), py::arg("dy"), py::arg("dz"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
-        py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
-        py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
+        py::arg("cloud_optics") = py::none(),
+        py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),
+        py::arg("reliq") = py::none(), py::arg("reice") = py::none(),
+        py::arg("delta_cloud") = true,
+        py::arg("col_dry") = py::none(),
         py::arg("scattering") = false, py::arg("lump_above") = true,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         "Longwave gas optics, Planck sources, clouds and the Monte Carlo ray tracer, "
         "one g-point at a time. The columns are the tracer's horizontal grid, "
         "ncol = nx*ny with the column index i + j*nx, and layers from nz-1 upward are "
         "lumped into the top cell, their emission included. sfc_emis is (ngpt, ncol). "
-        "cloud_ssa and cloud_g may be omitted, which is a cloud that only absorbs. "
+        "Clouds come from clwp, ciwp, reliq and reice as for solve_lw; without "
+        "scattering they only absorb. "
         "Returns a dict of the surface and top-of-domain fluxes, (ncol) each, and "
         "rt_lw_flux_abs, the absorbed minus emitted flux per unit height, "
         "(nz, ncol) -- the names are rte-rrtmgp-cpp's own -- plus n_gpt_traced, how "
-        "many g-points were actually traced. min_mfp_grid_ratio skips the g-points "
-        "whose gas is opaque within a grid cell and solves those plane-parallel "
-        "instead, which is what secants and weights are for; zero traces everything. "
+        "many g-points were actually traced, and solve_time. min_mfp_grid_ratio skips "
+        "the g-points whose gas is opaque within a grid cell and solves those "
+        "plane-parallel instead, which is what secants and weights are for; zero "
+        "traces everything. "
         "lump_above puts the atmosphere above the box into the box\'s top cell; "
         "without it nz must count only the resolved cells and the air above enters as "
-        "the downward flux a plane-parallel solve of the full column leaves there.");
+        "the downward flux a plane-parallel solve of the full column leaves there. "
+        "solve_time is the device time of the clouds, gas optics and transport, in "
+        "seconds, without the copies to and from numpy.");
 
 
     m.def("solve_sw_rt",
@@ -304,9 +425,10 @@ void Solver::init_python_bindings(py::module_& m)
            const int nx, const int ny, const int nz,
            const TF dx, const TF dy, const TF dz,
            const int photons_per_pixel, const bool independent_column,
-           const std::optional<Numpy::In<TF>>& cloud_tau,
-           const std::optional<Numpy::In<TF>>& cloud_ssa,
-           const std::optional<Numpy::In<TF>>& cloud_g,
+           const Cloud_optics* cloud_optics,
+           const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
+           const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& reice,
+           const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const int kn_x, const int kn_y, const int kn_z) -> py::dict
         {
@@ -330,20 +452,21 @@ void Solver::init_python_bindings(py::module_& m)
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
 
-            Solver::Band_props clouds;
-            clouds.tau = optional_3d(cloud_tau, "cloud_tau");
-            clouds.ssa = optional_3d(cloud_ssa, "cloud_ssa");
-            clouds.g = optional_3d(cloud_g, "cloud_g");
+            const Cloud_input clouds = upload_clouds(
+                    cloud_optics, clwp, ciwp, reliq, reice, true, delta_cloud);
+
+            const auto toa_src_h = Numpy::to_host_1d<TF>(toa_src, "toa_src");
+            const auto sfc_alb_dir_d = Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir");
 
             const auto fluxes = Raytracer::Fluxes_rt::make(grid);
 
-            Solver::solve_sw_rt(
-                    k, gas_concs, atm, top_at_1, grid,
-                    photons_per_pixel, independent_column, mu0, azi,
-                    Numpy::to_host_1d<TF>(toa_src, "toa_src"),
-                    Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir"),
-                    clouds, fluxes);
-            Kokkos::fence();
+            const double solve_time = timed([&]
+            {
+                Solver::solve_sw_rt(
+                        k, gas_concs, atm, top_at_1, grid,
+                        photons_per_pixel, independent_column, mu0, azi,
+                        toa_src_h, sfc_alb_dir_d, cloud_props(clouds), fluxes);
+            });
 
             py::dict out;
             out["rt_flux_tod_dn"] = Numpy::from_device(fluxes.tod_dn);
@@ -353,6 +476,7 @@ void Solver::init_python_bindings(py::module_& m)
             out["rt_flux_sfc_up"] = Numpy::from_device(fluxes.sfc_up);
             out["rt_flux_abs_dir"] = Numpy::from_device(fluxes.abs_dir);
             out["rt_flux_abs_dif"] = Numpy::from_device(fluxes.abs_dif);
+            out["solve_time"] = solve_time;
 
             return out;
         },
@@ -363,13 +487,19 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
         py::arg("dx"), py::arg("dy"), py::arg("dz"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
-        py::arg("cloud_tau") = py::none(), py::arg("cloud_ssa") = py::none(),
-        py::arg("cloud_g") = py::none(), py::arg("col_dry") = py::none(),
+        py::arg("cloud_optics") = py::none(),
+        py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),
+        py::arg("reliq") = py::none(), py::arg("reice") = py::none(),
+        py::arg("delta_cloud") = true,
+        py::arg("col_dry") = py::none(),
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         "Shortwave gas optics, clouds and the Monte Carlo ray tracer, one g-point at a "
         "time. The columns are the tracer's horizontal grid, ncol = nx*ny with the "
         "column index i + j*nx, and layers from nz-1 upward are lumped into the top "
         "cell. The sun is one direction for the whole domain; toa_src is (ngpt) and "
         "sfc_alb_dir (ngpt, ncol). Returns a dict of the surface and top-of-domain "
-        "fluxes, (ncol) each, and the absorbed flux per unit height, (nz, ncol).");
+        "fluxes, (ncol) each, the absorbed flux per unit height, (nz, ncol), and "
+        "solve_time. Clouds come from clwp, ciwp, reliq and reice as for solve_sw. "
+        "solve_time is the device time of the clouds, gas optics and transport, in "
+        "seconds, without the copies to and from numpy.");
 }

@@ -254,6 +254,7 @@ def test_generated_case_solves(rte3d, tmp_path):
 
         solve = solve_lw if band == 'lw' else solve_sw
         out = solve(rte3d, kdist, gas_concs, atm, gpoint_bands(f))
+        assert out.pop('solve_time') > 0.0
 
         # Every column holds the same profile, so every column gets the same flux.
         for flux in out.values():

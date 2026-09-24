@@ -196,26 +196,18 @@ def expand_bands(per_band, gpt_band):
     return np.ascontiguousarray(per_band[gpt_band])
 
 
-def cloud_props(rte3d, cloud_optics, atm, two_stream, delta_scale=True):
-    """Cloud optics for the case, band-resolved.
+def cloud_args(cloud_optics, atm):
+    """The clouds as the solvers take them: the coefficient tables and the case's water
+    paths and particle sizes. The solvers compute the optical properties themselves, on
+    the device, so they never pass through numpy.
 
-    The solvers take the cloud properties by band, so the coefficient file has to be a
-    -bnd one. Longwave clouds are absorption only; shortwave ones are delta-scaled
-    before they are added, as the reference driver does.
+    The coefficient file has to be a -bnd one, since the properties are by band.
     """
-    if not two_stream:
-        return dict(cloud_tau=rte3d.cloud_optics(
-            cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-            reliq=atm['rel'], reice=atm['dei'], two_stream=False))
+    if cloud_optics is None:
+        return {}
 
-    tau, ssa, g = rte3d.cloud_optics(
-        cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-        reliq=atm['rel'], reice=atm['dei'])
-
-    if delta_scale:
-        tau, ssa, g = rte3d.delta_scale_2str(tau, ssa, g)
-
-    return dict(cloud_tau=tau, cloud_ssa=ssa, cloud_g=g)
+    return dict(cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
+                reliq=atm['rel'], reice=atm['dei'])
 
 
 def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
@@ -226,10 +218,10 @@ def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
     as an optical depth alone. With it the two-stream solver takes over and clouds keep
     their single-scattering albedo and asymmetry, which is what lw-scattering selects
     in rte-rrtmgp-cpp's ini files; delta scaling then applies to them, as it does there.
+
+    Besides the fluxes, the dict holds solve_time: the solver's own device time, which
+    leaves out the copies to and from numpy, as rte-rrtmgp-cpp's timer does.
     """
-    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering,
-                          delta_cloud and scattering)
-              if cloud_optics else {})
 
     return rte3d.solve_lw(
         kdist, gas_concs, atm['top_at_1'],
@@ -237,7 +229,8 @@ def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,
         secants=np.full((1, atm['ncol']), LW_SECANT),
         weights=np.array([1.0]),
         sfc_emis=expand_bands(atm['sfc_emis'], gpt_band),
-        col_dry=atm.get('col_dry'), byband=byband, scattering=scattering, **clouds)
+        col_dry=atm.get('col_dry'), byband=byband, scattering=scattering,
+        delta_cloud=delta_cloud, **cloud_args(cloud_optics, atm))
 
 
 def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
@@ -246,11 +239,8 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
     Night-time columns -- those with mu0 at or below zero -- are solved with mu0 = 1
     and zeroed afterwards, as the reference drivers do; their fluxes are meaningless
-    rather than wrong.
+    rather than wrong. solve_time is as for solve_lw.
     """
-    clouds = (cloud_props(rte3d, cloud_optics, atm, True, delta_cloud)
-              if cloud_optics else {})
-
     ngpt, ncol, nlay = kdist.ngpt, atm['ncol'], atm['nlay']
 
     daytime = atm['mu0'] > 0.0
@@ -266,10 +256,12 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
         sfc_alb_dir=expand_bands(atm['sfc_alb_dir'], gpt_band),
         sfc_alb_dif=expand_bands(atm['sfc_alb_dif'], gpt_band),
         inc_flux_dir=np.ascontiguousarray(toa),
-        col_dry=atm.get('col_dry'), byband=byband, **clouds)
+        col_dry=atm.get('col_dry'), byband=byband, delta_cloud=delta_cloud,
+        **cloud_args(cloud_optics, atm))
 
     for name, flux in out.items():
-        flux[..., ~daytime] = 0.0
+        if name.startswith('flux'):
+            flux[..., ~daytime] = 0.0
 
     return out
 
@@ -307,10 +299,6 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
             'the input file. cases/make_input.py writes them.')
 
-    clouds = (cloud_props(rte3d, cloud_optics, atm, scattering,
-                          delta_cloud and scattering)
-              if cloud_optics else {})
-
     grid = dict(atm['grid'])
     if not lump_above:
         grid['nz'] = atm['nz_resolved']
@@ -325,8 +313,8 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         scattering=scattering,
         lump_above=lump_above,
         photons_per_pixel=photons_per_pixel,
-        independent_column=independent_column,
-        col_dry=atm.get('col_dry'), **grid, **clouds)
+        independent_column=independent_column, delta_cloud=delta_cloud,
+        col_dry=atm.get('col_dry'), **grid, **cloud_args(cloud_optics, atm))
 
 
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
@@ -344,9 +332,6 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
             'the input file. cases/make_input.py writes them.')
 
-    clouds = (cloud_props(rte3d, cloud_optics, atm, True, delta_cloud)
-              if cloud_optics else {})
-
     solar = np.array(kdist.solar_source, dtype=np.float64)
     toa_src = solar*scaling(kdist, atm)[0]
 
@@ -359,7 +344,8 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         toa_src=toa_src,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,
-        col_dry=atm.get('col_dry'), **atm['grid'], **clouds)
+        delta_cloud=delta_cloud,
+        col_dry=atm.get('col_dry'), **atm['grid'], **cloud_args(cloud_optics, atm))
 
 
 def scaling(kdist, atm):

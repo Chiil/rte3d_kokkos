@@ -247,7 +247,11 @@ def test_rcemip_runs_every_solver(rcemip):
     atm, out = rcemip
 
     for name in ('sw_2str', 'lw_noscat', 'lw_2str'):
-        for flux in out[name].values():
+        assert out[name]['solve_time'] > 0.0
+        for key, flux in out[name].items():
+            if key == 'solve_time':
+                continue
+
             assert flux.shape == (atm['nlev'], atm['ncol'])
             assert np.all(np.isfinite(flux))
             assert np.all(flux >= 0.0)
@@ -292,7 +296,7 @@ def test_rcemip_uniform_field_makes_the_tracers_agree(rcemip, rte3d, band):
     rtol = permutation_rtol(rte3d)
 
     for name, flux in icol.items():
-        if name == 'n_gpt_traced':
+        if name in ('n_gpt_traced', 'solve_time'):
             continue
 
         scale = np.abs(np.asarray(flux)).max()
