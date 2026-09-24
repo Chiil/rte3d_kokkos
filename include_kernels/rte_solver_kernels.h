@@ -353,8 +353,29 @@ namespace Rte_kernels
     }
 
 
+    // 2*exp(-x)*(sinh(x) - x) = 1 - exp(-2x) - 2x*exp(-x) for x >= 0, given exp(-x)
+    // and 1 - exp(-2x). The right-hand side cancels to O(x^3) for thin layers, so there
+    // use the Taylor series of sinh(x) - x instead; it is truncated after x^15, which
+    // at x = 0.5 leaves a relative error below double-precision epsilon.
+    KOKKOS_INLINE_FUNCTION
+    TF two_exp_sinh_minus_x(const TF x, const TF exp_minusx, const TF one_minus_exp_minus2x)
+    {
+        if (x < TF(0.5))
+        {
+            const TF x2 = x*x;
+            const TF series = TF(1.) + x2*(TF(1./20.) + x2*(TF(1./840.) + x2*(TF(1./60480.)
+                    + x2*(TF(1./6652800.) + x2*(TF(1./1037836800.) + x2*TF(1./217945728000.))))));
+            return TF(2.) * exp_minusx * x2*x * TF(1./6.) * series;
+        }
+        else
+            return one_minus_exp_minus2x - TF(2.) * x * exp_minusx;
+    }
+
+
     // Longwave two-stream diffuse reflectance and transmittance for a layer, plus the
-    // coupling coefficients the source function needs. Reference: lw_two_stream.
+    // two coefficients of its source function (see lw_source_2str): the diffuse
+    // absorptance 1 - Rdif - Tdif, and the weight of the Planck gradient across the
+    // layer. Reference: lw_two_stream.
     //
     // The coefficients differ from the shortwave because the phase function is more
     // isotropic; we follow Fu et al. 1997,
@@ -363,7 +384,7 @@ namespace Rte_kernels
     KOKKOS_INLINE_FUNCTION
     void lw_two_stream(
             const TF tau, const TF w0, const TF g,
-            TF& gamma1, TF& gamma2, TF& Rdif, TF& Tdif)
+            TF& Rdif, TF& Tdif, TF& absorptance, TF& source_gradient)
     {
         // The reference writes this as `real(wp), parameter :: LW_diff_sec = 1.66`.
         // The literal has default (single) real kind and is only then promoted, so its
@@ -371,13 +392,16 @@ namespace Rte_kernels
         // it exactly rather than "fix" it, or every comparison drifts by that much.
         constexpr TF lw_diff_sec = static_cast<TF>(1.66f);
 
-        gamma1 = lw_diff_sec * (TF(1.) - TF(0.5) * w0 * (TF(1.) + g));  // Fu et al. Eq 2.9
-        gamma2 = lw_diff_sec *           TF(0.5) * w0 * (TF(1.) - g);   // Fu et al. Eq 2.10
+        const TF gamma1 = lw_diff_sec * (TF(1.) - TF(0.5) * w0 * (TF(1.) + g));  // Fu et al. Eq 2.9
+        const TF gamma2 = lw_diff_sec *           TF(0.5) * w0 * (TF(1.) - g);   // Fu et al. Eq 2.10
 
-        // Eq 18; k = sqrt(gamma1^2 - gamma2^2). gamma1 - gamma2 is exactly
-        // lw_diff_sec*(1 - w0); written so, it does not cancel as w0 -> 1.
-        const TF k = Kokkos::sqrt(Kokkos::max(
-                lw_diff_sec * (TF(1.) - w0) * (gamma1 + gamma2), min_k()));
+        // gamma1 - gamma2 is exactly lw_diff_sec*(1 - w0); written so, it does not
+        // cancel as w0 -> 1.
+        const TF gamma1_minus_gamma2 = lw_diff_sec * (TF(1.) - w0);
+        const TF gamma1_plus_gamma2 = gamma1 + gamma2;
+
+        // Eq 18; k = sqrt(gamma1^2 - gamma2^2).
+        const TF k = Kokkos::sqrt(Kokkos::max(gamma1_minus_gamma2 * gamma1_plus_gamma2, min_k()));
 
         TF exp_minusktau, one_minus_exp_minusktau;
         exp_and_one_minus_exp(k*tau, exp_minusktau, one_minus_exp_minusktau);
@@ -390,6 +414,17 @@ namespace Rte_kernels
 
         Rdif = RT_term * gamma2 * one_minus_exp_minus2ktau;  // Eq 25
         Tdif = RT_term * TF(2.) * k * exp_minusktau;         // Eq 26
+
+        // 1 - Rdif - Tdif, with the 1 cancelled analytically.
+        const TF k_one_minus_e1_sq = k * one_minus_exp_minusktau * one_minus_exp_minusktau;
+        absorptance = RT_term * (k_one_minus_e1_sq + gamma1_minus_gamma2 * one_minus_exp_minus2ktau);
+
+        // (1 + Rdif - Tdif)/(tau*(gamma1 + gamma2)) - Tdif, likewise; its two terms each
+        // tend to 1 as tau -> 0. Zero for tau = 0, where it is 0/0.
+        source_gradient = tau > TF(0.)
+            ? RT_term * (k_one_minus_e1_sq / gamma1_plus_gamma2
+                         + two_exp_sinh_minus_x(k*tau, exp_minusktau, one_minus_exp_minus2ktau)) / tau
+            : TF(0.);
     }
 
 
@@ -399,28 +434,22 @@ namespace Rte_kernels
     //
     // lev_source_top and lev_source_bot are the Planck sources at the levels above and
     // below the layer: ilay + lev_up() and ilay + lev_dn().
+    //
+    // The reference forms Z = (B_bot - B_top)/(tau*(gamma1 + gamma2)) and then
+    // differences of terms of size Z, whose rounding error grows like eps/tau; it gives
+    // up below tau = 1e-8 and returns zero. Collecting terms instead gives
+    //   source_up/pi = B_top*(1 - R - T) + (B_bot - B_top)*G
+    //   source_dn/pi = B_bot*(1 - R - T) - (B_bot - B_top)*G
+    // with the absorptance 1 - R - T and the gradient weight G from lw_two_stream,
+    // which computes both without cancellation.
     KOKKOS_INLINE_FUNCTION
     void lw_source_2str(
             const TF lev_source_top, const TF lev_source_bot,
-            const TF gamma1, const TF gamma2, const TF rdif, const TF tdif, const TF tau,
+            const TF absorptance, const TF source_gradient,
             TF& source_up, TF& source_dn)
     {
-        if (tau > TF(1.0e-8))
-        {
-            const TF Z = (lev_source_bot - lev_source_top) / (tau * (gamma1 + gamma2));
-
-            const TF Zup_top    =  Z + lev_source_top;
-            const TF Zup_bottom =  Z + lev_source_bot;
-            const TF Zdn_top    = -Z + lev_source_top;
-            const TF Zdn_bottom = -Z + lev_source_bot;
-
-            source_up = pi * (Zup_top    - rdif * Zdn_top    - tdif * Zup_bottom);
-            source_dn = pi * (Zdn_bottom - rdif * Zup_bottom - tdif * Zdn_top);
-        }
-        else
-        {
-            source_up = TF(0.);
-            source_dn = TF(0.);
-        }
+        const TF gradient_term = (lev_source_bot - lev_source_top) * source_gradient;
+        source_up = pi * (lev_source_top * absorptance + gradient_term);
+        source_dn = pi * (lev_source_bot * absorptance - gradient_term);
     }
 }

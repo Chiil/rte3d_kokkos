@@ -127,15 +127,55 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1, nmus):
 def tau_min_2stream(rte3d):
     """The thinnest layer the two-stream comparisons against the reference draw.
 
-    lw_source_2str forms Z = (B_bot - B_top)/(tau*(gamma1 + gamma2)) and then differences
-    of terms of size Z, so its rounding error grows like epsilon/tau. Its cut-off at
-    tau = 1e-8 is a double-precision one. In single precision, at tau ~ 1e-6, the
-    reference and rte3d are both tens of W/m2 off their double-precision answers, and
-    what separates them is one ulp -- from an exp, say -- amplified by that. They
-    agree to SINGLE_RTOL from tau = 0.1 up, so single precision compares there; double
-    keeps the whole range.
+    The reference's lw_source_2str forms Z = (B_bot - B_top)/(tau*(gamma1 + gamma2))
+    and then differences of terms of size Z, so its rounding error grows like
+    epsilon/tau: in single precision, at tau ~ 1e-6, it is tens of W/m2 off its
+    double-precision answer. rte3d collects terms instead and is not, so single
+    precision compares against the reference only from tau = 0.1 up; double keeps the
+    whole range. test_2stream_source_thin_layers covers thin layers in single precision.
     """
     return 1e-1 if rte3d.runtime().precision == 'single' else 1e-6
+
+
+def toon_source(lev_source_top, lev_source_bot, tau, w0, g):
+    """The reference's two-stream source, Toon et al. Eqs 26-27, in float64."""
+    c = float(np.float32(1.66))
+    gamma1 = c*(1.0 - 0.5*w0*(1.0 + g))
+    gamma2 = c*0.5*w0*(1.0 - g)
+    k = np.sqrt((gamma1 - gamma2)*(gamma1 + gamma2))
+    e1 = np.exp(-k*tau)
+    rt = 1.0/(k*(1.0 + e1**2) + gamma1*(1.0 - e1**2))
+    rdif, tdif = rt*gamma2*(1.0 - e1**2), rt*2.0*k*e1
+    z = (lev_source_bot - lev_source_top)/(tau*(gamma1 + gamma2))
+    up = (z + lev_source_top) - rdif*(-z + lev_source_top) - tdif*(z + lev_source_bot)
+    dn = (-z + lev_source_bot) - rdif*(z + lev_source_bot) - tdif*(-z + lev_source_top)
+    return np.pi*up, np.pi*dn
+
+
+def test_2stream_source_thin_layers(rte3d):
+    """One layer over a black surface with no incoming flux and no surface source: the
+    fluxes leaving it are its two source terms. Checked down to tau = 1e-6 against
+    toon_source in float64, whose own error there is ~1e-8 W/m2."""
+    single = rte3d.runtime().precision == 'single'
+    rnd = (lambda x: np.asarray(x, np.float32).astype(np.float64)) if single else np.asarray
+
+    rng = np.random.default_rng(15)
+    n = 200
+    tau = rnd(10.0**rng.uniform(-6.0, 2.0, n))
+    w0 = rnd(rng.uniform(0.0, 0.999, n))
+    g = rnd(rng.uniform(0.0, 1.0, n))
+    lev_source = rnd(rng.uniform(0.0, 100.0, (2, n)))
+
+    flux_up, flux_dn = rte3d.lw_solver_2stream(
+        True, tau=tau.reshape(1, 1, n), ssa=w0.reshape(1, 1, n), g=g.reshape(1, 1, n),
+        lay_source=np.zeros((1, 1, n)), lev_source=lev_source.reshape(1, 2, n),
+        sfc_emis=np.ones((1, n)), sfc_source=np.zeros((1, n)), inc_flux=np.zeros((1, n)))
+
+    up, dn = toon_source(lev_source[0], lev_source[1], tau, w0, g)
+
+    atol = 1e-3 if single else 1e-7
+    np.testing.assert_allclose(flux_up[0, 0], up, rtol=0.0, atol=atol, err_msg='source_up')
+    np.testing.assert_allclose(flux_dn[0, 1], dn, rtol=0.0, atol=atol, err_msg='source_dn')
 
 
 def random_2stream_inputs(ngpt, nlay, ncol, seed=0, tau_min=1e-6):

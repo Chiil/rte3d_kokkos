@@ -283,10 +283,10 @@ namespace
             {
                 const TF tau_l = tau(ilay, icol);
 
-                TF gamma1, gamma2, Rdif_l, Tdif_l;
+                TF Rdif_l, Tdif_l, absorptance, source_gradient;
                 Rte_kernels::lw_two_stream(
                         tau_l, ssa(ilay, icol), g(ilay, icol),
-                        gamma1, gamma2, Rdif_l, Tdif_l);
+                        Rdif_l, Tdif_l, absorptance, source_gradient);
 
                 Rdif(ilay, icol) = Rdif_l;
                 Tdif(ilay, icol) = Tdif_l;
@@ -295,7 +295,7 @@ namespace
                 Rte_kernels::lw_source_2str(
                         lev_source(ilay + V::lev_up(), icol),
                         lev_source(ilay + V::lev_dn(), icol),
-                        gamma1, gamma2, Rdif_l, Tdif_l, tau_l,
+                        absorptance, source_gradient,
                         source_up_l, source_dn_l);
 
                 source_up(ilay, icol) = source_up_l;
