@@ -41,6 +41,29 @@ def random_inputs(ngpt, nlay, ncol, seed=0, conservative=False, night=False):
     )
 
 
+def away_from_resonance(rte3d, a):
+    """(ngpt, ncol) mask of the columns to compare against the reference.
+
+    In single precision the reference loses the direct-beam terms near k*mu0 = 1,
+    where rte3d interpolates across the singularity instead (test_2stream_near_resonance
+    checks that against the exact value). So single precision leaves out the columns
+    with any layer within twice rte3d's interpolation window of it; double keeps them all.
+    """
+    w0, g = a['ssa'], a['g']
+    if rte3d.runtime().precision != 'single':
+        return np.ones((w0.shape[0], w0.shape[2]), dtype=bool)
+    gamma1 = (8.0 - w0*(5.0 + 3.0*g))/4.0
+    gamma2 = 3.0*w0*(1.0 - g)/4.0
+    k = np.sqrt((gamma1 - gamma2)*(gamma1 + gamma2))
+    window = 2.0*np.cbrt(np.finfo(np.float32).eps)
+    return ~(np.abs(k*a['mu0'][None] - 1.0) < window).any(axis=1)
+
+
+def columns(flux, keep):
+    """The kept (gpt, col) columns of a (ngpt, nlev, ncol) flux, as (n, nlev)."""
+    return np.moveaxis(flux, 1, 2)[keep]
+
+
 @pytest.mark.parametrize('top_at_1', [True, False])
 @pytest.mark.parametrize('ngpt,nlay,ncol', SHAPES)
 def test_noscat_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol):
@@ -59,11 +82,12 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
 
     expected = fortran_ref.sw_solver_2stream(top_at_1, **a)
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
+    keep = away_from_resonance(rte3d, a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn', 'flux_dir'), expected, actual):
         assert_close(
-            act,
-            exp,
+            columns(act, keep),
+            columns(exp, keep),
             rtol=tolerance(rte3d),
             err_msg=f'{name} differs from the reference')
 
@@ -75,9 +99,10 @@ def test_2stream_matches_reference_with_diffuse_bc(rte3d, fortran_ref, top_at_1)
 
     expected = fortran_ref.sw_solver_2stream(top_at_1, **a)
     actual = rte3d.sw_solver_2stream(top_at_1, **a)
+    keep = away_from_resonance(rte3d, a)
 
     for exp, act in zip(expected, actual):
-        assert_close(act, exp, rtol=tolerance(rte3d))
+        assert_close(columns(act, keep), columns(exp, keep), rtol=tolerance(rte3d))
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
@@ -147,3 +172,72 @@ def test_conservative_scattering_conserves_energy(rte3d, top_at_1):
     net = flux_dn - flux_up
     expected = np.broadcast_to(net[:, :1, :], net.shape)
     np.testing.assert_allclose(net, expected, rtol=2e-3, atol=1e-8)
+
+
+def meador_weaver(tau, w0, g, mu0):
+    """Rdir and Tdir of one layer, Eqs 14-15, in float64 and without the resonance
+    guard. Only valid away from k*mu0 = 1."""
+    gamma1 = (8.0 - w0*(5.0 + 3.0*g))/4.0
+    gamma2 = 3.0*w0*(1.0 - g)/4.0
+    gamma3 = (2.0 - 3.0*mu0*g)/4.0
+    gamma4 = 1.0 - gamma3
+    alpha1 = gamma1*gamma4 + gamma2*gamma3
+    alpha2 = gamma1*gamma3 + gamma2*gamma4
+    k = np.sqrt((gamma1 - gamma2)*(gamma1 + gamma2))
+    e1, e2, t = np.exp(-k*tau), np.exp(-2.0*k*tau), np.exp(-tau/mu0)
+    rt = w0/((1.0 - k*mu0)*(1.0 + k*mu0)*(k*(1.0 + e2) + gamma1*(1.0 - e2)))
+    rdir = rt*((1.0 - k*mu0)*(alpha2 + k*gamma3) - (1.0 + k*mu0)*(alpha2 - k*gamma3)*e2
+               - 2.0*(k*gamma3 - alpha2*k*mu0)*e1*t)
+    tdir = -rt*((1.0 + k*mu0)*(alpha1 + k*gamma4)*t - (1.0 - k*mu0)*(alpha1 - k*gamma4)*e2*t
+                - 2.0*(k*gamma4 + alpha1*k*mu0)*e1)
+    return rdir, tdir
+
+
+@pytest.mark.parametrize('w0,g,tau', [(0.5, 0.5, 1.0), (0.9, 0.2, 0.3), (0.99, 0.85, 0.05)])
+def test_2stream_near_resonance(rte3d, w0, g, tau):
+    """Rdir and Tdir stay accurate as k*mu0 -> 1, where Eqs 14-15 are 0/0.
+
+    The reference replaces a denominator below eps with +eps; in single precision that
+    loses Rdir and Tdir entirely within ~1e-7 of resonance, errors up to 0.2 of the
+    incoming flux. The oracle is the float64 formula.
+    """
+    single = rte3d.runtime().precision == 'single'
+    rnd = (lambda x: np.asarray(x, np.float32).astype(np.float64)) if single else np.asarray
+    w0, g, tau = rnd(w0), rnd(g), rnd(tau)
+    gamma1 = (8.0 - w0*(5.0 + 3.0*g))/4.0
+    gamma2 = 3.0*w0*(1.0 - g)/4.0
+    k = np.sqrt((gamma1 - gamma2)*(gamma1 + gamma2))
+
+    delta = np.concatenate([-np.logspace(-1, -9, 33), [0.0], np.logspace(-9, -1, 33)])
+    mu0 = rnd((1.0 + delta)/k)
+    n = mu0.size
+
+    flux_up, flux_dn, flux_dir = rte3d.sw_solver_2stream(
+        True, tau=np.full((1, 1, n), tau), ssa=np.full((1, 1, n), w0), g=np.full((1, 1, n), g),
+        mu0=mu0.reshape(1, n), sfc_alb_dir=np.zeros((1, n)), sfc_alb_dif=np.zeros((1, n)),
+        inc_flux_dir=np.ones((1, n)))
+
+    # Across resonance, where the formula is 0/0 in float64 too, interpolate linearly
+    # between points h either side; that costs O(h^2).
+    h = 1e-4
+    x = k*mu0 - 1.0
+    near = np.abs(x) < h
+    rdir, tdir = meador_weaver(tau, w0, g, np.where(near, 0.5/k, mu0))
+    r_lo, t_lo = meador_weaver(tau, w0, g, (1.0 - h)/k)
+    r_hi, t_hi = meador_weaver(tau, w0, g, (1.0 + h)/k)
+    frac = (x + h)/(2.0*h)
+    rdir = np.where(near, r_lo + frac*(r_hi - r_lo), rdir)
+    tdir = np.where(near, t_lo + frac*(t_hi - t_lo), tdir)
+
+    # The kernel's energy budget clamp.
+    tnoscat = np.exp(-tau/mu0)
+    rdir = np.clip(rdir, 0.0, 1.0 - tnoscat)
+    tdir = np.clip(tdir, 0.0, 1.0 - tnoscat - rdir)
+
+    # The solver scales the incoming direct flux by mu0.
+    rdir, tdir = mu0*rdir, mu0*tdir
+
+    atol = 1e-3 if single else 1e-7
+    np.testing.assert_allclose(flux_up[0, 0], rdir, rtol=0.0, atol=atol, err_msg='Rdir')
+    np.testing.assert_allclose(flux_dn[0, 1] - flux_dir[0, 1], tdir, rtol=0.0, atol=atol,
+                               err_msg='Tdir')
