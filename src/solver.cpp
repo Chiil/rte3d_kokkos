@@ -1,4 +1,5 @@
 #include <stdexcept>
+#include <type_traits>
 
 #include "fluxes.h"
 #include "gas_optics.h"
@@ -172,6 +173,38 @@ void Solver::gas_optics_sw_gpt(
 }
 
 
+namespace
+{
+    // The clouds of one band into one g-point's longwave gas optics, in place.
+    // Without scattering the clouds only absorb: the solver cannot deflect anything,
+    // so they enter as an optical depth and nothing else. With it the gas still only
+    // absorbs, so its single-scattering albedo and asymmetry are zero and the cloud's
+    // survive the combination unchanged. Zeroed rather than special-cased so that the
+    // same tested increment the shortwave uses does the work here too.
+    void add_clouds_lw(
+            const Solver::Solve_state& state, const Solver::Cloud_band& clouds,
+            const bool scattering)
+    {
+        const bool cloudy = clouds.tau.size() > 0;
+
+        if (!scattering)
+        {
+            if (cloudy)
+                Optical_props::increment_1scalar_by_1scalar(state.tau, clouds.tau);
+
+            return;
+        }
+
+        Kokkos::deep_copy(state.ssa, TF(0.));
+        Kokkos::deep_copy(state.g, TF(0.));
+
+        if (cloudy)
+            Optical_props::increment_2stream_by_2stream(
+                    state.tau, state.ssa, state.g, clouds.tau, clouds.ssa, clouds.g);
+    }
+}
+
+
 void Solver::solve_lw_gpt(
         const Kdist_gas& k,
         const Solve_state& state,
@@ -193,33 +226,16 @@ void Solver::solve_lw_gpt(
             k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
             state.sources(), state.pfrac);
 
-    const auto cloud_tau = clouds.tau;
+    add_clouds_lw(state, clouds, scattering);
 
     if (!scattering)
     {
-        // Clouds are absorption-only on this path: the solver cannot deflect anything,
-        // so they enter as an optical depth and nothing else.
-        if (cloud_tau.size() > 0)
-            Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
-
         Rte_lw::solver_noscat(
                 top_at_1, secants, weights, state.tau, state.sources(), sfc_emis,
                 inc_flux, flux_up, flux_dn, flux_up_jac, state.lw_noscat);
 
         return;
     }
-
-    // With scattering the gas still only absorbs, so its single-scattering albedo and
-    // asymmetry are zero and the cloud's survive the combination unchanged. Zeroed
-    // rather than special-cased so that the same tested increment the shortwave uses
-    // does the work here too.
-    Kokkos::deep_copy(state.ssa, TF(0.));
-    Kokkos::deep_copy(state.g, TF(0.));
-
-    if (cloud_tau.size() > 0)
-        Optical_props::increment_2stream_by_2stream(
-                state.tau, state.ssa, state.g,
-                cloud_tau, clouds.ssa, clouds.g);
 
     Rte_lw::solver_2stream(
             top_at_1, state.tau, state.ssa, state.g, state.sources(), sfc_emis,
@@ -295,13 +311,8 @@ namespace
         ibnd_now = ibnd;
     }
 
-    void zero(const Array_2d<TF>& a)
-    {
-        if (a.size() > 0)
-            Kokkos::deep_copy(a, TF(0.));
-    }
-
-    void zero(const Array_3d<TF>& a)
+    template<typename View>
+    void zero(const View& a)
     {
         if (a.size() > 0)
             Kokkos::deep_copy(a, TF(0.));
@@ -593,6 +604,15 @@ int Solver::solve_lw_rt(
     const int nz = grid.nz;
     const int lay_off = top_at_1 ? nlay - nz : 0;
 
+    // The box's rows of a layer or level array; an empty array, as absent clouds are,
+    // stays empty.
+    const auto box = [=](const auto& v, const int rows)
+    {
+        using T = typename std::decay_t<decltype(v)>::value_type;
+        return v.size() > 0 ? Array_map_2d<T>(v.data() + lay_off*ncol, rows, ncol)
+                            : Array_map_2d<T>();
+    };
+
     // An atmosphere deeper than the box, with the caller asking for it to stay outside
     // rather than be lumped into the box's top cell. Every g-point is then solved
     // plane-parallel over the full column first, and what that solve leaves coming
@@ -601,6 +621,10 @@ int Solver::solve_lw_rt(
 
     // The level where the box ends, in the full column's own numbering.
     const int lev_box_top = top_at_1 ? nlay - nz : nz;
+
+    // The plane-parallel solves write their g-point's fluxes and nothing else.
+    const Flux_sink up{state.flux_up};
+    const Flux_sink dn{state.flux_dn};
 
     fluxes.zero();
 
@@ -650,10 +674,7 @@ int Solver::solve_lw_rt(
         {
             solve_lw_gpt(k, state, atm, top_at_1, igpt, secants, weights,
                          slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
-                         cloud, scattering,
-                         Flux_sink{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()},
-                         Flux_sink{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()},
-                         Array_2d<TF>());
+                         cloud, scattering, up, dn, Array_2d<TF>());
 
             // That solve incremented the clouds into the optical depth, and the tracer
             // takes the two apart: it has to know which of gas and cloud deflected a
@@ -686,12 +707,7 @@ int Solver::solve_lw_rt(
             // Only the box's own layers are handed over when the air above stays
             // outside, so that the tracer has nothing left to lump.
             const auto box_rows = [=](const Array_map_2d<const TF>& v)
-            {
-                if (!truncate || v.size() == 0)
-                    return v;
-
-                return Array_map_2d<const TF>(v.data() + lay_off*ncol, nz, ncol);
-            };
+            { return truncate ? box(v, nz) : v; };
 
             Raytracer_lw::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
@@ -709,30 +725,13 @@ int Solver::solve_lw_rt(
             // would have covered.
             Raytracer_lw::add_plane_parallel(
                     grid, top_at_1, nz, false,
-                    Array_map_2d<const TF>(state.flux_up.data() + lay_off*ncol, nz + 1, ncol),
-                    Array_map_2d<const TF>(state.flux_dn.data() + lay_off*ncol, nz + 1, ncol),
-                    fluxes);
+                    box(state.flux_up, nz + 1), box(state.flux_dn, nz + 1), fluxes);
         }
         else
         {
             // Opaque within a cell: solve the column instead, with whichever solver a
             // plane-parallel run of this case would have used.
-            const auto cloud_tau = cloud.tau;
-            const Flux_sink up{state.flux_up, Array_map_2d<TF>(), Array_map_2d<TF>()};
-            const Flux_sink dn{state.flux_dn, Array_map_2d<TF>(), Array_map_2d<TF>()};
-
-            if (scattering)
-            {
-                Kokkos::deep_copy(state.ssa, TF(0.));
-                Kokkos::deep_copy(state.g, TF(0.));
-
-                if (cloud_tau.size() > 0)
-                    Optical_props::increment_2stream_by_2stream(
-                            state.tau, state.ssa, state.g, cloud_tau,
-                            cloud.ssa, cloud.g);
-            }
-            else if (cloud_tau.size() > 0)
-                Optical_props::increment_1scalar_by_1scalar(state.tau, cloud_tau);
+            add_clouds_lw(state, cloud, scattering);
 
             // Clouds first, then the collapse, so that what weights the lumped Planck
             // source is the total absorption -- the same quantity bundle_emission
@@ -743,22 +742,19 @@ int Solver::solve_lw_rt(
                                      state.tau, state.ssa, state.g,
                                      state.lay_source, state.lev_source);
 
-            const auto box_2d = [=](const Array_map_2d<TF>& v, const int rows)
-            { return Array_map_2d<TF>(v.data() + lay_off*ncol, rows, ncol); };
-
             const Source_func_lw box_sources{
-                    box_2d(state.lay_source, nz), box_2d(state.lev_source, nz + 1),
+                    box(state.lay_source, nz), box(state.lev_source, nz + 1),
                     state.sfc_source, Array_map_1d<TF>()};
 
             if (scattering)
                 Rte_lw::solver_2stream(
-                        top_at_1, box_2d(state.tau, nz), box_2d(state.ssa, nz),
-                        box_2d(state.g, nz), box_sources,
+                        top_at_1, box(state.tau, nz), box(state.ssa, nz),
+                        box(state.g, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, state.lw_2stream);
             else
                 Rte_lw::solver_noscat(
-                        top_at_1, secants, weights, box_2d(state.tau, nz), box_sources,
+                        top_at_1, secants, weights, box(state.tau, nz), box_sources,
                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
                         up, dn, Array_2d<TF>(), state.lw_noscat);
 
@@ -766,9 +762,7 @@ int Solver::solve_lw_rt(
             // is concerned the atmosphere is exactly nz layers deep.
             Raytracer_lw::add_plane_parallel(
                     grid, top_at_1, nz, nlay > nz,
-                    Array_map_2d<const TF>(state.flux_up.data() + lay_off*ncol, nz + 1, ncol),
-                    Array_map_2d<const TF>(state.flux_dn.data() + lay_off*ncol, nz + 1, ncol),
-                    fluxes);
+                    box(state.flux_up, nz + 1), box(state.flux_dn, nz + 1), fluxes);
         }
     }
 
