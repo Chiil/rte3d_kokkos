@@ -79,7 +79,7 @@ def write_input(path, atm, nbnd, band_dim, gridded=True, **extra):
         't_lay': field(atm['tlay'], 'lay'), 't_lev': field(atm['tlev'], 'lev'),
         'vmr_h2o': field(atm['h2o'], 'lay'), 'vmr_o3': field(atm['o3'], 'lay'),
         'lwp': field(atm['lwp'], 'lay'), 'iwp': field(atm['iwp'], 'lay'),
-        'rel': field(atm['rel'], 'lay'), 'dei': field(atm['rei'], 'lay'),
+        'rel': field(atm['rel'], 'lay'), 'dei': field(atm['dei'], 'lay'),
         't_sfc': (dims, atm['tsfc'].reshape(shape)),
         'mu0': (dims, np.full(shape, MU0)),
         'emis_sfc': (dims + (band_dim,), np.full(shape + (nbnd,), SFC_EMIS)),

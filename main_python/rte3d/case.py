@@ -207,7 +207,7 @@ def cloud_args(cloud_optics, atm):
         return {}
 
     return dict(cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-                reliq=atm['rel'], reice=atm['dei'])
+                reliq=atm['rel'], dgice=atm['dei'])
 
 
 def solve_lw(rte3d, kdist, gas_concs, atm, gpt_band,

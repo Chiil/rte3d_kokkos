@@ -39,7 +39,7 @@ namespace
 
 Cloud_optics Cloud_optics::load_lut(
         const TF radliq_lwr, const TF radliq_upr,
-        const TF radice_lwr, const TF radice_upr,
+        const TF diamice_lwr, const TF diamice_upr,
         const Array_2d_h<TF>& extliq,
         const Array_2d_h<TF>& ssaliq,
         const Array_2d_h<TF>& asyliq,
@@ -68,14 +68,14 @@ Cloud_optics Cloud_optics::load_lut(
 
     c.radliq_lwr = radliq_lwr;
     c.radliq_upr = radliq_upr;
-    c.radice_lwr = radice_lwr;
-    c.radice_upr = radice_upr;
+    c.diamice_lwr = diamice_lwr;
+    c.diamice_upr = diamice_upr;
 
     const int nsize_liq = static_cast<int>(extliq.extent(1));
     const int nsize_ice = static_cast<int>(extice.extent(2));
 
     c.liq_step_size = (radliq_upr - radliq_lwr) / static_cast<TF>(nsize_liq - 1);
-    c.ice_step_size = (radice_upr - radice_lwr) / static_cast<TF>(nsize_ice - 1);
+    c.ice_step_size = (diamice_upr - diamice_lwr) / static_cast<TF>(nsize_ice - 1);
 
     return c;
 }
@@ -88,7 +88,7 @@ namespace
     KOKKOS_INLINE_FUNCTION
     void cloud_totals(
             const Cloud_optics& c,
-            const TF clwp, const TF ciwp, const TF reliq, const TF reice,
+            const TF clwp, const TF ciwp, const TF reliq, const TF dgice,
             const int ispec, const int nsize_liq, const int nsize_ice,
             TF& tau, TF& taussa, TF& taussag)
     {
@@ -112,7 +112,7 @@ namespace
         {
             TF t, ts, tsg;
             Cloud_optics_kernels::lookup(
-                    ciwp, reice, nsize_ice, c.ice_step_size, c.radice_lwr,
+                    ciwp, dgice, nsize_ice, c.ice_step_size, c.diamice_lwr,
                     c.lut_extice, c.lut_ssaice, c.lut_asyice, ispec, t, ts, tsg);
 
             tau += t;
@@ -128,7 +128,7 @@ void Clouds::compute(
         const Array_2d<const TF>& clwp,
         const Array_2d<const TF>& ciwp,
         const Array_2d<const TF>& reliq,
-        const Array_2d<const TF>& reice,
+        const Array_2d<const TF>& dgice,
         const Array_3d<TF>& tau,
         const Array_3d<TF>& ssa,
         const Array_3d<TF>& g,
@@ -151,7 +151,7 @@ void Clouds::compute(
         {
             TF t, ts, tsg;
             cloud_totals(c, clwp(ilay, icol), ciwp(ilay, icol),
-                         reliq(ilay, icol), reice(ilay, icol),
+                         reliq(ilay, icol), dgice(ilay, icol),
                          ispec0 + ispec, nsize_liq, nsize_ice, t, ts, tsg);
 
             g(ispec, ilay, icol) = tsg / Kokkos::max(eps, ts);
@@ -166,7 +166,7 @@ void Clouds::compute(
         const Array_2d<const TF>& clwp,
         const Array_2d<const TF>& ciwp,
         const Array_2d<const TF>& reliq,
-        const Array_2d<const TF>& reice,
+        const Array_2d<const TF>& dgice,
         const Array_3d<TF>& tau,
         const int ispec0)
 {
@@ -204,8 +204,8 @@ void Clouds::compute(
             {
                 TF t, ts, tsg;
                 Cloud_optics_kernels::lookup(
-                        ciwp(ilay, icol), reice(ilay, icol), nsize_ice,
-                        c.ice_step_size, c.radice_lwr,
+                        ciwp(ilay, icol), dgice(ilay, icol), nsize_ice,
+                        c.ice_step_size, c.diamice_lwr,
                         c.lut_extice, c.lut_ssaice, c.lut_asyice, ispec0 + ispec, t, ts, tsg);
 
                 absorption += t - ts;

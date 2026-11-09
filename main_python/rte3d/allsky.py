@@ -36,7 +36,10 @@ def read_allsky(path):
     out = dict(
         play=f8('p_lay'), plev=f8('p_lev'),
         tlay=f8('t_lay'), tlev=f8('t_lev'),
-        lwp=f8('lwp'), iwp=f8('iwp'), rel=f8('rel'), rei=f8('rei'),
+        lwp=f8('lwp'), iwp=f8('iwp'), rel=f8('rel'),
+        # Named rei in the file, but it is a diameter: the midpoint of the table's
+        # diamice bounds, as the reference all-sky example sets it.
+        dei=f8('rei'),
         h2o=f8('h2o'), o3=f8('o3'),
     )
 
@@ -78,7 +81,7 @@ def solve_lw(rte3d, kdist, cloud_optics, gas_concs, atm):
         weights=np.array([1.0]),
         sfc_emis=np.full((ngpt, ncol), SFC_EMIS),
         cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-        reliq=atm['rel'], reice=atm['rei'])
+        reliq=atm['rel'], dgice=atm['dei'])
 
     return out['flux_up'], out['flux_dn']
 
@@ -103,6 +106,6 @@ def solve_sw(rte3d, kdist, cloud_optics, gas_concs, atm):
         mu0=np.full((nlay, ncol), MU0),
         sfc_alb_dir=albedo, sfc_alb_dif=albedo, inc_flux_dir=toa,
         cloud_optics=cloud_optics, clwp=atm['lwp'], ciwp=atm['iwp'],
-        reliq=atm['rel'], reice=atm['rei'], delta_cloud=True)
+        reliq=atm['rel'], dgice=atm['dei'], delta_cloud=True)
 
     return out['flux_up'], out['flux_dn'], out['flux_dir']

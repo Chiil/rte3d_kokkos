@@ -26,22 +26,21 @@ struct Cloud_optics
 
     TF radliq_lwr = TF(0.);
     TF radliq_upr = TF(0.);
-    TF radice_lwr = TF(0.);
-    TF radice_upr = TF(0.);
+    TF diamice_lwr = TF(0.);
+    TF diamice_upr = TF(0.);
     TF liq_step_size = TF(0.);
     TF ice_step_size = TF(0.);
 
     // Build from the tables as read from a coefficient file. ext/ssa/asy for ice carry
     // a leading roughness dimension; icergh selects one, 0-based.
     //
-    // Note the size bounds are the table's own interpolation range. Recent coefficient
-    // files name the ice bounds diamice_lwr/upr where older ones said radice_lwr/upr;
-    // the numbers are unchanged, but RRTMGP now documents the quantity as an effective
-    // diameter, so a host model passing an effective radius would be wrong by a factor
-    // of two.
+    // Note the size bounds are the table's own interpolation range. The ice size is an
+    // effective *diameter*, as RRTMGP names it (diamice, dgice); older coefficient files
+    // called the same numbers radice_lwr/upr. A host model passing an effective radius
+    // would be wrong by a factor of two.
     static Cloud_optics load_lut(
             const TF radliq_lwr, const TF radliq_upr,
-            const TF radice_lwr, const TF radice_upr,
+            const TF diamice_lwr, const TF diamice_upr,
             const Array_2d_h<TF>& extliq,   // (nspec, nsize_liq)
             const Array_2d_h<TF>& ssaliq,
             const Array_2d_h<TF>& asyliq,
@@ -64,8 +63,8 @@ namespace Clouds
             const Cloud_optics& c,
             const Array_2d<const TF>& clwp,   // (nlay, ncol) liquid water path
             const Array_2d<const TF>& ciwp,   // (nlay, ncol) ice water path
-            const Array_2d<const TF>& reliq,  // (nlay, ncol) liquid particle size
-            const Array_2d<const TF>& reice,  // (nlay, ncol) ice particle size
+            const Array_2d<const TF>& reliq,  // (nlay, ncol) liquid effective radius (microns)
+            const Array_2d<const TF>& dgice,  // (nlay, ncol) ice effective diameter (microns)
             const Array_3d<TF>& tau,          // (nspec, nlay, ncol)
             const Array_3d<TF>& ssa,
             const Array_3d<TF>& g,
@@ -78,7 +77,7 @@ namespace Clouds
             const Array_2d<const TF>& clwp,
             const Array_2d<const TF>& ciwp,
             const Array_2d<const TF>& reliq,
-            const Array_2d<const TF>& reice,
+            const Array_2d<const TF>& dgice,
             const Array_3d<TF>& tau,
             const int ispec0 = 0);
 

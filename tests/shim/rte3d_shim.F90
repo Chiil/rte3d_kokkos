@@ -195,24 +195,24 @@ contains
   ! come in as arrays rather than a file, so this needs no NetCDF and is unaffected by
   ! the radice/diamice rename in newer coefficient files.
 
-  subroutine shim_cloud_optics(nspec, nsize_liq, nsize_ice, nrghice, icergh, &
-                               ncol, nlay, two_stream,                       &
-                               band_lims_wvn,                                &
-                               radliq_lwr, radliq_upr, radice_lwr, radice_upr, &
-                               extliq, ssaliq, asyliq, extice, ssaice, asyice, &
-                               clwp, ciwp, reliq, reice,                     &
+  subroutine shim_cloud_optics(nspec, nsize_liq, nsize_ice, nrghice, icergh,     &
+                               ncol, nlay, two_stream,                           &
+                               band_lims_wvn,                                    &
+                               radliq_lwr, radliq_upr, diamice_lwr, diamice_upr, &
+                               extliq, ssaliq, asyliq, extice, ssaice, asyice,   &
+                               clwp, ciwp, reliq, dgice,                         &
                                tau, ssa, g, status) bind(C, name="rte3d_shim_cloud_optics")
     integer(c_int), intent(in) :: nspec, nsize_liq, nsize_ice, nrghice, icergh
     integer(c_int), intent(in) :: ncol, nlay, two_stream
     real(wp), intent(in) :: band_lims_wvn(2, nspec)
-    real(wp), intent(in) :: radliq_lwr, radliq_upr, radice_lwr, radice_upr
+    real(wp), intent(in) :: radliq_lwr, radliq_upr, diamice_lwr, diamice_upr
     real(wp), intent(in) :: extliq(nsize_liq, nspec), ssaliq(nsize_liq, nspec)
     real(wp), intent(in) :: asyliq(nsize_liq, nspec)
     real(wp), intent(in) :: extice(nsize_ice, nspec, nrghice)
     real(wp), intent(in) :: ssaice(nsize_ice, nspec, nrghice)
     real(wp), intent(in) :: asyice(nsize_ice, nspec, nrghice)
     real(wp), intent(in) :: clwp(ncol, nlay), ciwp(ncol, nlay)
-    real(wp), intent(in) :: reliq(ncol, nlay), reice(ncol, nlay)
+    real(wp), intent(in) :: reliq(ncol, nlay), dgice(ncol, nlay)
     real(wp), intent(out) :: tau(*), ssa(*), g(*)
     integer(c_int), intent(out) :: status
 
@@ -228,7 +228,7 @@ contains
     ! allocates unconditionally.
     call cloud_optics%finalize()
 
-    err = cloud_optics%load(band_lims_wvn, radliq_lwr, radliq_upr, radice_lwr, radice_upr, &
+    err = cloud_optics%load(band_lims_wvn, radliq_lwr, radliq_upr, diamice_lwr, diamice_upr, &
                             extliq, ssaliq, asyliq, extice, ssaice, asyice)
     if (len_trim(err) /= 0) then
       status = 1
@@ -244,7 +244,7 @@ contains
     if (two_stream /= 0) then
       err = props_2str%init(band_lims_wvn)
       if (len_trim(err) == 0) err = props_2str%alloc_2str(ncol, nlay)
-      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, reice, props_2str)
+      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, dgice, props_2str)
       if (len_trim(err) /= 0) then
         status = 3
         return
@@ -255,7 +255,7 @@ contains
     else
       err = props_1scl%init(band_lims_wvn)
       if (len_trim(err) == 0) err = props_1scl%alloc_1scl(ncol, nlay)
-      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, reice, props_1scl)
+      if (len_trim(err) == 0) err = cloud_optics%cloud_optics(clwp, ciwp, reliq, dgice, props_1scl)
       if (len_trim(err) /= 0) then
         status = 4
         return

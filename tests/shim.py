@@ -63,9 +63,9 @@ class Shim:
         lib.rte3d_shim_cloud_optics.argtypes = (
             [_p]*8            # nspec nsize_liq nsize_ice nrghice icergh ncol nlay two_stream
             + [_f8]           # band_lims_wvn
-            + [_p]*4          # radliq_lwr/upr radice_lwr/upr
+            + [_p]*4          # radliq_lwr/upr diamice_lwr/upr
             + [_f8]*6         # extliq ssaliq asyliq extice ssaice asyice
-            + [_f8]*4         # clwp ciwp reliq reice
+            + [_f8]*4         # clwp ciwp reliq dgice
             + [_f8]*3         # tau ssa g
             + [_p])           # status
 
@@ -154,7 +154,7 @@ class Shim:
 
         return out
 
-    def cloud_optics(self, f, clwp, ciwp, reliq, reice, icergh=0, two_stream=True):
+    def cloud_optics(self, f, clwp, ciwp, reliq, dgice, icergh=0, two_stream=True):
         """Cloud optical properties from the reference.
 
         Table shapes here are rte3d's; the reference wants them reversed, which for a
@@ -187,10 +187,10 @@ class Shim:
             _i(ncol), _i(nlay), _i(1 if two_stream else 0),
             band_lims,
             self._real(f['radliq_lwr']), self._real(f['radliq_upr']),
-            self._real(f['radice_lwr']), self._real(f['radice_upr']),
+            self._real(f['diamice_lwr']), self._real(f['diamice_upr']),
             f['extliq'], f['ssaliq'], f['asyliq'],
             f['extice'], f['ssaice'], f['asyice'],
-            clwp, ciwp, reliq, reice,
+            clwp, ciwp, reliq, dgice,
             tau, ssa, g, ctypes.byref(status))
 
         if status.value != 0:

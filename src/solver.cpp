@@ -15,7 +15,7 @@ Solver::Cloud_input Solver::make_clouds(
         const Array_2d<const TF>& clwp,
         const Array_2d<const TF>& ciwp,
         const Array_2d<const TF>& reliq,
-        const Array_2d<const TF>& reice,
+        const Array_2d<const TF>& dgice,
         const bool two_stream,
         const bool delta_scale)
 {
@@ -27,7 +27,7 @@ Solver::Cloud_input Solver::make_clouds(
     c.clwp = clwp;
     c.ciwp = ciwp;
     c.reliq = reliq;
-    c.reice = reice;
+    c.dgice = dgice;
 
     const int nlay = static_cast<int>(clwp.extent(0));
     const int ncol = static_cast<int>(clwp.extent(1));
@@ -57,12 +57,12 @@ Solver::Cloud_band Solver::cloud_band(const Cloud_input& c, const int ibnd)
 
     if (c.ssa.size() == 0)
     {
-        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, ibnd);
+        Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.dgice, c.tau, ibnd);
         band.tau = slot(c.tau);
         return band;
     }
 
-    Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.reice, c.tau, c.ssa, c.g, ibnd);
+    Clouds::compute(*c.optics, c.clwp, c.ciwp, c.reliq, c.dgice, c.tau, c.ssa, c.g, ibnd);
     if (c.delta_scale)
         Optical_props::delta_scale_2str(Optical_props_2str{c.tau, c.ssa, c.g});
 

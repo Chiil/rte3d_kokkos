@@ -13,7 +13,7 @@ void Clouds::init_python_bindings(py::module_& m)
         .def_property_readonly("size_bounds",
             [](const Cloud_optics& c)
             {
-                return py::make_tuple(c.radliq_lwr, c.radliq_upr, c.radice_lwr, c.radice_upr);
+                return py::make_tuple(c.radliq_lwr, c.radliq_upr, c.diamice_lwr, c.diamice_upr);
             },
             "(liquid lower, liquid upper, ice lower, ice upper) in microns.");
 
@@ -32,7 +32,7 @@ void Clouds::init_python_bindings(py::module_& m)
 
             return Cloud_optics::load_lut(
                     f["radliq_lwr"].cast<TF>(), f["radliq_upr"].cast<TF>(),
-                    f["radice_lwr"].cast<TF>(), f["radice_upr"].cast<TF>(),
+                    f["diamice_lwr"].cast<TF>(), f["diamice_upr"].cast<TF>(),
                     Numpy::to_host_2d<TF>(get("extliq"), "extliq"),
                     Numpy::to_host_2d<TF>(get("ssaliq"), "ssaliq"),
                     Numpy::to_host_2d<TF>(get("asyliq"), "asyliq"),
@@ -48,7 +48,7 @@ void Clouds::init_python_bindings(py::module_& m)
     m.def("cloud_optics",
         [](const Cloud_optics& c,
            const Numpy::In<TF>& clwp, const Numpy::In<TF>& ciwp,
-           const Numpy::In<TF>& reliq, const Numpy::In<TF>& reice,
+           const Numpy::In<TF>& reliq, const Numpy::In<TF>& dgice,
            const bool two_stream) -> py::object
         {
             Runtime::get();
@@ -56,7 +56,7 @@ void Clouds::init_python_bindings(py::module_& m)
             auto clwp_d = Numpy::to_device_2d<TF>(clwp, "clwp");
             auto ciwp_d = Numpy::to_device_2d<TF>(ciwp, "ciwp");
             auto reliq_d = Numpy::to_device_2d<TF>(reliq, "reliq");
-            auto reice_d = Numpy::to_device_2d<TF>(reice, "reice");
+            auto dgice_d = Numpy::to_device_2d<TF>(dgice, "dgice");
 
             const int nspec = static_cast<int>(c.lut_extliq.extent(0));
             const int nlay = static_cast<int>(clwp_d.extent(0));
@@ -67,7 +67,7 @@ void Clouds::init_python_bindings(py::module_& m)
 
             if (!two_stream)
             {
-                Clouds::compute(c, clwp_d, ciwp_d, reliq_d, reice_d, tau);
+                Clouds::compute(c, clwp_d, ciwp_d, reliq_d, dgice_d, tau);
                 Kokkos::fence();
                 return Numpy::from_device(tau);
             }
@@ -75,14 +75,14 @@ void Clouds::init_python_bindings(py::module_& m)
             Array_3d<TF> ssa(Kokkos::view_alloc("ssa", no_init), nspec, nlay, ncol);
             Array_3d<TF> g(Kokkos::view_alloc("g", no_init), nspec, nlay, ncol);
 
-            Clouds::compute(c, clwp_d, ciwp_d, reliq_d, reice_d, tau, ssa, g);
+            Clouds::compute(c, clwp_d, ciwp_d, reliq_d, dgice_d, tau, ssa, g);
             Kokkos::fence();
 
             return py::make_tuple(Numpy::from_device(tau), Numpy::from_device(ssa),
                                   Numpy::from_device(g));
         },
         py::arg("cloud_optics"), py::arg("clwp"), py::arg("ciwp"),
-        py::arg("reliq"), py::arg("reice"), py::arg("two_stream") = true,
+        py::arg("reliq"), py::arg("dgice"), py::arg("two_stream") = true,
         "Cloud optical properties. With two_stream, returns (tau, ssa, g); otherwise "
         "the absorption optical depth alone, which is what a no-scattering longwave "
         "calculation takes.");

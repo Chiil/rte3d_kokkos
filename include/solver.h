@@ -53,7 +53,7 @@ namespace Solver
     struct Cloud_input
     {
         const Cloud_optics* optics = nullptr;
-        Array_2d<const TF> clwp, ciwp, reliq, reice;   // (nlay, ncol)
+        Array_2d<const TF> clwp, ciwp, reliq, dgice;   // (nlay, ncol)
         Array_3d<TF> tau, ssa, g;   // (1, nlay, ncol); ssa and g only for two_stream
         bool delta_scale = false;
     };
@@ -65,7 +65,7 @@ namespace Solver
             const Array_2d<const TF>& clwp,
             const Array_2d<const TF>& ciwp,
             const Array_2d<const TF>& reliq,
-            const Array_2d<const TF>& reice,
+            const Array_2d<const TF>& dgice,
             const bool two_stream,
             const bool delta_scale);
 

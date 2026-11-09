@@ -38,7 +38,7 @@ def clouds(rng, nlay, ncol, bounds, empty_fraction=0.4):
         clwp=np.ascontiguousarray(clwp),
         ciwp=np.ascontiguousarray(ciwp),
         reliq=rng.uniform(liq_lwr, liq_upr, (nlay, ncol)),
-        reice=rng.uniform(ice_lwr, ice_upr, (nlay, ncol)),
+        dgice=rng.uniform(ice_lwr, ice_upr, (nlay, ncol)),
     )
 
 
@@ -108,7 +108,7 @@ def test_clear_layers_have_no_cloud_optical_depth(rte3d):
     tau = rte3d.cloud_optics(
         c, clwp=zeros, ciwp=zeros,
         reliq=np.full((nlay, ncol), 0.5*(liq_lwr + liq_upr)),
-        reice=np.full((nlay, ncol), 0.5*(ice_lwr + ice_upr)),
+        dgice=np.full((nlay, ncol), 0.5*(ice_lwr + ice_upr)),
         two_stream=False)
 
     np.testing.assert_array_equal(tau, np.zeros_like(tau))

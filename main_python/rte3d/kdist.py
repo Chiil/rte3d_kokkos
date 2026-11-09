@@ -134,7 +134,7 @@ def read_cloud_optics(path):
 
     return dict(
         radliq_lwr=float(d['radliq_lwr']), radliq_upr=float(d['radliq_upr']),
-        radice_lwr=float(d[ice_lwr]), radice_upr=float(d[ice_upr]),
+        diamice_lwr=float(d[ice_lwr]), diamice_upr=float(d[ice_upr]),
         extliq=liq('extliq'), ssaliq=liq('ssaliq'), asyliq=liq('asyliq'),
         extice=ice('extice'), ssaice=ice('ssaice'), asyice=ice('asyice'),
         band_lims_wavenum=_f8(d['bnd_limits_wavenumber']),
