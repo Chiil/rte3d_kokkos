@@ -17,7 +17,7 @@ cmake --build .
 cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
-pytest tests                                     # 216 tests
+pytest tests                                     # 221 tests
 python cases/rfmip_rte/run_rfmip_rte.py --plot           # a case, end to end
 ```
 
@@ -43,7 +43,7 @@ cmake --build .
 
 | switch | meaning |
 |---|---|
-| `-DSYST=<system>` | **required**; picks `config/<system>.cmake` — `macbook` (clang), `macbook_gcc`, `ubuntu_22lts_gcc` (CUDA), `lumi` (HIP) |
+| `-DSYST=<system>` | **required**; picks `config/<system>.cmake` — `macbook` (clang), `macbook_gcc`, `ubuntu_22lts_gcc` (gcc, optionally CUDA), `ubuntu_cuda` (CUDA from the NVIDIA HPC SDK), `lumi` (HIP) |
 | `-DUSEGPU=1` | build for GPU; the backend (CUDA or HIP) comes from the config file |
 | `-DUSESP=1` | 32-bit floats instead of 64-bit |
 | `-DCMAKE_BUILD_TYPE=DEBUG` | unoptimised build |
@@ -165,9 +165,9 @@ python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran
 ```
 
 Raise `--ncol` for a bigger problem: nothing in the solve grows with the number of
-g-points, so the full 4096 columns runs in about 1.1 GB and is where this build is at
-its best — 1226 ms against 9495 ms for the same case before the restructuring. `--band
-lw|sw` isolates one band. Point `RTE3D_PYTHON_PATH` at `build_gcc/main_python` to
+g-points, so the full 4096 columns runs in about 1.2 GB, both bands, in 1.8 s for the
+longwave on 16 cores of an i9-12900 — against 9.5 s and 11 GB on an Apple Silicon host
+before the solve went one g-point at a time. `--band lw|sw` isolates one band. Point `RTE3D_PYTHON_PATH` at `build_gcc/main_python` to
 compare compilers — the two land within 20% of each other.
 
 The numbers this produces, and what is left of the gap, are in

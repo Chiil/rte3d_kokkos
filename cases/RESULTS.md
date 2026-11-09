@@ -82,29 +82,30 @@ python cases/fetch_data.py les_cloudfield --reference     # 149 MB
 They are worth having, but they check less than they look like they do, and it is
 worth knowing which half is which before reading anything into a difference.
 
-**The longwave surface fluxes are a real check**, and they pass:
+**The longwave fluxes are a real check**, and they pass:
 
 | domain mean | reference | rte3d |
 |---|---|---|
-| `rt_lw_flux_sfc_up` | 456.951 | 456.959 (+0.00%) |
-| `rt_lw_flux_sfc_dn` | 403.273 | 401.750 (-0.38%) |
+| `rt_lw_flux_sfc_up` | 456.951 | 456.935 (-0.00%) |
+| `rt_lw_flux_sfc_dn` | 403.273 | 402.095 (-0.29%) |
+| `rt_lw_flux_tod_up` | 374.2 | 374.327 (+0.03%) |
 
-**The top-of-domain fluxes are not comparable at all.** The reference discards the
-132 layers above the ray-tracing box; rte3d lumps them into one more cell on top, so
-it sees air the reference does not. That is the difference the note in
-`include/raytracer_lw.h` is about, and it is large -- `rt_lw_flux_tod_up` is 374.2
-against 331.8 -- but it is not an error on either side. To compare these, truncate the
-input to the 200 resolved layers so both codes see the same air.
+**The top-of-domain flux is comparable because the case sets `lump-above = false`.** The
+reference discards the 132 layers above the ray-tracing box, and so does rte3d with that
+setting, so the two codes see the same air. With the layers lumped into one more cell on
+top instead -- `lump-above = true` -- rte3d sees air the reference does not, and
+`rt_lw_flux_tod_up` comes out at 331.8 against 374.2. That difference is what the note in
+`include/raytracer_lw.h` is about, and it is not an error on either side.
 
-**The shortwave is not comparable either, because of aerosols.** The input carries
+**The shortwave is not comparable, because of aerosols.** The input carries
 eleven aerosol mixing ratios, the reference reads them and rte3d has no aerosol optics
 at all, so it solves a cleaner atmosphere:
 
 | domain mean | reference | rte3d |
 |---|---|---|
-| `rt_flux_sfc_dir` | 660.19 | 718.10 (+8.77%) |
-| `rt_flux_sfc_dif` | 194.98 | 143.67 (-26.31%) |
-| the two together | 855.16 | 861.78 (+0.77%) |
+| `rt_flux_sfc_dir` | 660.19 | 718.09 (+8.77%) |
+| `rt_flux_sfc_dif` | 194.98 | 143.66 (-26.32%) |
+| the two together | 855.16 | 861.75 (+0.77%) |
 
 Which is the signature of scattering moved from the direct beam into the diffuse rather
 than of two codes disagreeing: the split moves by a quarter and the total by under a
@@ -140,39 +141,47 @@ threads against serial Fortran; use `OMP_NUM_THREADS=1` for a per-thread compari
 
 ### Where things stand
 
-Longwave, 256 columns x 256 layers, double precision, 15-core Apple Silicon:
+Longwave, RCEMIP at 256 layers, double precision, on a 16-core Intel i9-12900 (8
+performance and 8 efficiency cores), g++ 13.3 against gfortran 13.3. rte3d is one
+thread per physical core (`OMP_PLACES=cores OMP_PROC_BIND=close`); the reference is
+serial, as above. Best of three:
 
-| | clang | gcc-16 | reference (gfortran) |
-|---|---|---|---|
-| 1 thread, total | 358 ms | 429 ms | **290 ms** |
-| &nbsp;&nbsp;gas optics | 310 ms | | |
-| &nbsp;&nbsp;transport | 59 ms | | |
+| columns | rte3d, 1 thread | reference, 1 thread | ratio | rte3d, 16 threads |
+|---|---|---|---|---|
+| 256 | 743 ms | **554 ms** | 0.75 | 103 ms |
+| 512 | 1478 ms | **1140 ms** | 0.77 | 198 ms |
+| 1024 | 2969 ms | **2405 ms** | 0.81 | 390 ms |
+| 4096 | 12074 ms | **10840 ms** | 0.90 | 1828 ms, 1.2 GB |
 
-Transport used to be 555 ms of that single-threaded total, two thirds of the runtime.
-Each `(g-point, column)` pair ran an entire sequential vertical recurrence, which suits
-a GPU but leaves the column loop with a single iteration's worth of independent work no
-matter what `ivdep` asserts. Solving one g-point at a time restores the reference's
-structure -- layer outside, `ncol` innermost -- and the recurrences now vectorize over
-columns: a 9x improvement. Gas optics is what remains of the gap.
+Fluxes agree to 1.1e-13 W/m2 at every size. Per thread, rte3d is 10 to 25 percent
+behind the reference, closing as the problem grows. On all cores it is 5.4 to 5.9 times
+the reference's serial run. The shortwave at 4096 columns takes 2081 ms on 16 threads,
+and both bands together peak at 1.2 GB.
 
-Where it really pays is at scale, because a single g-point's working set stays in
-cache instead of streaming ~80 MB arrays through memory. Longwave, 15 threads:
+`--breakdown` does not split that per-thread gap. At 256 columns it times gas optics at
+770 ms and transport at 332 ms, more together than the 743 ms of the fused solve,
+because the staged path writes the whole `(ngpt, nlay, ncol)` spectrum between the two
+and the fused one never does -- the same reason it cannot be used on a GPU, below. An
+earlier measurement on a 15-core Apple Silicon host, built with clang, did add up: 358
+ms in all, of which gas optics 310 and transport 59, against 290 ms for the reference.
 
-| columns | before | now |
-|---|---|---|
-| 256 | 131 ms | 221 ms |
-| 512 | 274 ms | 281 ms |
-| 1024 | 474 ms | 425 ms |
-| 4096 | 9495 ms, 11 GB | **1226 ms, 1.1 GB** |
+Transport used to be 555 ms of that Apple single-threaded total, two thirds of the
+runtime. Each `(g-point, column)` pair ran an entire sequential vertical recurrence,
+which suits a GPU but leaves the column loop with a single iteration's worth of
+independent work no matter what `ivdep` asserts. Solving one g-point at a time restores
+the reference's structure -- layer outside, `ncol` innermost -- and the recurrences now
+vectorize over columns: a 9x improvement there.
 
-Below about 512 columns the per-g-point solve is launch-bound: each g-point issues
-around ten parallel regions of only `ncol` work each, and at 256 columns on 15 threads
-that overhead outweighs the cache win. The fix is to parallelize over g-points on the
-host, giving each thread its own working set -- now possible, since the g-point loop
-lives in C++ rather than in the caller. It has not been done.
+Where it really pays is at scale, because a single g-point's working set stays in cache
+instead of streaming ~80 MB arrays through memory. On the Apple host, 4096 columns on 15
+threads went from 9495 ms and 11 GB to 1226 ms and 1.1 GB. On this one the
+multi-threaded cost per column is flat from 256 to 1024 columns, 381 to 401 us, and
+rises to 446 at 4096. There is no sign here of the launch-bound regime the Apple host
+showed below 512 columns, where its 256-column run took 221 ms on 15 threads.
 
-Both builds agree with the reference to 1e-13 W/m2, so none of this is bought with
-accuracy.
+Thread placement matters on this hybrid CPU. At 1024 columns: 16 threads one per core
+390 ms, 24 threads spread over every hardware thread 360 ms, 24 threads packed onto the
+cores 541 ms, 8 threads 487 ms.
 
 ### On a GPU
 

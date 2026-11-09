@@ -5,7 +5,7 @@ Data Remapping In Monte Carlo Short-wave Ray-tracing"** (LIACS, Leiden Universit
 26 August 2026; supervisors Ben van Werkhoven and Stijn Heldens), to the Kokkos ray
 tracer in this repository — **and what measuring it actually showed**.
 
-Written first against commit `8826bde` as a plan. Rewritten at `6e1395a`, once every
+Written first against commit `356ab55` as a plan. Rewritten at `c869913`, once every
 item had been built or priced on the hardware. The measurements are the point of the
 file now; the thesis is the reason the questions were asked, not the authority on the
 answers.
@@ -103,7 +103,7 @@ ncu --kernel-name-base demangled --kernel-name regex:launch_photons \
 other.** This is the single most important thing in this file; the first version of it was
 written from the LES field alone and drew the wrong general conclusion.
 
-At production settings, 256 photons per pixel, on `6e1395a`:
+At production settings, 256 photons per pixel, on `c869913`:
 
 | | LES cumulus | RCEMIP |
 |---|---|---|
@@ -126,7 +126,7 @@ warps to hide it.
 Two consequences worth internalizing:
 
 - An item that removes memory *instructions* pays on the LES field. An item that removes
-  memory *traffic* pays on RCEMIP. `6e1395a` does both, which is why it is the only item
+  memory *traffic* pays on RCEMIP. `c869913` does both, which is why it is the only item
   that won on both cases.
 - **Photon count does not change the regime; the scene does.** The LES field profiles the
   same at 32 and 256 photons per pixel (LG throttle 18.2 and 17.0). Do not conclude from a
@@ -143,36 +143,36 @@ chased and failed to profit from.
 
 ## 4. The nine items, measured
 
-Baseline is `d99169b`. Timings are the `sw ray tracer` line; percentages are against the
+Baseline is `104b0ea`. Timings are the `sw ray tracer` line; percentages are against the
 line above.
 
 | # | thesis §4.1 item | outcome |
 |---|---|---|
 | 4.1.1 | Removal of the Sobol sequence | **Priced and rejected** — costs 1.42× photons |
 | 4.1.2 | Reset locality, work stealing | Not attempted; see §5 |
-| 4.1.3 | Register / complexity reductions | **Done** (`dadcda3`) — CPU 1.56×, GPU ~0 |
+| 4.1.3 | Register / complexity reductions | **Done** (`991c807`) — CPU 1.56×, GPU ~0 |
 | 4.1.4 | Simplified scatter optics | Folded into §5 step 1, not yet done |
-| 4.1.5 | Pre-calculated cell absorption/scattering | **Partly superseded** by `6e1395a` |
+| 4.1.5 | Pre-calculated cell absorption/scattering | **Partly superseded** by `c869913` |
 | 4.1.6 | Improved caching (last fine cell) | **Weak** — 6% hit rate on RCEMIP |
-| 4.1.7 | Accumulation of atmospheric contributions | **Done** (`2744af2`) — 11% RCEMIP, 0% LES |
-| 4.1.8 | Float-to-int and fast approximation | **Done** (`dadcda3`) — 5.5% CPU, ~0 GPU |
+| 4.1.7 | Accumulation of atmospheric contributions | **Done** (`bd07f3b`) — 11% RCEMIP, 0% LES |
+| 4.1.8 | Float-to-int and fast approximation | **Done** (`991c807`) — 5.5% CPU, ~0 GPU |
 | 4.1.9 | Mixed precision (fp16 storage) | Not attempted; caveats in §5 |
-| — | **One sector per collision, not two** *(not in the thesis)* | **Done** (`6e1395a`) — **22.9% RCEMIP** |
+| — | **One sector per collision, not two** *(not in the thesis)* | **Done** (`c869913`) — **22.9% RCEMIP** |
 
 ### The running totals
 
 | commit | RCEMIP | LES (112 gpt) | CPU 64³ |
 |---|---|---|---|
-| `d99169b` baseline | 48729.7 ms | 2838.1 ms | 1234.2 ms |
-| `dadcda3` fmod + reciprocal | 48655.1 ms | 2778.0 ms | 750.9 ms |
-| `2744af2` accumulate deposits | 43363.9 ms | 2777.7 ms | 733.5 ms |
-| `6e1395a` one wide optics load | **33446.5 ms** | **2660.9 ms** | 735.2 ms |
+| `104b0ea` baseline | 48729.7 ms | 2838.1 ms | 1234.2 ms |
+| `991c807` fmod + reciprocal | 48655.1 ms | 2778.0 ms | 750.9 ms |
+| `bd07f3b` accumulate deposits | 43363.9 ms | 2777.7 ms | 733.5 ms |
+| `c869913` one wide optics load | **33446.5 ms** | **2660.9 ms** | 735.2 ms |
 | | **1.46×** | **1.07×** | **1.68×** |
 
 The CPU and GPU columns disagree about which item mattered, completely. Anything decided
 from a CPU profile of this kernel will be decided wrong.
 
-### 4.1.3 and 4.1.8 — `fmod` and the reciprocals *(done, `dadcda3`)*
+### 4.1.3 and 4.1.8 — `fmod` and the reciprocals *(done, `991c807`)*
 
 The cyclic boundary used `Kokkos::fmod`; a photon crosses at most one block per step, so
 the wrap is one subtraction. `coord_to_index` divided by the cell size; it now multiplies
@@ -191,7 +191,7 @@ buys nothing for us — `static_cast<int>` already emits a round-toward-zero con
 The optional `scatter()` frame simplification was not done. It changes the frame's
 numerics and its argument is register pressure, which is a second-order limit here.
 
-### 4.1.6 and 4.1.7 — caching and accumulation *(done, `2744af2`)*
+### 4.1.6 and 4.1.7 — caching and accumulation *(done, `bd07f3b`)*
 
 Hold the last fine cell, the last photon kind, its optical properties and an accumulator
 in registers; add into the accumulator and flush with one atomic when the cell or the kind
@@ -262,9 +262,9 @@ direct-beam surface flux there is one, and that is the flux the cases care most 
 272M, measured on the LES field), which is exactly why removing it gains so little even
 where the L1 queue is the limit.
 
-### The item that was not in the thesis — one sector per collision *(done, `6e1395a`)*
+### The item that was not in the thesis — one sector per collision *(done, `c869913`)*
 
-The SASS at `2744af2` had **440 `LDG.E` and not one wide load**. `k_ext` lived in its own
+The SASS at `bd07f3b` had **440 `LDG.E` and not one wide load**. `k_ext` lived in its own
 array beside a twelve-byte `Optics_scat`, so every collision issued **four separate 32-bit
 loads** for four contiguous numbers of one cell — the exact pattern §3 says is the limit.
 
@@ -306,7 +306,7 @@ more where the cache is under pressure.
 
 ### Step 1 — the hot/cold split *(what remains of thesis 4.1.5 and 4.1.4)*
 
-`6e1395a` took the load-width half of 4.1.5 without needing a pre-pass. What remains is
+`c869913` took the load-width half of 4.1.5 without needing a pre-pass. What remains is
 narrowing the common path: a null collision needs only `f_no_abs` and `f_scat`, so a
 pre-pass writing a hot pair and a cold pair turns one 16-byte load into one 8-byte load.
 With no aerosols the 4.1.4 thresholds collapse to a single `p_cld = k_sca_cld/k_sca_tot`.
@@ -322,7 +322,7 @@ Two smaller notes for whoever writes it. The pre-pass must derive the block inde
 `coord_to_index` does on the kn grid, **not** the way `create_knull_grid`'s overlapping
 `i0..i1` loop does. And the `f_scat` clamp the original plan called for is **unnecessary**:
 in a conservative cell that is its own block's maximum, `k_abs` is exactly zero and
-`f_scat = k_sca_tot/k_ext_null` is `x/x`, which IEEE gives as exactly 1.0. The `8826bde`
+`f_scat = k_sca_tot/k_ext_null` is `x/x`, which IEEE gives as exactly 1.0. The `356ab55`
 concern was a *systematic* multiplicative shortfall in `weight`, which applies to
 `f_no_abs`; an `f_scat` one ulp short only causes a spurious null collision with
 probability ~1e-7, which costs work, not accuracy.
@@ -330,7 +330,7 @@ probability ~1e-7, which costs work, not accuracy.
 ### Step 2 — mixed precision *(thesis 4.1.9)*
 
 **This is now the strongest item left, and §3 says why.** RCEMIP is bound by DRAM traffic,
-and `6e1395a` bought 26 percent on that case purely by halving the sectors a collision
+and `c869913` bought 26 percent on that case purely by halving the sectors a collision
 touches. Halving the stored width does the same thing again: an `Optics_cell` in fp16 is
 8 bytes, so two cells share one 32-byte sector where one cell needs one now. It also cuts
 the instruction count on the LES field's L1 queue. It is the one remaining change that
@@ -372,8 +372,12 @@ Same field, same 112 g-points, same sun, same GPU:
 | | best of 3 |
 |---|---|
 | `rte-rrtmgp-cpp` `test_rte_rrtmgp_rt` | 3352.1 ms |
-| rte3d `d99169b` | 2838.1 ms |
-| rte3d `6e1395a` | ~2660.9 ms |
+| rte3d `104b0ea` | 2838.1 ms |
+| rte3d `c869913` | ~2660.9 ms |
+
+Those are at 256 photons per pixel. The comparison as it stands, at the case's own 512
+and with the longwave tracer beside it, is in
+[`cases/RESULTS.md`](../cases/RESULTS.md#les_cloudfield).
 
 The port was already ~15 percent ahead of the original before this exercise and is ~26
 percent ahead after — while carrying the single-frontend constraint, with no separate
@@ -401,7 +405,7 @@ single-g-point check pinned it; do not repeat it.
 - `cmake --build build && pytest tests`, and the same for `build_cuda`, after every step.
 - The tracer is stochastic and the deposits are atomics, so nothing on the GPU is
   bit-for-bit, not even a build against itself. Establish the run-to-run scatter of one
-  build first, then compare against it — that is how `6e1395a` was shown to be inert.
+  build first, then compare against it — that is how `c869913` was shown to be inert.
 - The pytest suite does not catch a wrong sun or wrong optics on a real field. The LES
   case against rte-rrtmgp-cpp (§6) is the only end-to-end check we have; use it whenever
   the physics could have moved.

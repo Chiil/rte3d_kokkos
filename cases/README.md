@@ -71,9 +71,9 @@ See [`example.toml`](example.toml) for the full set -- which bands and which
 solvers to run, whether to read clouds, whether to write the fluxes by band, and the
 coefficient files to read them all with.
 
-### Two shortwave solvers
+### Two solvers per band
 
-The shortwave can be solved twice over, by the plane-parallel two-stream solver and by
+Each band can be solved twice over, by the plane-parallel two-stream solver and by
 the three-dimensional Monte Carlo ray tracer, in one run. They share the gas optics, the
 cloud properties and the boundary conditions and differ only in transport, which is what
 makes running both worth it: the difference is what the third dimension is worth.
@@ -97,6 +97,17 @@ such thing as a flux profile per column once photons move sideways:
 | `rt_flux_sfc_up` | `(y, x)` | upward at the surface |
 | `rt_flux_tod_dn`, `rt_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
 | `rt_flux_abs_dir`, `rt_flux_abs_dif` | `(z, y, x)` | absorbed flux per unit height, W/m3 |
+
+The `[longwave]` section takes the same four keys, plus `scattering`,
+`min-mfp-grid-ratio` and `lump-above`, which [`example.toml`](example.toml) explains.
+The longwave tracer's fluxes:
+
+| variable | dimensions | meaning |
+|---|---|---|
+| `rt_lw_flux_sfc_dn`, `rt_lw_flux_sfc_up` | `(y, x)` | at the surface |
+| `rt_lw_flux_tod_dn`, `rt_lw_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
+| `rt_lw_flux_toa_dn`, `rt_lw_flux_toa_up` | `(y, x)` | at the top of the atmosphere; the `tod` ones when `lump-above = false` |
+| `rt_lw_flux_abs` | `(z, y, x)` | absorbed minus emitted flux per unit height, W/m3 |
 
 ### Making an input file
 
@@ -189,9 +200,9 @@ a different size is a different case and belongs in a folder of its own.
 
 The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
 2560 x 2560 x 4000 m RICO cumulus field at 20 m resolution. 128 x 128 columns, 200
-ray-tracing cells in the vertical and 332 layers, of which the 132 above the box are
-lumped into one cell on top. Cloud is liquid-only and thin: 1.3% of cells, 19% of
-columns.
+ray-tracing cells in the vertical and 332 layers. The shortwave tracer lumps the 132
+above the box into one cell on top; the longwave one leaves them outside, as below.
+Cloud is liquid-only and thin: 1.3% of cells, 19% of columns.
 
 ```bash
 python cases/fetch_data.py les_cloudfield
@@ -307,7 +318,7 @@ OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare
 | `--input PATH` | the copy in `rte-rrtmgp-cpp` | where `rcemip_input.nc` lives |
 
 **Memory.** Nothing in the solve carries a g-point dimension, so the full `--ncol 4096`
-needs about 1.1 GB for both bands. `--breakdown` is the exception: timing gas optics
+needs about 1.2 GB for both bands. `--breakdown` is the exception: timing gas optics
 and transport separately means holding the whole spectrum between them, which is
 roughly 11 GB at 4096 columns. Use it at 1024 or below.
 

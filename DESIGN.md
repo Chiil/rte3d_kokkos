@@ -53,12 +53,15 @@ optics through the by-band increments, `-g###` files by g-point. Only the lookup
 path is implemented — the reference also offers Pade approximants, but no shipped
 coefficient file contains them. Aerosol optics is not started.
 
-**Step 4, the Monte Carlo ray tracer — shortwave done.**
+**Step 4, the Monte Carlo ray tracer — both bands done.**
 
 | header | contents |
 |---|---|
-| `include/raytracer.h` | the ray-tracing box, the fluxes it produces, and `trace_rays` |
-| `include_kernels/raytracer_kernels.h` | the photon walk and the sampling it needs |
+| `include/raytracer.h` | the ray-tracing box, the shortwave fluxes it produces, and `trace_rays` |
+| `include/raytracer_lw.h` | the longwave tracer: emission sampling, its fluxes, and its `trace_rays` |
+| `include_kernels/raytracer_common.h` | what both walks share: the phase functions, free-path sampling and the grid lookup |
+| `include_kernels/raytracer_kernels.h` | the shortwave photon walk |
+| `include_kernels/raytracer_lw_kernels.h` | the longwave photon walk and the emitter search |
 | `include/random.h` | the backend's generators, behind one interface |
 
 A forward, three-dimensional, null-collision tracer, after `raytracer_sw.cu` in
@@ -66,7 +69,13 @@ rte-rrtmgp-cpp. `Solver::solve_sw_rt` drives it the way `solve_sw` drives the
 two-stream solver: same gas optics, same cloud properties, one g-point at a time, only
 the transport differs. Aerosols and the Mie phase function are left out — clouds
 scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP tables give,
-gases as Rayleigh — and the longwave and backward-camera tracers are not started.
+gases as Rayleigh — and the backward-camera tracer is not started.
+
+`Solver::solve_lw_rt` drives the longwave tracer the same way. Its photons are emitted
+by every cell, the surface and the top boundary in proportion to the local source, and
+it scores absorption minus emission, the flux divergence. The g-points whose gas is
+opaque within a cell are solved plane-parallel instead, since there is no horizontal
+transport to resolve there.
 
 On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two solvers
 agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on the
@@ -74,7 +83,7 @@ column absorption -- which is the two-stream's own error plus what the third dim
 moves around, not a discrepancy. That case is 235 million photons and takes 12.3 s on
 an RTX A4500, single precision, against 229 ms for the two-stream solve beside it.
 
-**Next:** aerosol optics, the longwave ray tracer, then MicroHH integration.
+**Next:** aerosol optics, then MicroHH integration.
 
 ## Validation
 
@@ -94,20 +103,25 @@ one reaches round-off.
 
 ## Performance
 
-On performance, rte3d is within about 20% of the reference Fortran per thread, and the
-remaining gap is entirely gas optics. Typical result on 256 columns x 256 layers,
-longwave, from `run_rcemip_rte.py --compare-fortran --breakdown`:
+On a CPU, rte3d is 10 to 25 percent behind the reference Fortran per thread, the gap
+closing as the problem grows. Longwave, 256 layers, from `run_rcemip_rte.py
+--compare-fortran`, on a 16-core Intel i9-12900 with g++ and gfortran 13.3:
 
 ```
                        rte3d      reference    ratio
-  1 thread            358 ms         290 ms    0.81x
-    gas optics        310 ms                             <- what is left of the gap
-    transport          59 ms
-  15 threads          221 ms         295 ms    1.34x
+  256 columns
+    1 thread          743 ms         554 ms    0.75x
+    16 threads        103 ms         554 ms    5.4x
+  4096 columns
+    1 thread        12074 ms       10840 ms    0.90x
+    16 threads       1828 ms       10840 ms    5.9x
 ```
 
-The reference kernels are serial on the host, so the 15-thread row compares rte3d on
-15 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way.
+The reference kernels are serial on the host, so the 16-thread rows compare rte3d on
+16 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way. An earlier
+measurement on Apple Silicon with clang put the per-thread gap at 0.81x and all of it in
+gas optics; on this host `--breakdown` cannot say, for the reason in
+[`cases/RESULTS.md`](cases/RESULTS.md#where-things-stand).
 
 On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1272 ms longwave and 1406 ms
 shortwave on an RTX A4500, single precision, and is bound by memory bandwidth
@@ -165,7 +179,7 @@ is the shared 2x2x2 sum.
 The fluxes go the same way. A whole-spectrum solve never looks at a per-g-point flux,
 so the solvers do not write one: `Flux_sink` says where a flux is to go, and their last
 kernel adds it straight into the running spectral totals. The only g-point flux left is
-the shortwave's direct beam, which the sweep that computes it also reads back.
+the shortwave's direct beam, which the last kernel reads back to put it in the totals.
 
 ## One source for both vertical orientations
 
@@ -180,7 +194,7 @@ the physics once.
 and for each one compute the optical properties, compute the clouds when the loop
 enters a new band, increment them, run transport, and accumulate the flux. Nothing in
 that pipeline carries the spectrum, so the working set is the same whether the
-k-distribution has 16 g-points or 256: RCEMIP's full 4096 columns needs 1.1 GB rather
+k-distribution has 16 g-points or 256: RCEMIP's full 4096 columns needs 1.2 GB rather
 than the 28 GB the spectrally resolved version would have.
 
 Gas optics could share the work that is the same for every g-point of a band -- the
@@ -265,8 +279,8 @@ closes exactly under conservative scattering and only in the mean otherwise.
 
 ## The one place fast math is allowed
 
-`src/CMakeLists.txt` compiles `raytracer.cpp`, and only that file, with
-`-use_fast_math` (`-ffast-math` under HIP). Everything else keeps IEEE semantics,
+`src/CMakeLists.txt` compiles the two ray tracers, `raytracer.cpp` and
+`raytracer_lw.cpp`, and only those, with `-use_fast_math` (`-ffast-math` under HIP). Everything else keeps IEEE semantics,
 because gas optics and the transport solvers are compared against the Fortran
 reference at 1e-13 and would not survive it.
 
@@ -286,10 +300,14 @@ Everywhere else the fix is to keep the transcendental off the device. Gas optics
 one, Helmert's latitude correction to gravity in `compute_col_dry`, and it is a
 function of the column rather than the cell, so it is now built once per column on the
 host. With that gone, a single-precision GPU build contains **no double-precision
-instruction at all** -- 335 kernels, 54384 instructions, verified with `cuobjdump
--sass`. Worth re-checking after adding a kernel that calls a transcendental: the
-slow path of `sinf`, `cosf` and friends is double precision, and on a consumer card it
-runs at a sixty-fourth of the single-precision rate.
+instruction outside the longwave ray tracer** -- 405 kernels, 69000 instructions,
+verified with `cuobjdump -sass`. The longwave tracer's 226 are deliberate: its
+cumulative distribution of emitted power is held in double whatever `TF` is, because a
+float running total over millions of cells stops resolving the small sources (see
+`include/raytracer_lw.h`). They sit in the scan that builds that distribution, the
+photon launch that searches it, and the kernels that turn counts into fluxes. Worth re-checking after adding a kernel that calls a
+transcendental: the slow path of `sinf`, `cosf` and friends is double precision, and on
+a consumer card it runs at a sixty-fourth of the single-precision rate.
 
 ## Known defects in the Fortran reference
 
