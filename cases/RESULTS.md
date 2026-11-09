@@ -16,16 +16,16 @@ too:
 
 | | rte3d, solver | rte3d, wall | rte-rrtmgp-cpp | | rte3d, memory | rte-rrtmgp-cpp, memory |
 |---|---|---|---|---|---|---|
-| longwave, traced, 62 of 128 g-points | **1449 ms** | 1506 ms | 3579 ms | 2.5x | **1326 MiB** | 1722-2106 MiB |
-| shortwave, traced, 112 g-points | **2899 ms** | 2948 ms | 5425 ms | 1.9x | **1012 MiB** | 1496 MiB |
-| longwave, two-stream | **335 ms** | 390 ms | 778 ms | 2.3x | **1186 MiB** | 1754-1786 MiB |
-| shortwave, two-stream | **292 ms** | 360 ms | 600 ms | 2.1x | **1218 MiB** | 1592-1656 MiB |
+| longwave, traced, 62 of 128 g-points | **1418 ms** | 1478 ms | 3579 ms | 2.5x | **1304 MiB** | 1722-2106 MiB |
+| shortwave, traced, 112 g-points | **2820 ms** | 2874 ms | 5425 ms | 1.9x | **1006 MiB** | 1496 MiB |
+| longwave, two-stream | **329 ms** | 392 ms | 778 ms | 2.4x | **1186 MiB** | 1754-1786 MiB |
+| shortwave, two-stream | **293 ms** | 369 ms | 600 ms | 2.0x | **1174 MiB** | 1592-1656 MiB |
 
 The solver column is what to compare. It is the `solve_time` each solver returns:
 device time between two fences, with every input already uploaded and every output
 still on the device -- the span `rte-rrtmgp-cpp` times with CUDA events, covering gas
 optics, cloud optics and transport on both sides. The wall column is the whole Python
-call and adds the copies to and from numpy, 60 ms here. It used to add much more: the
+call and adds the copies to and from numpy, 55 to 75 ms here. It used to add much more: the
 case driver computed the cloud optics on the device, copied 2 GB of it into numpy and
 handed it back, until the solvers took the cloud physics and did that themselves. The
 tracers' wall time was then 1870 and 3218 ms, the fluxes the same bit for bit.
@@ -181,7 +181,7 @@ RCEMIP at 65536 columns x 256 layers, single precision, on an RTX A4500:
 | | longwave | shortwave |
 |---|---|---|
 | before | 1879 ms | 2167 ms |
-| now | **1314 ms** | **1531 ms** |
+| now | **1272 ms** | **1406 ms** |
 
 Every one of those milliseconds was memory traffic, not arithmetic and not
 parallelism: the kernels were already running at 400-650 GB/s, against a card that
@@ -198,12 +198,12 @@ single precision on one RTX A4500 --- that is now the whole of the gap:
 
 | stage | rte3d | rte-rrtmgp-cpp | ratio |
 |---|---|---|---|
-| longwave, optical depth + Planck | 34.5 ms | 28.0 ms | 1.23 |
-| longwave, transport | **68.3 ms** | **42.0 ms** | **1.63** |
-| shortwave, optical depth + Rayleigh | 22.7 ms | 28.4 ms | 0.80 |
-| shortwave, transport | **155 ms** | **45.2 ms** | **3.42** |
-| GPU kernel time, longwave / shortwave | 103 / 177 ms | 70 / 74 ms | |
-| what the driver's own timer reports | 120 / 198 ms | 73 / 74 ms | |
+| longwave, optical depth + Planck | 36.0 ms | 28.0 ms | 1.29 |
+| longwave, transport | **71.4 ms** | **42.0 ms** | **1.70** |
+| shortwave, optical depth + Rayleigh | 23.8 ms | 28.4 ms | 0.84 |
+| shortwave, transport | **187 ms** | **45.2 ms** | **4.13** |
+| GPU kernel time, longwave / shortwave | 108 / 211 ms | 70 / 74 ms | |
+| what the driver's own timer reports | 120 / 223 ms | 73 / 74 ms | |
 
 Neither driver times a stage on its own, so the split is GPU kernel time from an `nsys`
 kernel summary, attributed by kernel name: gas optics is rte3d's `compute_tau`,
@@ -221,12 +221,12 @@ The staged `--breakdown` above cannot be used for this. It writes the whole
 `(ngpt, nlay, ncol)` spectrum between the two stages, which is the memory traffic the
 fused path exists to avoid, and it reports gas optics thirty times slower as a result.
 
-Gas optics is at parity --- a quarter more expensive in the longwave, a fifth cheaper in
-the shortwave. The sweeps are not, and the launch geometry says why: it solves four column blocks with every g-point
+Gas optics is at parity --- 29% more expensive in the longwave, 16% cheaper in the
+shortwave. The sweeps are not, and the launch geometry says why: it solves four column blocks with every g-point
 resolved, so its `sw_adding` runs 229376 threads and its `lw_solver_noscat_step_2`
 262144, where ours run `ncol` --- 4096. Same work, 64x the parallelism, and at 4096
 columns ours reach about 15% of peak bandwidth and 8% occupancy where at 65536 they
-reach 70%. The gap is a small-problem gap: 48.3 us/column at 4096 against 23.4 at 65536,
+reach 70%. The gap is a small-problem gap: 54.4 us/column at 4096 against 21.5 at 65536,
 while a chunked full-spectrum solver is flat in problem size and pays for it in
 memory --- 4 column blocks here, 64 for the case above.
 
@@ -242,8 +242,13 @@ move five `(nlay, ncol)` arrays between them, or give the transport arrays a g-p
 block dimension, which buys the parallelism directly at the cost of the property this
 design is built around.
 
-Since then the shortwave diffuse fluxes are added into the totals inside the adding
-sweeps again, which undoes `bac85f3`: production runs are at large column counts, where
-that is 4% faster (1460 -> 1406 ms at 65536 columns) and needs two fewer scratch arrays.
-At 4096 columns it costs 13% (195 -> 222 ms), so the shortwave numbers in the table
-above are now on the low side.
+The shortwave transport above includes a deliberate loss at this size. The adding
+sweeps add the diffuse fluxes into the totals themselves, as `d789c1c` made them do
+again after `bac85f3` had moved that into a separate kernel: production runs are at
+large column counts, where it is 4% faster (1460 -> 1406 ms at 65536 columns) and needs
+two fewer scratch arrays, but at 4096 columns it costs 13% (195 -> 222 ms).
+
+The rte3d column of this table was remeasured at `d789c1c`; the rte-rrtmgp-cpp column is
+from the earlier session, its code unchanged since. Between the two sessions the
+longwave stages of rte3d read 3 to 5% higher with no change to the longwave code, which
+is the spread to allow between sessions.

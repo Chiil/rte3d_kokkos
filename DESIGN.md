@@ -71,8 +71,8 @@ gases as Rayleigh — and the longwave and backward-camera tracers are not start
 On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two solvers
 agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on the
 column absorption -- which is the two-stream's own error plus what the third dimension
-moves around, not a discrepancy. That case is 235 million photons and takes 11.9 s on
-an RTX A4500, single precision, against 179 ms for the two-stream solve beside it.
+moves around, not a discrepancy. That case is 235 million photons and takes 12.3 s on
+an RTX A4500, single precision, against 229 ms for the two-stream solve beside it.
 
 **Next:** aerosol optics, the longwave ray tracer, then MicroHH integration.
 
@@ -109,7 +109,7 @@ longwave, from `run_rcemip_rte.py --compare-fortran --breakdown`:
 The reference kernels are serial on the host, so the 15-thread row compares rte3d on
 15 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way.
 
-On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1314 ms longwave and 1531 ms
+On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1272 ms longwave and 1406 ms
 shortwave on an RTX A4500, single precision, and is bound by memory bandwidth
 throughout. Against rte-rrtmgp-cpp's CUDA solver, gas optics is at parity and the
 transport sweeps are not. The full picture, both hosts and both bands, is in
