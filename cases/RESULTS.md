@@ -241,3 +241,9 @@ Two ways out, neither taken: fuse the direct-beam sweep with the adding sweeps, 
 move five `(nlay, ncol)` arrays between them, or give the transport arrays a g-point
 block dimension, which buys the parallelism directly at the cost of the property this
 design is built around.
+
+Since then the shortwave diffuse fluxes are added into the totals inside the adding
+sweeps again, which undoes `bac85f3`: production runs are at large column counts, where
+that is 4% faster (1460 -> 1406 ms at 65536 columns) and needs two fewer scratch arrays.
+At 4096 columns it costs 13% (195 -> 222 ms), so the shortwave numbers in the table
+above are now on the low side.
