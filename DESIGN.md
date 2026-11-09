@@ -118,10 +118,11 @@ closing as the problem grows. Longwave, 256 layers, from `run_rcemip_rte.py
 ```
 
 The reference kernels are serial on the host, so the 16-thread rows compare rte3d on
-16 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way. An earlier
-measurement on Apple Silicon with clang put the per-thread gap at 0.81x and all of it in
-gas optics; on this host `--breakdown` cannot say, for the reason in
-[`cases/RESULTS.md`](cases/RESULTS.md#where-things-stand).
+16 threads against Fortran on one. Fluxes agree to 1e-13 W/m2 either way. The
+per-thread gap is entirely gas optics: timed per stage, rte3d's transport is 13 to 21
+percent faster than the reference's, and its gas optics and Planck source together 38
+to 62 percent slower. `--breakdown` does not show that split; see
+[`cases/RESULTS.md`](cases/RESULTS.md#where-things-stand) for why.
 
 On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1272 ms longwave and 1406 ms
 shortwave on an RTX A4500, single precision, and is bound by memory bandwidth

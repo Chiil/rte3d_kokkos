@@ -158,12 +158,27 @@ behind the reference, closing as the problem grows. On all cores it is 5.4 to 5.
 the reference's serial run. The shortwave at 4096 columns takes 2081 ms on 16 threads,
 and both bands together peak at 1.2 GB.
 
-`--breakdown` does not split that per-thread gap. At 256 columns it times gas optics at
-770 ms and transport at 332 ms, more together than the 743 ms of the fused solve,
-because the staged path writes the whole `(ngpt, nlay, ncol)` spectrum between the two
-and the fused one never does -- the same reason it cannot be used on a GPU, below. An
-earlier measurement on a 15-core Apple Silicon host, built with clang, did add up: 358
-ms in all, of which gas optics 310 and transport 59, against 290 ms for the reference.
+The per-thread gap is all gas optics; transport is ahead. Timed per stage, with
+fences around each inside the fused g-point loop on the rte3d side and each kernel call
+on its own on the reference's, per solve on one thread:
+
+| | rte3d, 256 | reference, 256 | rte3d, 1024 | reference, 1024 |
+|---|---|---|---|---|
+| gas optics and Planck source | 619 ms | 381 ms | 2474 ms | 1796 ms |
+| transport | **126 ms** | 145 ms | **479 ms** | 604 ms |
+
+rte3d's Planck fraction is computed in its optical-depth kernel and the reference's in
+its Planck kernel, so only the sum of the two is comparable. The reference's transport
+includes writing a flux per g-point, which rte3d accumulates instead.
+
+`--breakdown` cannot show this. At 256 columns it reports gas optics at 770 ms and
+transport at 332 ms, more together than the 743 ms of the fused solve: each stage is a
+separate Python call that copies the whole `(ngpt, nlay, ncol)` spectrum in or out --
+the transport call alone moves some 400 MB of sources and optical depths into new
+arrays and returns two flux arrays as large -- and that is most of what it times. The
+same is why it cannot be used on a GPU, below. An earlier measurement on a 15-core
+Apple Silicon host, built with clang, did add up: 358 ms in all, of which gas optics 310
+and transport 59, against 290 ms for the reference.
 
 Transport used to be 555 ms of that Apple single-threaded total, two thirds of the
 runtime. Each `(g-point, column)` pair ran an entire sequential vertical recurrence,
