@@ -1,7 +1,8 @@
 # Design notes
 
 Why rte3d is built the way it is: what is ported, how it validates and performs, and the
-decisions behind the kernels. [`README.md`](README.md) is how to build, test and run it.
+decisions behind the kernels. [`README.md`](README.md) is how to build, test and run it;
+[`CHANGES.md`](CHANGES.md) lists every departure from the reference in one place.
 
 ## Why the dimension order matters
 
@@ -73,15 +74,20 @@ gases as Rayleigh — and the backward-camera tracer is not started.
 
 `Solver::solve_lw_rt` drives the longwave tracer the same way. Its photons are emitted
 by every cell, the surface and the top boundary in proportion to the local source, and
-it scores absorption minus emission, the flux divergence. The g-points whose gas is
-opaque within a cell are solved plane-parallel instead, since there is no horizontal
-transport to resolve there.
+it scores absorption minus emission, the flux divergence. With `min_mfp_grid_ratio`
+set, the g-points whose gas is opaque within a cell are solved plane-parallel instead,
+since there is no horizontal transport to resolve there; at the default of zero every
+g-point is traced. The air above the box is either lumped into its top cell or, with
+`lump_above = false`, left outside it and brought in as the downward flux a
+plane-parallel solve of the full column leaves at the box's top, as the reference does.
 
-On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two solvers
-agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on the
-column absorption -- which is the two-stream's own error plus what the third dimension
-moves around, not a discrepancy. That case is 235 million photons and takes 12.3 s on
-an RTX A4500, single precision, against 229 ms for the two-stream solve beside it.
+On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two shortwave
+solvers agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on
+the column absorption -- which is the two-stream's own error plus what the third
+dimension moves around, not a discrepancy. On the LES cloud field both tracers run 1.9
+to 2.5 times faster than rte-rrtmgp-cpp's and agree with it to 0.04 percent on the
+shortwave boundary fluxes; [`cases/RESULTS.md`](cases/RESULTS.md#les_cloudfield) has the
+timings and the comparison.
 
 **Next:** aerosol optics, then MicroHH integration.
 
@@ -182,6 +188,32 @@ so the solvers do not write one: `Flux_sink` says where a flux is to go, and the
 kernel adds it straight into the running spectral totals. The only g-point flux left is
 the shortwave's direct beam, which the last kernel reads back to put it in the totals.
 
+## Single precision without cancellation
+
+Several of the reference's formulas lose their accuracy in single precision, by
+cancellation or by a floor sized for double. rte3d rewrites them, mostly after
+RRTMGP.jl's precision notes, and checks each against the float64 formula:
+
+- delta-scaling takes `g/(1+g)`, not `(g-g^2)/(1-g^2)`;
+- the two-stream `k^2` comes from `2(1-w0)` (shortwave) or `lw_diff_sec*(1-w0)`
+  (longwave), and `1 - exp(-2k*tau)` through `expm1` for thin layers;
+- the Meador-Weaver numerators are written through `1-e1` and `1-T`, which do not
+  cancel as k -> 0;
+- the shortwave direct-beam terms are interpolated across their 0/0 at `k*mu0 = 1`,
+  where the reference's `+eps` denominator loses them entirely;
+- the floor on `k^2` is 1e-12 in both bands, where the reference's `1e4*eps` is 1.2e-3
+  in single precision and biases k for w0 near 1;
+- the longwave two-stream source is collected into an absorptance and a gradient
+  weight, instead of dividing by tau and then differencing; the reference's error grows
+  like eps/tau, and is tens of W/m2 at tau ~ 1e-6;
+- `feta` is taken relative to the clamped `jeta`, so eta = 1 lands on the last node.
+
+In double precision these change nothing measurable: the fluxes still agree with the
+reference to about 1e-13. In single precision they move rte3d closer to the double
+answer than the single-precision reference is, so the random comparisons against that
+reference leave out the columns where it is the less accurate (thin layers, k*mu0 near
+1, k^2 below its floor).
+
 ## One source for both vertical orientations
 
 `Rte_kernels::Vert<top_at_1>` in `include_kernels/rte_solver_kernels.h` carries the two
@@ -258,6 +290,20 @@ noise. There is no host counterpart, so the CPU build draws them pseudo-randomly
 noisier at the same photon count; it is there to run the test suite, whose tolerances
 are set by the photon count anyway.
 
+Every thread seeds its own stream directly, from a SplitMix64-mixed seed at
+subsequence zero, rather than calling `curand_init(seed, seed, 0)`: the skip-ahead to
+a subsequence of its own cost about 6 ms per launch, a fifth of the walk. The mixing is
+what keeps neighbouring threads' streams uncorrelated.
+
+## Reproducible traces
+
+The photon walks score into 64-bit integers with 32 fractional bits, not floats. The
+GPU does not order atomic adds the same way twice, and floating-point addition is not
+associative, so float counters gave different last bits from run to run; integer
+addition does not. A run is now reproducible bit for bit, for 1 to 3 percent of the
+walk. The type is `uint64_t`, because Kokkos has a native atomic add for it and lowers
+`unsigned long long` to a compare-and-swap loop.
+
 The generators are `__device__` functions where `KOKKOS_INLINE_FUNCTION` is
 `__host__ __device__`, and nvcc will not let the second call the first. So the photon
 walk carries `RTE3D_DEVICE_FUNCTION` instead, declared in the same header. It costs
@@ -312,9 +358,11 @@ a consumer card it runs at a sixty-fourth of the single-precision rate.
 
 ## Known defects in the Fortran reference
 
-Each is reproduced or worked around deliberately, and pinned by a test.
-A fourth, `lw_solver_2stream` passing every g-point the first one's `lev_source`, was
-fixed upstream in #424; the reference is now compared against directly.
+Each is reproduced or worked around deliberately, and pinned by a test. Another,
+`lw_solver_2stream` passing every g-point the first one's `lev_source`, was fixed
+upstream in #424; the reference is now compared against directly. The precision
+problems above are not listed here: they are faithful to the formulas, just not to
+single precision.
 
 - **`LW_diff_sec = 1.66` is a single-precision literal** promoted to double, so its
   value is 1.65999996662139893. rte3d matches it bit-for-bit rather than "fixing" it.
@@ -323,11 +371,6 @@ fixed upstream in #424; the reference is now compared against directly.
   #431). rte3d keeps
   the clamped index v1.8 used; `test_interpolation_clamps_out_of_range_inputs`
   compares the weights only where the reference is defined.
-- **`lw_source_2str` is ill-conditioned in single precision** for thin layers. It
-  divides by tau and then differences the results, and its cut-off at tau = 1e-8 is a
-  double-precision one. At tau ~ 1e-6 both the reference and rte3d are tens of W/m2
-  off their double-precision fluxes. The single-precision comparisons therefore draw
-  tau from 0.1 up; see `tau_min_2stream` in `tests/test_rte_lw.py`.
 - **`rte_kernels.h` mis-documents `flux_upJac`** as `(ncol,nlay+1,ngpt)`; the Fortran
   declares it `(ncol,nlay+1)`, since only broadband Jacobians are provided.
 
