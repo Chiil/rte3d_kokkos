@@ -12,18 +12,16 @@ Rte_lw::Noscat_scratch Rte_lw::Noscat_scratch::make(
         const bool do_jacobians)
 {
     const auto no_init = Kokkos::WithoutInitializing;
-    const int nlev = nlay + 1;
+
+    // The layer count and do_jacobians no longer size anything: the sweeps keep their
+    // state in the carry. They stay in the signature, which every caller uses.
+    (void)nlay;
+    (void)do_jacobians;
 
     Noscat_scratch s;
 
-    s.trans = Array_2d<TF>(Kokkos::view_alloc("trans", no_init), nlay, ncol);
-    s.source_up = Array_2d<TF>(Kokkos::view_alloc("source_up", no_init), nlay, ncol);
-    s.source_dn = Array_2d<TF>(Kokkos::view_alloc("source_dn", no_init), nlay, ncol);
-    s.rad_up = Array_2d<TF>(Kokkos::view_alloc("rad_up", no_init), nlev, ncol);
-    s.rad_dn = Array_2d<TF>(Kokkos::view_alloc("rad_dn", no_init), nlev, ncol);
+    s.rad_dn_sfc = Array_1d<TF>(Kokkos::view_alloc("rad_dn_sfc", no_init), ncol);
     s.carry = Array_2d<TF>(Kokkos::view_alloc("carry", no_init), 2, ncol);
-    s.rad_up_jac = Array_2d<TF>(
-            Kokkos::view_alloc("rad_up_jac", no_init), do_jacobians ? nlev : 0, do_jacobians ? ncol : 0);
 
     s.weights_h = decltype(s.weights_h)(
             Kokkos::view_alloc("weights_h", no_init), weights.extent(0));
@@ -80,7 +78,6 @@ namespace
 
         const int nlay = static_cast<int>(tau.extent(0));
         const int ncol = static_cast<int>(tau.extent(1));
-        const int nlev = nlay + 1;
         const int nmus = static_cast<int>(weights.extent(0));
 
         const bool do_jacobians = flux_up_jac.size() > 0;
@@ -91,13 +88,7 @@ namespace
         const Array_map_1d<const TF> sfc_source = sources.sfc_source;
         const Array_map_1d<const TF> sfc_source_jac = sources.sfc_source_jac;
 
-        // Per-column scratch, the same shapes the reference keeps.
-        const Array_2d<TF> trans = scratch.trans;
-        const Array_2d<TF> source_up = scratch.source_up;
-        const Array_2d<TF> source_dn = scratch.source_dn;
-        const Array_2d<TF> rad_up = scratch.rad_up;
-        const Array_2d<TF> rad_dn = scratch.rad_dn;
-        const Array_2d<TF> rad_up_jac = scratch.rad_up_jac;
+        const Array_1d<TF> rad_dn_sfc = scratch.rad_dn_sfc;
         const Array_2d<TF> carry = scratch.carry;
 
         // The weights are needed on the host to scale each angle's contribution; the
@@ -109,29 +100,35 @@ namespace
 
         // Each quadrature angle is an independent single-angle solve; the reference
         // sums them, and so do we.
+        //
+        // The whole solve is the two sweeps. Each computes the transmission and the
+        // layer source it needs as it goes, and hands its radiance, converted back to
+        // flux assuming azimuthal isotropy, straight to the sink -- a g-point flux for
+        // a caller that wants one, the running spectral totals for a whole-spectrum
+        // solve. A separate source kernel and a separate accumulation kernel would
+        // write five (nlay, ncol) arrays for the sweeps to read back, and at the
+        // column counts this runs at the solver is bound by exactly that traffic: SP
+        // all-sky on an A4500 at 16384 columns, the source and accumulation kernels
+        // took 27 of the solver's 44 ms. The up sweep repeats the down sweep's
+        // exponential instead of reading it, which is cheaper than storing it.
+        //
+        // It is a trade towards large column counts in single precision, which is
+        // what production runs at: RCEMIP longwave at 65536 columns 1278 -> 1022 ms.
+        // The sweeps run only ncol threads, so the arithmetic moved into them costs
+        // where there are too few columns to hide it or where it is expensive: SP
+        // all-sky at 1024 columns 17 -> 26 ms, DP twice as slow there, and the CPU
+        // builds 8-19% slower at 1024 columns. Keeping the source kernel and moving
+        // only the accumulation into the sweeps gains half as much at 65536 columns
+        // and still costs 38% at 1024.
+        //
+        // The first angle assigns to a g-point flux rather than accumulating, which
+        // is what zeroing it up front would have bought -- two full-size memsets per
+        // g-point. The Jacobian is spectrally integrated and so keeps accumulating;
+        // the caller zeroes that one.
         for (int imu=0; imu<nmus; ++imu)
         {
             const TF scaling = pi * weights_h(imu);
-
-            // Optical path, transmission and the layer source functions. No vertical
-            // dependence, so this is the fully parallel part of the solver.
-            parallel_for_2d("lw_noscat_source", {0, 0}, {nlay, ncol},
-                KOKKOS_LAMBDA(const int ilay, const int icol)
-                {
-                    const TF tau_loc = tau(ilay, icol) * secants(imu, icol);
-                    const TF trans_l = Kokkos::exp(-tau_loc);
-                    trans(ilay, icol) = trans_l;
-
-                    TF source_up_l, source_dn_l;
-                    Rte_kernels::lw_source_noscat(
-                            lay_source(ilay, icol),
-                            lev_source(ilay + V::lev_up(), icol),
-                            lev_source(ilay + V::lev_dn(), icol),
-                            tau_loc, trans_l, source_up_l, source_dn_l);
-
-                    source_up(ilay, icol) = source_up_l;
-                    source_dn(ilay, icol) = source_dn_l;
-                });
+            const bool later_mu = imu > 0;
 
             // Transport down, from the top of the atmosphere. Transport is for
             // intensity, so the incident flux is converted assuming azimuthal
@@ -144,15 +141,26 @@ namespace
                     {
                         const TF rad_toa = has_inc_flux ? inc_flux(icol) / scaling : TF(0.);
 
-                        rad_dn(lev_toa, icol) = rad_toa;
+                        flux_dn.put(lev_toa, icol, scaling * rad_toa, later_mu);
                         carried[0] = rad_toa;
                     }
 
                     const int ilay = V::lay_from_toa(j, nlay);
-                    const TF rad = trans(ilay, icol) * carried[0] + source_dn(ilay, icol);
+                    TF trans, source_up, source_dn;
+                    Rte_kernels::lw_layer_noscat(
+                            tau(ilay, icol), secants(imu, icol), lay_source(ilay, icol),
+                            lev_source(ilay + V::lev_up(), icol),
+                            lev_source(ilay + V::lev_dn(), icol),
+                            trans, source_up, source_dn);
 
-                    rad_dn(ilay + V::lev_dn(), icol) = rad;
+                    const TF rad = trans * carried[0] + source_dn;
+
+                    flux_dn.put(ilay + V::lev_dn(), icol, scaling * rad, later_mu);
                     carried[0] = rad;
+
+                    // The surface boundary condition of the up sweep.
+                    if (j == nlay-1)
+                        rad_dn_sfc(icol) = rad;
                 });
 
             // Transport up, starting from surface reflection and emission.
@@ -163,58 +171,42 @@ namespace
                     {
                         const TF emis = sfc_emis(icol);
 
-                        const TF rad_sfc = rad_dn(lev_sfc, icol) * (TF(1.) - emis)
+                        const TF rad_sfc = rad_dn_sfc(icol) * (TF(1.) - emis)
                                          + emis * sfc_source(icol);
 
-                        rad_up(lev_sfc, icol) = rad_sfc;
+                        flux_up.put(lev_sfc, icol, scaling * rad_sfc, later_mu);
                         carried[0] = rad_sfc;
 
                         if (do_jacobians)
                         {
                             const TF jac_sfc = emis * sfc_source_jac(icol);
 
-                            rad_up_jac(lev_sfc, icol) = jac_sfc;
+                            flux_up_jac(lev_sfc, icol) += scaling * jac_sfc;
                             carried[1] = jac_sfc;
                         }
                     }
 
                     const int ilay = V::lay_from_sfc(j, nlay);
                     const int lev_up = ilay + V::lev_up();
-                    const TF trans_l = trans(ilay, icol);
+                    TF trans, source_up, source_dn;
+                    Rte_kernels::lw_layer_noscat(
+                            tau(ilay, icol), secants(imu, icol), lay_source(ilay, icol),
+                            lev_source(ilay + V::lev_up(), icol),
+                            lev_source(ilay + V::lev_dn(), icol),
+                            trans, source_up, source_dn);
 
-                    const TF rad = trans_l * carried[0] + source_up(ilay, icol);
+                    const TF rad = trans * carried[0] + source_up;
 
-                    rad_up(lev_up, icol) = rad;
+                    flux_up.put(lev_up, icol, scaling * rad, later_mu);
                     carried[0] = rad;
 
                     if (do_jacobians)
                     {
-                        const TF jac = trans_l * carried[1];
+                        const TF jac = trans * carried[1];
 
-                        rad_up_jac(lev_up, icol) = jac;
+                        flux_up_jac(lev_up, icol) += scaling * jac;
                         carried[1] = jac;
                     }
-                });
-
-            // Convert intensity back to flux, assuming azimuthal isotropy, and hand
-            // this angle's contribution to the sink -- a g-point flux for a caller
-            // that wants one, the running spectral totals for a whole-spectrum solve,
-            // which is a full write and read back saved per g-point.
-            //
-            // The first angle assigns to a g-point flux rather than accumulating,
-            // which is what zeroing it up front would have bought -- two full-size
-            // memsets per g-point. The Jacobian is spectrally integrated and so keeps
-            // accumulating; the caller zeroes that one.
-            const bool later_mu = imu > 0;
-
-            parallel_for_2d("lw_noscat_accumulate", {0, 0}, {nlev, ncol},
-                KOKKOS_LAMBDA(const int ilev, const int icol)
-                {
-                    flux_up.put(ilev, icol, scaling * rad_up(ilev, icol), later_mu);
-                    flux_dn.put(ilev, icol, scaling * rad_dn(ilev, icol), later_mu);
-
-                    if (do_jacobians)
-                        flux_up_jac(ilev, icol) += scaling * rad_up_jac(ilev, icol);
                 });
         }
     }

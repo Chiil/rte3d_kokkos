@@ -221,6 +221,22 @@ namespace Rte_kernels
         source_up = (TF(1.) - trans) * lev_source_up + TF(2.) * fact * (lay_source - lev_source_up);
     }
 
+    // One layer of the no-scattering solver at one angle: the transmission along the
+    // slant path and the layer's source functions. Both transport sweeps call it, the
+    // up sweep repeating the down sweep's work rather than reading it from memory.
+    KOKKOS_INLINE_FUNCTION
+    void lw_layer_noscat(
+            const TF tau, const TF secant,
+            const TF lay_source, const TF lev_source_up, const TF lev_source_dn,
+            TF& trans, TF& source_up, TF& source_dn)
+    {
+        const TF tau_loc = tau * secant;
+        trans = Kokkos::exp(-tau_loc);
+
+        lw_source_noscat(lay_source, lev_source_up, lev_source_dn, tau_loc, trans,
+                         source_up, source_dn);
+    }
+
     // Transport of diffuse radiation through a vertically layered atmosphere, after
     // Shonk and Hogan 2008, doi:10.1175/2007JCLI1940.1 (SH08). Shared by longwave and
     // shortwave. Reference: adding in mo_rte_solver_kernels.F90.

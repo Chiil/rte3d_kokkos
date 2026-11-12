@@ -17,15 +17,12 @@
 // synchronizing the device, so it serializes the launches as well.
 namespace Rte_lw
 {
-    // Scratch for solver_noscat, sized for one g-point.
+    // Scratch for solver_noscat, sized for one g-point. The sweeps compute the layer
+    // sources themselves and put the fluxes straight into the sink, so nothing with a
+    // vertical dimension is kept between them.
     struct Noscat_scratch
     {
-        Array_2d<TF> trans;      // (nlay, ncol)
-        Array_2d<TF> source_up;  // (nlay, ncol)
-        Array_2d<TF> source_dn;  // (nlay, ncol)
-        Array_2d<TF> rad_up;     // (nlev, ncol)
-        Array_2d<TF> rad_dn;     // (nlev, ncol)
-        Array_2d<TF> rad_up_jac; // (nlev, ncol), empty unless Jacobians are wanted
+        Array_1d<TF> rad_dn_sfc; // (ncol) downward radiance at the surface, for the up sweep
         Array_2d<TF> carry;      // (2, ncol) for the transport sweeps' recurrences
 
         // The quadrature weights on the host: they scale each angle's contribution
