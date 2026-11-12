@@ -26,18 +26,18 @@
 #   ./tests/build_reference.sh [dp|sp] [rte-rrtmgp-dir] [output-dir]
 #   export RTE3D_FORTRAN_REF=<output-dir>/librte_kernels.<ext>
 #
-# dp, the default, goes to build/reference; sp to build/reference_sp.
+# dp, the default, goes to build_ref_dp/; sp to build_ref_sp/.
 set -euo pipefail
 
 precision="${1:-dp}"
 case "$precision" in
-    dp) fflags=();              default_out=reference ;;
-    sp) fflags=(-DRTE_USE_SP);  default_out=reference_sp ;;
+    dp) fflags=();              default_out=build_ref_dp ;;
+    sp) fflags=(-DRTE_USE_SP);  default_out=build_ref_sp ;;
     *)  echo "precision must be dp or sp, not '$precision'" >&2; exit 1 ;;
 esac
 
 src="${2:-$(dirname "$0")/../rte-rrtmgp}"
-out="${3:-$(dirname "$0")/../build/$default_out}"
+out="${3:-$(dirname "$0")/../$default_out}"
 FC="${FC:-gfortran}"
 
 # -march=native as rte3d's own configs build: it lets the compiler contract a*b + c into

@@ -2,11 +2,11 @@
 
 ## Prompts
 Do NOT use subagents without asking.
-Claude MAY build and run the tests in this repo: `cmake --build build` and
-`pytest tests`. Run them to verify a change, not to browse. Claude MAY also always
-rebuild the existing GPU build directories (`cmake --build build_cuda`,
-`cmake --build build_gpu_sp`). Anything else -- a fresh cmake configure, network
-operations -- ask first.
+Claude MAY build and run the tests in this repo: `cmake --build` on the four build
+directories `build_cpu_dp`, `build_cpu_sp`, `build_gpu_dp` and `build_gpu_sp`, and
+`tests/run_all.sh`, which tests all four against the Fortran reference of their own
+precision. Run them to verify a change, not to browse. Anything else -- a fresh cmake
+configure, network operations -- ask first.
 After creating or changing files, always `git add` them so nothing is left untracked.
 Commit at the end of each step, once it builds and the tests pass, and say so in the
 report. Do not commit work that is unverified or half-finished.

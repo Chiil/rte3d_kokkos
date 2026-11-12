@@ -17,7 +17,7 @@ cmake --build .
 cd ..
 
 export RTE3D_PYTHON_PATH=$PWD/build/main_python
-pytest tests                                     # 221 tests
+pytest tests                                     # 215 tests
 python cases/rfmip_rte/run_rfmip_rte.py --plot           # a case, end to end
 ```
 
@@ -53,8 +53,12 @@ whichever you want; `build/` and `build_gcc/` can coexist.
 
 ## Testing
 
+The test setup expects one build directory per configuration: `build_cpu_dp`,
+`build_cpu_sp` (`-DUSESP=1`), `build_gpu_dp` (`-DUSEGPU=1`) and `build_gpu_sp`
+(both). On a machine without a GPU, the two CPU builds are enough.
+
 ```bash
-export RTE3D_PYTHON_PATH=$PWD/build/main_python
+export RTE3D_PYTHON_PATH=$PWD/build_cpu_dp/main_python
 pytest tests
 ```
 
@@ -64,9 +68,9 @@ the full suite:
 ```bash
 ./tests/build_reference.sh                       # needs gfortran; set FC to override
 
-export RTE3D_PYTHON_PATH=$PWD/build/main_python
-export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
-export RTE3D_FORTRAN_SHIM=$PWD/build/reference/librte3d_shim.dylib
+export RTE3D_PYTHON_PATH=$PWD/build_cpu_dp/main_python
+export RTE3D_FORTRAN_REF=$PWD/build_ref_dp/librte_kernels.dylib
+export RTE3D_FORTRAN_SHIM=$PWD/build_ref_dp/librte3d_shim.dylib
 pytest tests
 ```
 
@@ -80,18 +84,19 @@ before #424 also fails `test_2stream_matches_reference`, as it handed every g-po
 the first one's `lev_source`.
 
 Each precision is tested against a reference built in the same precision; the
-fixtures check this and fail on a mismatch. To run the whole suite in both, with a
-single-precision build in `build_cpu_sp/` (`-DUSESP=1`):
+fixtures check this and fail on a mismatch. To run the whole suite on every build
+present:
 
 ```bash
-./tests/build_reference.sh dp                    # -> build/reference
-./tests/build_reference.sh sp                    # -> build/reference_sp
-./tests/run_all.sh                               # pytest, double then single
+./tests/build_reference.sh dp                    # -> build_ref_dp
+./tests/build_reference.sh sp                    # -> build_ref_sp
+./tests/run_all.sh                               # pytest, once per build
 ```
 
 The reference builds with `-O2 -march=native`, as rte3d's configs do, so both contract
 to fused multiply-adds alike; set `FFLAGS` to match another configuration.
-`run_all.sh` takes `RTE3D_BUILD_DP` and `RTE3D_BUILD_SP` for other build directories.
+`run_all.sh` skips builds that do not exist; `RTE3D_BUILDS` overrides the list, with
+each directory's name ending in `_dp` or `_sp` to pick its reference.
 
 | variable | what it unlocks |
 |---|---|
@@ -154,8 +159,8 @@ Copy-paste, from the repository root:
 ```bash
 ./tests/build_reference.sh                      # once; needs gfortran
 
-export RTE3D_PYTHON_PATH=$PWD/build/main_python
-export RTE3D_FORTRAN_REF=$PWD/build/reference/librte_kernels.dylib
+export RTE3D_PYTHON_PATH=$PWD/build_cpu_dp/main_python
+export RTE3D_FORTRAN_REF=$PWD/build_ref_dp/librte_kernels.dylib
 
 # like for like: one thread each. This is the number that matters.
 OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran --breakdown
