@@ -45,7 +45,7 @@ root, both read-only:
 
 ## Layout
 
-- `include/types.h` — precision, array aliases, parallel-for wrappers, numpy interop
+- `include/types.h` — precision, array aliases, parallel-for wrappers, numpy interop, `fast_div`
 - `include/` — frontend structs and free-function declarations
 - `include_kernels/` — header-only `KOKKOS_INLINE_FUNCTION` kernels
 - `src/` — implementations; bindings live beside their class in `*_python.cpp`

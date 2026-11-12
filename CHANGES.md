@@ -67,4 +67,4 @@ precision the fluxes agree with the reference to about 1e-13.
 | Integer photon counters (fixed point) and per-thread seeding | Traces reproduce bit for bit; RNG setup is cheaper |
 | `min_mfp_grid_ratio` fallback to plane-parallel for opaque g-points | No photons spent where there is no horizontal transport |
 | Fast math in the ray-tracer files only | Monte Carlo noise is far above the cost of fast math; everything else stays IEEE |
-| Approximate division (`fast_div`) in the SW and LW solvers, GPU single precision only | 8-14% faster solves; gas optics keeps exact division for its invariants |
+| Approximate division (`fast_div`) in the SW and LW solvers, GPU single precision only | 5-16% faster solves on the all-sky case; gas optics keeps exact division for its invariants |

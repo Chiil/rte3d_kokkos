@@ -338,11 +338,11 @@ sizes would have to be done in blocks of columns.
 
 **Where rte3d stands.** rte3d is behind at every size the reference can reach, in
 both precisions, with one exception: the single-precision longwave at 16384 columns,
-which it now solves 5% faster. The gap narrows with column count in single precision but
+which it now solves 11% faster. The gap narrows with column count in single precision but
 much less in double precision. Two separate costs make it up:
 
 - *A fixed cost per solve*, largest in the shortwave. Doubling from 1024 to 2048 columns
-  costs rte3d only 6 ms more in single precision and 26 ms in double, against a 45 and
+  costs rte3d only 6 ms more in single precision and 26 ms in double, against a 36 and
   158 ms solve at 1024. Part of that is the one-g-point-at-a-time design: each of 224
   g-points launches its own kernels, too small at 1024 columns to fill the card, the
   small-problem gap the RCEMIP comparison above describes. In double precision most of
@@ -355,8 +355,8 @@ much less in double precision. Two separate costs make it up:
 
   | | rte3d | Fortran OpenACC |
   |---|---|---|
-  | lw, single | 3.2 us | 5.6 us |
-  | sw, single | 4.6 us | 6.6 us |
+  | lw, single | 3.5 us | 5.6 us |
+  | sw, single | 4.9 us | 6.6 us |
   | lw, double | 30.3 us | 15.4 us |
   | sw, double | 43.1 us | 25.2 us |
 

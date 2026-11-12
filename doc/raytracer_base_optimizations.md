@@ -186,7 +186,9 @@ taken the divide. It stays in: free on the GPU, large on the CPU.
 
 Neither is bit-for-bit; both move where the rounding falls. The thesis' `__float2int_rz`
 buys nothing for us — `static_cast<int>` already emits a round-toward-zero convert — and
-`__fdividef` is out under convention 3 anyway.
+`__fdividef` buys nothing in a file already built with `-use_fast_math`. (Outside the ray
+tracer it is now available as `fast_div` in `include/types.h`, which keeps the intrinsic
+out of the physics code as convention 3 requires; the solvers use it.)
 
 The optional `scatter()` frame simplification was not done. It changes the frame's
 numerics and its argument is register pressure, which is a second-order limit here.

@@ -23,7 +23,7 @@ that `rte-rrtmgp-cpp` carries.
 
 | header | contents |
 |---|---|
-| `include/types.h` | precision, array aliases, parallel-for wrappers, numpy interop |
+| `include/types.h` | precision, array aliases, parallel-for wrappers, numpy interop, `fast_div` |
 | `include/rte_sw.h` | `sw_solver_noscat`, `sw_solver_2stream` |
 | `include/rte_lw.h` | `lw_solver_noscat` with multi-angle quadrature and the surface-temperature Jacobian, `lw_solver_2stream` |
 | `include/optical_props.h` | delta-scaling, the increment operations, column subsetting |
