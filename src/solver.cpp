@@ -136,7 +136,7 @@ Solver::Solve_state Solver::prepare(
         if (lw_scattering)
             s.lw_2stream = Rte_lw::Two_stream_scratch::make(nlay, ncol);
         else
-            s.lw_noscat = Rte_lw::Noscat_scratch::make(nlay, ncol, weights, do_jacobian);
+            s.lw_noscat = Rte_lw::Noscat_scratch::make(ncol, weights);
     else
         s.sw_2stream = Rte_sw::Two_stream_scratch::make(nlay, ncol);
 

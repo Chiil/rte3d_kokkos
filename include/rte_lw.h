@@ -30,10 +30,7 @@ namespace Rte_lw
         // copy per g-point.
         Kokkos::View<TF*, Kokkos::LayoutRight, Kokkos::HostSpace> weights_h;
 
-        static Noscat_scratch make(
-                const int nlay, const int ncol,
-                const Array_1d<const TF>& weights,
-                const bool do_jacobians);
+        static Noscat_scratch make(const int ncol, const Array_1d<const TF>& weights);
     };
 
     // Scratch for solver_2stream, sized for one g-point.

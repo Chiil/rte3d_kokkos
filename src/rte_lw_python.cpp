@@ -68,7 +68,7 @@ void Rte_lw::init_python_bindings(py::module_& m)
 
             // Built once: the solver's scratch does not depend on the g-point, and
             // allocating it per call would be a cudaMalloc/cudaFree pair per g-point.
-            const auto scratch = Rte_lw::Noscat_scratch::make(nlay, ncol, weights_d, do_jacobians);
+            const auto scratch = Rte_lw::Noscat_scratch::make(ncol, weights_d);
 
             for (int igpt=0; igpt<ngpt; ++igpt)
                 Rte_lw::solver_noscat(

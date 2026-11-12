@@ -7,16 +7,9 @@ using Rte_kernels::adding;
 
 
 Rte_lw::Noscat_scratch Rte_lw::Noscat_scratch::make(
-        const int nlay, const int ncol,
-        const Array_1d<const TF>& weights,
-        const bool do_jacobians)
+        const int ncol, const Array_1d<const TF>& weights)
 {
     const auto no_init = Kokkos::WithoutInitializing;
-
-    // The layer count and do_jacobians no longer size anything: the sweeps keep their
-    // state in the carry. They stay in the signature, which every caller uses.
-    (void)nlay;
-    (void)do_jacobians;
 
     Noscat_scratch s;
 
