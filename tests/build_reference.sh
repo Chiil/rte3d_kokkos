@@ -15,10 +15,11 @@
 #
 # Neither needs NetCDF: Python reads the coefficient file and passes arrays in.
 #
-# The reference is rte-rrtmgp v1.9. Its source layout is what the file lists below
-# assume, and its conventions are rte3d's: the longwave quadrature weights scale by pi
-# rather than 2 pi (from v1.8), and logicals are C bool, one byte. An older checkout
-# builds, but its no-scattering longwave fluxes come out twice rte3d's.
+# The reference is rte-rrtmgp main as of #431 (Nov 2026). The file lists below assume
+# the rte/{kernels,frontend} and rrtmgp/{kernels,frontend} layout introduced by #378;
+# a v1.9 checkout, with its rte-kernels/ directories, no longer builds with this
+# script. Its conventions are rte3d's: the longwave quadrature weights scale by pi
+# rather than 2 pi (from v1.8), and logicals are C bool, one byte.
 #
 # Build one per precision, to test the matching rte3d build against:
 #
@@ -59,12 +60,12 @@ shim="$(cd "$(dirname "$0")/shim" && pwd)"
 
 # Compiled in dependency order so the .mod files exist when they are needed.
 ( cd "$out" && "$FC" -fPIC -shared "${fflags[@]}" -o "librte_kernels.$ext" \
-    "$src/rte-kernels/mo_rte_kind.F90" \
-    "$src/rte-kernels/mo_rte_util_array.F90" \
-    "$src/rte-kernels/mo_rte_solver_kernels.F90" \
-    "$src/rte-kernels/mo_optical_props_kernels.F90" \
-    "$src/rte-kernels/mo_fluxes_broadband_kernels.F90" \
-    "$src/rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90" )
+    "$src/rte/kernels/mo_rte_kind.F90" \
+    "$src/rte/kernels/mo_rte_util_array.F90" \
+    "$src/rte/kernels/mo_rte_solver_kernels.F90" \
+    "$src/rte/kernels/mo_optical_props_kernels.F90" \
+    "$src/rte/kernels/mo_fluxes_broadband_kernels.F90" \
+    "$src/rrtmgp/kernels/mo_gas_optics_rrtmgp_kernels.F90" )
 
 # The reduced arrays are PRIVATE components of ty_gas_optics_rrtmgp, so the shim cannot
 # read them from outside the module. Compile a copy with the type-body `private`
@@ -76,27 +77,28 @@ awk 'BEGIN{n=0}
        if (n == 2) { print "    ! private relaxed by tests/build_reference.sh"; next }
      }
      {print}' \
-    "$src/rrtmgp-frontend/mo_gas_optics_rrtmgp.F90" > "$out/mo_gas_optics_rrtmgp_open.F90"
+    "$src/rrtmgp/frontend/mo_gas_optics_rrtmgp.F90" > "$out/mo_gas_optics_rrtmgp_open.F90"
 
 ( cd "$out" && "$FC" -fPIC -shared "${fflags[@]}" -o "librte3d_shim.$ext" \
-    "$src/rte-kernels/mo_rte_kind.F90" \
-    "$src/rte-frontend/mo_rte_config.F90" \
-    "$src/rte-kernels/mo_rte_util_array.F90" \
-    "$src/rte-frontend/mo_rte_util_array_validation.F90" \
-    "$src/rte-kernels/mo_optical_props_kernels.F90" \
-    "$src/rte-kernels/mo_rte_solver_kernels.F90" \
-    "$src/rte-kernels/mo_fluxes_broadband_kernels.F90" \
-    "$src/rte-frontend/mo_optical_props.F90" \
-    "$src/rte-frontend/mo_source_functions.F90" \
-    "$src/rte-frontend/mo_fluxes.F90" \
-    "$src/gas-optics/mo_gas_optics_constants.F90" \
-    "$src/gas-optics/mo_gas_optics_util_string.F90" \
-    "$src/gas-optics/mo_gas_concentrations.F90" \
-    "$src/gas-optics/mo_gas_optics.F90" \
-    "$src/rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90" \
+    "$src/rte/kernels/mo_rte_kind.F90" \
+    "$src/rte/frontend/mo_rte_config.F90" \
+    "$src/rte/kernels/mo_rte_util_array.F90" \
+    "$src/rte/frontend/mo_rte_util_array_validation.F90" \
+    "$src/rte/kernels/mo_optical_props_kernels.F90" \
+    "$src/rte/kernels/mo_rte_solver_kernels.F90" \
+    "$src/rte/kernels/mo_fluxes_broadband_kernels.F90" \
+    "$src/rte/kernels/mo_gas_optics_constants.F90" \
+    "$src/rte/kernels/mo_gas_optics_utils.F90" \
+    "$src/rte/frontend/mo_optical_props.F90" \
+    "$src/rte/frontend/mo_source_functions.F90" \
+    "$src/rte/frontend/mo_fluxes.F90" \
+    "$src/rte/frontend/gas-optics-template/mo_gas_optics_util_string.F90" \
+    "$src/rte/frontend/gas-optics-template/mo_gas_concentrations.F90" \
+    "$src/rte/frontend/gas-optics-template/mo_gas_optics.F90" \
+    "$src/rrtmgp/kernels/mo_gas_optics_rrtmgp_kernels.F90" \
     "$out/mo_gas_optics_rrtmgp_open.F90" \
-    "$src/rrtmgp-kernels/mo_cloud_optics_rrtmgp_kernels.F90" \
-    "$src/rrtmgp-frontend/mo_cloud_optics_rrtmgp.F90" \
+    "$src/rrtmgp/kernels/mo_cloud_optics_rrtmgp_kernels.F90" \
+    "$src/rrtmgp/frontend/mo_cloud_optics_rrtmgp.F90" \
     "$shim/rte3d_shim.F90" )
 
 echo "Built $out/librte_kernels.$ext"

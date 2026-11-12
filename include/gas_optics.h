@@ -177,7 +177,7 @@ namespace Gas_optics
 {
     // Locate each (layer, column) in the k-distribution's temperature, pressure and
     // binary-species grids. Reference: interpolation in
-    // rrtmgp-kernels/mo_gas_optics_rrtmgp_kernels.F90.
+    // rrtmgp/kernels/mo_gas_optics_rrtmgp_kernels.F90.
     //
     // Indices in flavor and the gas dimension of col_gas and vmr_ref are 0-based, with
     // 0 meaning dry air, matching the reference's 0:ngas bounds. The returned jtemp,
@@ -253,14 +253,11 @@ namespace Gas_optics
             const Array_map_2d<TF>& g);         // (nlay, ncol)
 
     // Dry air column amount [molecules/cm2] from the water vapour mixing ratio and
-    // the level pressures. Reference: get_col_dry.
-    //
-    // latitude may be empty, in which case a constant gravity is used, as the
-    // reference does when the argument is absent.
+    // the level pressures, at constant gravity. Reference: get_layer_number, which
+    // replaced get_col_dry and its latitude option in rte-rrtmgp #403.
     void compute_col_dry(
             const Array_2d<const TF>& vmr_h2o,   // (nlay, ncol)
             const Array_2d<const TF>& plev,      // (nlev, ncol)
-            const Array_1d<const TF>& latitude,  // (ncol), may be empty
             const Array_2d<TF>& col_dry);        // (nlay, ncol)
 
     // Column gas amounts for every gas the k-distribution knows about, in the order
@@ -274,7 +271,6 @@ namespace Gas_optics
             const std::vector<std::string>& gas_names,
             const Array_2d<const TF>& plev,      // (nlev, ncol)
             const Array_2d<const TF>& col_dry,   // (nlay, ncol), may be empty
-            const Array_1d<const TF>& latitude,  // (ncol), may be empty
             const Array_3d<TF>& col_gas);        // (ngas+1, nlay, ncol)
 
     // Reduce a coefficient file to the gases the host actually supplies, and build

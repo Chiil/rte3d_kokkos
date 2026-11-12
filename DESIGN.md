@@ -28,10 +28,10 @@ that `rte-rrtmgp-cpp` carries.
 | `include/optical_props.h` | delta-scaling, the increment operations, column subsetting |
 | `include/fluxes.h` | broadband and by-band flux reduction |
 
-Two things in `rte-kernels/` are deliberately not ported: `lw_transport_1rescl`, the
+Two things in `rte/kernels/` are deliberately not ported: `lw_transport_1rescl`, the
 approximate-scattering rescaling of Tang et al. 2018 (see the note at the top of
 `src/rte_lw.cpp`), and `zero_array_*`, which `Kokkos::deep_copy` already covers. The
-`rte-frontend/` layer is replaced rather than ported: its class hierarchy becomes the
+`rte/frontend/` layer is replaced rather than ported: its class hierarchy becomes the
 plain structs above, and the driver that runs a case with them is `include/solver.h`
 (`namespace Solver`), described under *One g-point at a time*.
 
@@ -298,9 +298,9 @@ Measured on RCEMIP at 65536 columns, single precision: the tracer goes from 10.6
 far above that. The domain-mean fluxes are unchanged to five decimals.
 
 Everywhere else the fix is to keep the transcendental off the device. Gas optics had
-one, Helmert's latitude correction to gravity in `compute_col_dry`, and it is a
-function of the column rather than the cell, so it is now built once per column on the
-host. With that gone, a single-precision GPU build contains **no double-precision
+one, Helmert's latitude correction to gravity in `compute_col_dry`, which was first
+moved to the host and has since been dropped, as upstream dropped it (rte-rrtmgp
+#403). With that gone, a single-precision GPU build contains **no double-precision
 instruction outside the longwave ray tracer** -- 405 kernels, 69000 instructions,
 verified with `cuobjdump -sass`. The longwave tracer's 226 are deliberate: its
 cumulative distribution of emitted power is held in double whatever `TF` is, because a
@@ -313,17 +313,14 @@ a consumer card it runs at a sixty-fourth of the single-precision rate.
 ## Known defects in the Fortran reference
 
 Each is reproduced or worked around deliberately, and pinned by a test.
+A fourth, `lw_solver_2stream` passing every g-point the first one's `lev_source`, was
+fixed upstream in #424; the reference is now compared against directly.
 
-- **`lw_solver_2stream` ignores the g-point index of `lev_source`**
-  (`rte-kernels/mo_rte_solver_kernels.F90:422`): the call to `lw_source_2str` passes
-  `lev_source` rather than `lev_source(:,:,igpt)`, so Fortran sequence association
-  hands every g-point the first g-point's slice. `lw_solver_noscat_oneangle:189` does
-  it correctly. Present since the original 2018 import. rte3d does the correct thing;
-  see `test_2stream_reference_bug_gpt_indexing`.
 - **`LW_diff_sec = 1.66` is a single-precision literal** promoted to double, so its
   value is 1.65999996662139893. rte3d matches it bit-for-bit rather than "fixing" it.
 - **Since v1.9, `interpolation` indexes `temp_ref` out of bounds** for a temperature
-  off the table: `ftemp` uses the unclamped `jtemp_` (rte-rrtmgp #315). rte3d keeps
+  off the table: `ftemp` uses the unclamped `jtemp_` (rte-rrtmgp #315, still open as of
+  #431). rte3d keeps
   the clamped index v1.8 used; `test_interpolation_clamps_out_of_range_inputs`
   compares the weights only where the reference is defined.
 - **`lw_source_2str` is ill-conditioned in single precision** for thin layers. It

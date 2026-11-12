@@ -94,7 +94,7 @@ Solver::Solve_state Solver::prepare(
 
     s.col_gas = Array_3d<TF>("col_gas", ngas + 1, nlay, ncol);
     Gas_optics::compute_col_gas(
-            gas_concs, k.gas_names, atm.plev, atm.col_dry, Array_1d<TF>(), s.col_gas);
+            gas_concs, k.gas_names, atm.plev, atm.col_dry, s.col_gas);
 
     s.interp = Gas_optics::interpolate(k, atm.play, atm.tlay, s.col_gas);
 

@@ -47,7 +47,7 @@ def fortran_ref(rte3d):
 
     Build it with tests/build_reference.sh, in the precision rte3d was built in, then
     point RTE3D_FORTRAN_REF at the resulting .so/.dylib. The C prototypes are documented
-    in rte-rrtmgp/rte-kernels/api/rte_kernels.h.
+    in the bind(C) wrappers in rte-rrtmgp/{rte,rrtmgp}/kernels/api/.
     """
     path = os.environ.get('RTE3D_FORTRAN_REF')
     if path is None:

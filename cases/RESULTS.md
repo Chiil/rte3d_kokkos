@@ -129,7 +129,7 @@ column gas amounts -> interpolation -> absorption optical depth
   -> Planck sources (longwave) or Rayleigh (shortwave) -> transport
 ```
 
-The column gas amounts come from rte3d on both sides, because `get_col_dry` has no
+The column gas amounts come from rte3d on both sides, because `get_layer_number` has no
 `bind(C)` entry point; that is a small constant added to each and does not tilt the
 comparison. Everything after it is rte3d's Kokkos kernels on one side and the
 reference's Fortran kernels through ctypes on the other — four calls per solve, so the

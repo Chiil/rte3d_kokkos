@@ -2,7 +2,7 @@
 
 rte3d never links this. See the `fortran_ref` fixture in conftest.py.
 
-The prototypes follow rte-rrtmgp/rte-kernels/api/rte_kernels.h, as of v1.9. Every
+The prototypes follow the bind(C) wrappers in rte-rrtmgp/{rte,rrtmgp}/kernels/api/. Every
 scalar there is declared `const int&` / `const Bool&`, so it is passed by reference.
 From v1.9 on, `Bool` is always C `bool`, one byte. `Float` is double unless the
 reference was compiled with -DRTE_USE_SP; `precision()` finds out which.

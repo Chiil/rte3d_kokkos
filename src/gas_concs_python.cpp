@@ -54,8 +54,7 @@ void Gas_concs::init_python_bindings(py::module_& m)
             "Expand this gas to a (nlay, ncol) field.");
 
     m.def("compute_col_dry",
-        [](const Numpy::In<TF>& vmr_h2o, const Numpy::In<TF>& plev,
-           const std::optional<Numpy::In<TF>>& latitude)
+        [](const Numpy::In<TF>& vmr_h2o, const Numpy::In<TF>& plev)
         {
             Runtime::get();
 
@@ -64,22 +63,18 @@ void Gas_concs::init_python_bindings(py::module_& m)
                                  vmr_d.extent(0), vmr_d.extent(1));
 
             Gas_optics::compute_col_dry(
-                    vmr_d, Numpy::to_device_2d<TF>(plev, "plev"),
-                    latitude.has_value() ? Numpy::to_device_1d<TF>(*latitude, "latitude")
-                                         : Array_1d<TF>(),
-                    col_dry);
+                    vmr_d, Numpy::to_device_2d<TF>(plev, "plev"), col_dry);
             Kokkos::fence();
 
             return Numpy::from_device(col_dry);
         },
-        py::arg("vmr_h2o"), py::arg("plev"), py::arg("latitude") = py::none(),
+        py::arg("vmr_h2o"), py::arg("plev"),
         "Dry air column amount [molecules/cm2]. Returns (nlay, ncol).");
 
     m.def("compute_col_gas",
         [](const Gas_concs& gas_concs, const std::vector<std::string>& gas_names,
            const Numpy::In<TF>& plev,
-           const std::optional<Numpy::In<TF>>& col_dry,
-           const std::optional<Numpy::In<TF>>& latitude)
+           const std::optional<Numpy::In<TF>>& col_dry)
         {
             Runtime::get();
 
@@ -94,15 +89,13 @@ void Gas_concs::init_python_bindings(py::module_& m)
                     gas_concs, gas_names, plev_d,
                     col_dry.has_value() ? Numpy::to_device_2d<TF>(*col_dry, "col_dry")
                                         : Array_2d<TF>(),
-                    latitude.has_value() ? Numpy::to_device_1d<TF>(*latitude, "latitude")
-                                         : Array_1d<TF>(),
                     col_gas);
             Kokkos::fence();
 
             return Numpy::from_device(col_gas);
         },
         py::arg("gas_concs"), py::arg("gas_names"), py::arg("plev"),
-        py::arg("col_dry") = py::none(), py::arg("latitude") = py::none(),
+        py::arg("col_dry") = py::none(),
         "Column gas amounts in the order given by gas_names, with dry air at index 0. "
         "Returns (ngas+1, nlay, ncol).");
 }

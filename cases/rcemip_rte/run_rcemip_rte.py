@@ -15,7 +15,7 @@ Both sides run the same sequence and the same amount of work:
     column gas amounts -> interpolation -> absorption optical depth
       -> Planck sources (longwave) or Rayleigh (shortwave) -> transport
 
-The column gas amounts come from rte3d in both cases -- get_col_dry has no bind(C)
+The column gas amounts come from rte3d in both cases -- get_layer_number has no bind(C)
 entry point -- so that step is a small constant added to each and does not bias the
 comparison. Everything else is rte3d's Kokkos kernels on one side and the reference's
 Fortran kernels, called through ctypes, on the other. Four calls per solve, so the

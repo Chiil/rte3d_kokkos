@@ -73,11 +73,11 @@ pytest tests
 The library extension is `.dylib` on macOS and `.so` on Linux;
 `build_reference.sh` prints the two `export` lines for your platform when it finishes.
 
-The reference is **rte-rrtmgp v1.9**: point the `rte-rrtmgp` symlink at a checkout of
-that tag (`git worktree add ../rte-rrtmgp-v1.9 v1.9` in your clone keeps it apart
-from a working branch). Older versions build, but before v1.8 the longwave
-quadrature weights scaled by 2π rather than π, so the no-scattering fluxes come out
-at twice rte3d's.
+The reference is **rte-rrtmgp `main`**, as of #431 (Nov 2026): point the `rte-rrtmgp`
+symlink at a checkout of it. `build_reference.sh` expects the `rte/kernels/` layout
+introduced in #378, so v1.9 and older no longer build with it. A reference from
+before #424 also fails `test_2stream_matches_reference`, as it handed every g-point
+the first one's `lev_source`.
 
 Each precision is tested against a reference built in the same precision; the
 fixtures check this and fail on a mismatch. To run the whole suite in both, with a

@@ -1,6 +1,6 @@
 """Step 2b: gas concentrations, dry air column and column gas amounts.
 
-get_col_dry is not part of the reference's C API, so it is checked against an
+get_layer_number is not part of the reference's C API, so it is checked against an
 independent numpy transcription plus a physical identity that needs no reference at
 all: the dry air column integrates to the hydrostatic mass of the atmosphere.
 """
@@ -18,16 +18,14 @@ def tolerance(rte3d):
     return 1e-5 if rte3d.runtime().precision == 'single' else 1e-12
 
 
-def col_dry_numpy(vmr_h2o, plev, latitude=None):
-    """Independent transcription of get_col_dry."""
-    g0 = (GRAV if latitude is None
-          else 9.80665 - 0.02586*np.cos(2.0*np.pi*latitude/180.0))
-
+def col_dry_numpy(vmr_h2o, plev):
+    """Independent transcription of get_layer_number, converted to molecules/cm2 as
+    the reference's gas optics does."""
     delta_plev = np.abs(plev[:-1] - plev[1:])
     fact = 1.0 / (1.0 + vmr_h2o)
     m_air = (M_DRY + M_H2O*vmr_h2o) * fact
 
-    return 10.0 * delta_plev * AVOGAD * fact / (1000.0 * m_air * 100.0 * g0)
+    return delta_plev / GRAV * AVOGAD * fact / m_air * 1e-4
 
 
 def atmosphere(rng, nlay, ncol):
@@ -66,15 +64,13 @@ def test_gas_concs_rejects_unknown_gas(rte3d):
         g.get_vmr('ch4', 4, 3)
 
 
-@pytest.mark.parametrize('with_latitude', [False, True])
 @pytest.mark.parametrize('nlay,ncol', [(20, 6), (1, 4)])
-def test_col_dry_matches_transcription(rte3d, nlay, ncol, with_latitude):
+def test_col_dry_matches_transcription(rte3d, nlay, ncol):
     rng = np.random.default_rng(61)
     plev, vmr_h2o = atmosphere(rng, nlay, ncol)
-    latitude = rng.uniform(-80.0, 80.0, ncol) if with_latitude else None
 
-    actual = rte3d.compute_col_dry(vmr_h2o, plev, latitude)
-    expected = col_dry_numpy(vmr_h2o, plev, latitude)
+    actual = rte3d.compute_col_dry(vmr_h2o, plev)
+    expected = col_dry_numpy(vmr_h2o, plev)
 
     np.testing.assert_allclose(actual, expected, rtol=tolerance(rte3d), atol=0.0)
 

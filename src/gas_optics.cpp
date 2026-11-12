@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -695,63 +694,29 @@ namespace
     constexpr TF m_dry = TF(0.028964);
     constexpr TF avogad = TF(6.02214076e23);
     constexpr TF grav = TF(9.80665);
-
-    // Helmert's formula for the latitude dependence of gravity.
-    constexpr TF helmert1 = TF(9.80665);
-    constexpr TF helmert2 = TF(0.02586);
-    constexpr TF pi_tf = TF(3.14159265358979323846);
 }
 
 
 void Gas_optics::compute_col_dry(
         const Array_2d<const TF>& vmr_h2o,
         const Array_2d<const TF>& plev,
-        const Array_1d<const TF>& latitude,
         const Array_2d<TF>& col_dry)
 {
     const int nlay = static_cast<int>(col_dry.extent(0));
     const int ncol = static_cast<int>(col_dry.extent(1));
 
-    const bool has_latitude = latitude.size() > 0;
-
-    // Helmert's gravity is a function of the column alone, so it is built once per
-    // column here rather than once per cell inside the kernel. On the host, and
-    // deliberately: it is the only transcendental gas optics evaluates on the device,
-    // and cosf's argument-reduction fallback is double precision, which a
-    // single-precision build has no business emitting. This file cannot be compiled
-    // with fast math the way the ray tracer is, because its kernels are judged against
-    // the Fortran reference at 1e-12.
-    //
-    // Empty unless the caller gave a latitude, so the common path allocates nothing.
-    Array_1d<TF> g0;
-    if (has_latitude)
-    {
-        g0 = Array_1d<TF>(Kokkos::view_alloc("g0", Kokkos::WithoutInitializing), ncol);
-
-        auto g0_h = Kokkos::create_mirror_view(g0);
-        auto lat_h = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, latitude);
-
-        for (int icol=0; icol<ncol; ++icol)
-            g0_h(icol) = helmert1 - helmert2*std::cos(TF(2.)*pi_tf*lat_h(icol)/TF(180.));
-
-        Kokkos::deep_copy(g0, g0_h);
-    }
-
-    const Array_1d<const TF> g0_c = g0;
-
     parallel_for_2d("compute_col_dry", {0, 0}, {nlay, ncol},
         KOKKOS_LAMBDA(const int ilay, const int icol)
         {
-            const TF g0 = has_latitude ? g0_c(icol) : grav;
-
             const TF delta_plev = Kokkos::abs(plev(ilay, icol) - plev(ilay + 1, icol));
 
             const TF vmr = vmr_h2o(ilay, icol);
             const TF fact = TF(1.) / (TF(1.) + vmr);
             const TF m_air = (m_dry + m_h2o * vmr) * fact;
 
-            col_dry(ilay, icol) = TF(10.) * delta_plev * avogad * fact
-                                / (TF(1000.) * m_air * TF(100.) * g0);
+            // get_layer_number gives molecules/m2, in this order of operations; the
+            // reference then converts to molecules/cm2.
+            col_dry(ilay, icol) = delta_plev / grav * avogad * fact / m_air * TF(1.e-4);
         });
 }
 
@@ -761,7 +726,6 @@ void Gas_optics::compute_col_gas(
         const std::vector<std::string>& gas_names,
         const Array_2d<const TF>& plev,
         const Array_2d<const TF>& col_dry,
-        const Array_1d<const TF>& latitude,
         const Array_3d<TF>& col_gas)
 {
     const int ngas = static_cast<int>(gas_names.size());
@@ -797,7 +761,7 @@ void Gas_optics::compute_col_gas(
         Array_2d<TF> vmr_h2o(Kokkos::view_alloc("vmr_h2o", Kokkos::WithoutInitializing), nlay, ncol);
         gas_concs.get_vmr("h2o", vmr_h2o);
 
-        compute_col_dry(vmr_h2o, plev, latitude, col_dry_work);
+        compute_col_dry(vmr_h2o, plev, col_dry_work);
     }
 
     const Array_3d<const TF> vmr_c = vmr;
@@ -852,7 +816,7 @@ void Gas_optics::gas_optics_lw(
     const int ncol = static_cast<int>(play.extent(1));
 
     Array_3d<TF> col_gas("col_gas", static_cast<int>(k.gas_names.size()) + 1, nlay, ncol);
-    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, Array_1d<TF>(), col_gas);
+    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, col_gas);
 
     const Interp_state state = interpolate(k, play, tlay, col_gas);
 
@@ -887,7 +851,7 @@ void Gas_optics::gas_optics_sw(
     const int ncol = static_cast<int>(play.extent(1));
 
     Array_3d<TF> col_gas("col_gas", static_cast<int>(k.gas_names.size()) + 1, nlay, ncol);
-    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, Array_1d<TF>(), col_gas);
+    compute_col_gas(gas_concs, k.gas_names, plev, col_dry, col_gas);
 
     const Interp_state state = interpolate(k, play, tlay, col_gas);
 

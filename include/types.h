@@ -19,7 +19,7 @@ using TF = float;
 using TF = double;
 #endif
 
-// Matches the Bool/Int of the reference C API (rte-kernels/api/rte_types.h), used
+// Matches the Bool/Int of the reference C API (rte/kernels/api/rte_types.h.in), used
 // only where we cross the ABI boundary in the correctness tests.
 using Bool = signed char;
 using Int = unsigned long long;

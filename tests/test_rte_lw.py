@@ -196,18 +196,13 @@ def random_2stream_inputs(ngpt, nlay, ncol, seed=0, tau_min=1e-6):
 @pytest.mark.parametrize('top_at_1', [True, False])
 @pytest.mark.parametrize('ngpt,nlay,ncol', SHAPES)
 def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol):
-    """Compare against the reference with a g-point-independent lev_source.
+    """Compare against the reference with a lev_source that varies by g-point.
 
-    The reference's lw_solver_2stream passes `lev_source` to lw_source_2str without
-    the `(:,:,igpt)` slice (mo_rte_solver_kernels.F90:422), so through Fortran sequence
-    association every g-point silently uses lev_source(:,:,1). Holding lev_source
-    constant across g-points makes that defect inert, so this still validates the whole
-    solver -- lw_two_stream, lw_source_2str and adding -- at full ngpt.
-
-    See test_2stream_reference_bug_gpt_indexing for the defect itself.
+    Until rte-rrtmgp #424 the reference passed lev_source to lw_source_2str without
+    the (:,:,igpt) slice, so every g-point used the first one's; a reference older
+    than that fails here for ngpt > 1.
     """
     a = random_2stream_inputs(ngpt, nlay, ncol, seed=11, tau_min=tau_min_2stream(rte3d))
-    a['lev_source'] = np.broadcast_to(a['lev_source'][0:1], a['lev_source'].shape).copy()
 
     expected = fortran_ref.lw_solver_2stream(top_at_1, **a)
     actual = rte3d.lw_solver_2stream(top_at_1, **a)
@@ -218,55 +213,6 @@ def test_2stream_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, nco
             exp,
             rtol=tolerance(rte3d),
             err_msg=f'{name} differs from the reference')
-
-
-@pytest.mark.parametrize('top_at_1', [True, False])
-def test_2stream_gpt_varying_lev_source(rte3d, fortran_ref, top_at_1):
-    """With a g-point-varying lev_source, validate against the reference run one
-    g-point at a time -- the regime where its indexing defect cannot bite.
-
-    This is the real correctness check for ngpt > 1: the oracle is still the reference,
-    just used where it is trustworthy.
-    """
-    ngpt, nlay, ncol = 4, 6, 3
-    a = random_2stream_inputs(ngpt, nlay, ncol, seed=14, tau_min=tau_min_2stream(rte3d))
-
-    per_gpt = [fortran_ref.lw_solver_2stream(top_at_1, **{k: v[i:i+1] for k, v in a.items()})
-               for i in range(ngpt)]
-    expected_up = np.concatenate([u for u, _ in per_gpt])
-    expected_dn = np.concatenate([d for _, d in per_gpt])
-
-    flux_up, flux_dn = rte3d.lw_solver_2stream(top_at_1, **a)
-
-    tol = tolerance(rte3d)
-    assert_close(flux_up, expected_up, rtol=tol)
-    assert_close(flux_dn, expected_dn, rtol=tol)
-
-
-@pytest.mark.parametrize('top_at_1', [True, False])
-def test_2stream_reference_bug_gpt_indexing(rte3d, fortran_ref, top_at_1):
-    """Pin down the reference defect described above.
-
-    Feeding rte3d a lev_source forced to g-point 0 everywhere reproduces the
-    reference's full-ngpt output exactly, which is only possible if the reference is
-    ignoring the g-point index. If this test ever starts failing, upstream has fixed
-    mo_rte_solver_kernels.F90:422 and the sibling tests should be simplified.
-    """
-    ngpt = 4
-    a = random_2stream_inputs(ngpt, 6, 3, seed=14, tau_min=tau_min_2stream(rte3d))
-
-    expected = fortran_ref.lw_solver_2stream(top_at_1, **a)
-
-    b = dict(a)
-    b['lev_source'] = np.broadcast_to(a['lev_source'][0:1], a['lev_source'].shape).copy()
-    actual = rte3d.lw_solver_2stream(top_at_1, **b)
-
-    for exp, act in zip(expected, actual):
-        assert_close(act, exp, rtol=tolerance(rte3d))
-
-    # And confirm the two genuinely differ, so this test is not vacuous.
-    straight = rte3d.lw_solver_2stream(top_at_1, **a)
-    assert not np.allclose(straight[0], expected[0])
 
 
 @pytest.mark.parametrize('top_at_1', [True, False])
