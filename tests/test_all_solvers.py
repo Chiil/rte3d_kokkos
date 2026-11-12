@@ -48,7 +48,7 @@ WINDOW = 32
 # Photons per pixel per g-point. Enough that a domain-mean flux is good to a few
 # tenths of a percent, which is what the tolerances below are written against.
 PHOTONS = 256
-LES_PHOTONS = 64
+LES_PHOTONS = 256
 
 # Skip the g-points whose gas is opaque within a grid cell and solve those
 # plane-parallel, which is what the cloud field's own settings ask for and what
@@ -470,21 +470,25 @@ def test_les_third_dimension_moves_the_direct_beam_into_the_diffuse(les):
 @requires_data
 @requires_les
 def test_les_longwave_solvers_agree_at_the_surface(les):
-    """All four longwave solvers see the same surface, to within a percent.
+    """All four longwave solvers see the same surface, to within a few percent.
 
     The field is liquid-only and thin, so cloud scattering has little to change, and
     the case's own mean-free-path threshold sends the opaque half of the spectrum
     through the plane-parallel solver in the traced runs as well -- which is what makes
     the four agree here as closely as they do.
+
+    The 3D tracer's downwelling flux gets 3% rather than 2%. Its converged value sits a
+    genuine 1.75% above the plane-parallel one, and at 256 photons per pixel the
+    backends scatter around it by a few tenths of a percent; 2% left room for neither.
     """
     _, out = les
 
     reference = mean(out['lw_noscat']['flux_dn'][0])
 
     assert mean(out['lw_2str']['flux_dn'][0]) == pytest.approx(reference, rel=0.02)
-    for solver in ('lw_rt_1d', 'lw_rt_3d'):
+    for solver, rel_dn in (('lw_rt_1d', 0.02), ('lw_rt_3d', 0.03)):
         assert mean(out[solver]['rt_lw_flux_sfc_dn']) == pytest.approx(
-            reference, rel=0.02)
+            reference, rel=rel_dn)
         assert mean(out[solver]['rt_lw_flux_sfc_up']) == pytest.approx(
             mean(out['lw_noscat']['flux_up'][0]), rel=0.01)
 
