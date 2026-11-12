@@ -29,6 +29,23 @@ KOKKOS_INLINE_FUNCTION constexpr TF operator""_tf(const long double ld) { return
 KOKKOS_INLINE_FUNCTION constexpr TF operator""_tf(const unsigned long long ll) { return static_cast<TF>(ll); }
 
 
+// a/b, approximate where that pays: on a GPU in single precision the hardware divide,
+// accurate to 2 ulp for |b| in [2^-126, 2^126], instead of the IEEE-rounded division
+// that costs a reciprocal, a Newton step and a slow-path check. Everywhere else, and in
+// the host pass, exactly a/b, so CPU and double-precision results do not change.
+//
+// For the solvers only, whose recurrences already carry rounding far larger than two
+// ulp. Not for gas optics: there an exact a/b is what makes eta exactly 1 when the
+// second gas is absent, and keeps the single-scattering albedo at or below 1.
+KOKKOS_INLINE_FUNCTION TF fast_div(const TF a, const TF b)
+{
+    #if defined(USE_SINGLE_PRECISION) && (defined(USECUDA) || defined(USEHIP))
+    KOKKOS_IF_ON_DEVICE((return __fdividef(a, b);))
+    #endif
+    return a / b;
+}
+
+
 // Default execution space: Cuda/HIP for GPU builds, OpenMP or Serial for CPU.
 #if defined(USECUDA)
 using Default_exec = Kokkos::Cuda;

@@ -88,7 +88,7 @@ namespace Rte_kernels
         const TF k_mu = k * mu0;
 
         // Eq 14, top and bottom multiplied by exp(-k*tau).
-        const TF RT_term_dir = w0 * RT_term / ((TF(1.) - k_mu) * (TF(1.) + k_mu));
+        const TF RT_term_dir = fast_div(w0 * RT_term, (TF(1.) - k_mu) * (TF(1.) + k_mu));
 
         const TF gamma3 = (TF(2.) - TF(3.) * mu0 * g) * TF(0.25);
         const TF gamma4 = TF(1.) - gamma3;
@@ -143,8 +143,8 @@ namespace Rte_kernels
         const TF one_minus_exp_minus2ktau = one_minus_exp_minusktau * (TF(1.) + exp_minusktau);
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
-        const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
-                                     gamma1 * one_minus_exp_minus2ktau);
+        const TF RT_term = fast_div(TF(1.), k      * (TF(1.) + exp_minus2ktau) +
+                                            gamma1 * one_minus_exp_minus2ktau);
 
         Rdif = RT_term * gamma2 * one_minus_exp_minus2ktau;  // Eq 25
         Tdif = RT_term * TF(2.) * k * exp_minusktau;         // Eq 26
@@ -154,7 +154,7 @@ namespace Rte_kernels
         // call site.
         const TF mu0_s = Kokkos::max(Kokkos::sqrt(eps()), mu0);
         TF one_minus_Tnoscat;
-        exp_and_one_minus_exp(tau/mu0_s, Tnoscat, one_minus_Tnoscat);
+        exp_and_one_minus_exp(fast_div(tau, mu0_s), Tnoscat, one_minus_Tnoscat);
 
         // Eqs 14-15 have a removable singularity at k*mu0 = 1: numerator and
         // denominator both vanish, and their rounding error grows like eps/|1 - k*mu0|.
@@ -310,7 +310,7 @@ namespace Rte_kernels
                 const TF tdif_l = tdif(ilay, icol);
                 const TF albedo_below = carried[0];
 
-                const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_below);  // Eq 10
+                const TF denom_l = fast_div(TF(1.), TF(1.) - rdif_l * albedo_below);  // Eq 10
 
                 const TF albedo_l =                                           // Eq 9
                         rdif_l + tdif_l*tdif_l * albedo_below * denom_l;
@@ -354,7 +354,7 @@ namespace Rte_kernels
                 const TF src_l = src(lev_dst, icol);
 
                 // Eq 10 again, from the two values this sweep was reading anyway.
-                const TF denom_l = TF(1.) / (TF(1.) - rdif_l * albedo_l);
+                const TF denom_l = fast_div(TF(1.), TF(1.) - rdif_l * albedo_l);
 
                 const TF flux_dn_l =                                          // Eq 13
                         (tdif(ilay, icol) * carried[0]
