@@ -324,7 +324,7 @@ weight and scores it, which is the variance reduction of Iwabuchi (2006); Russia
 roulette below a weight of a half keeps the walk finite. That is why the energy budget
 closes exactly under conservative scattering and only in the mean otherwise.
 
-## The one place fast math is allowed
+## Where fast math is allowed
 
 `src/CMakeLists.txt` compiles the two ray tracers, `raytracer.cpp` and
 `raytracer_lw.cpp`, and only those, with `-use_fast_math` (`-ffast-math` under HIP). Everything else keeps IEEE semantics,
@@ -342,6 +342,19 @@ kernel gets, and the kernel halves: 3816 SASS instructions to 1992.
 Measured on RCEMIP at 65536 columns, single precision: the tracer goes from 10.61 to
 10.24 s, and the fluxes move by 0.01% per column against a Monte Carlo noise floor
 far above that. The domain-mean fluxes are unchanged to five decimals.
+
+The rest of the code gets one piece of fast math, by hand: `fast_div` in
+`include/types.h`, which is `__fdividef` on a GPU in single precision and exactly `a/b`
+everywhere else. Fast math on every file was tried and gained 8-16% on the all-sky
+case, all of it from the approximate divide -- with `--prec-div=true` restored the gain
+was gone. But it broke gas optics, which needs exact division: `col0/(col0 + 0)` must
+give exactly 1 for eta to put its weight on the last node, and `tau_rayleigh/tau` must
+not exceed 1. So `fast_div` is used in the solvers only, for their reciprocals and
+quotients, where the recurrences carry far more rounding than two ulp. That recovers
+the solvers' share of the gain, and the CPU and double-precision builds are bit for bit
+what they were. A divisor that may be denormal stays an exact division: the hardware
+divide returns infinity there, which is why `source_gradient` in `lw_two_stream` still
+divides by `tau` with `/`.
 
 Everywhere else the fix is to keep the transcendental off the device. Gas optics had
 one, Helmert's latitude correction to gravity in `compute_col_dry`, which was first

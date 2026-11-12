@@ -290,16 +290,16 @@ Single precision:
 
 | band | ncol | Fortran OpenACC | rte3d | ratio | max abs diff (W/m2) |
 |---|---|---|---|---|---|
-| lw | 1024 | 6.70 ms | 26.01 ms | 0.26x | 4.3e-04 |
-| lw | 2048 | 12.45 ms | 35.21 ms | 0.35x | 4.3e-04 |
-| lw | 4096 | 23.35 ms | 45.60 ms | 0.51x | 4.3e-04 |
-| lw | 8192 | 45.90 ms | 61.93 ms | 0.74x | 4.3e-04 |
-| lw | 16384 | 91.85 ms | 87.89 ms | 1.05x | 4.3e-04 |
-| sw | 1024 | 5.85 ms | 44.72 ms | 0.13x | 3.2e-01 |
-| sw | 2048 | 13.60 ms | 50.86 ms | 0.27x | 3.2e-01 |
-| sw | 4096 | 26.95 ms | 67.74 ms | 0.40x | 3.2e-01 |
-| sw | 8192 | 53.15 ms | 88.33 ms | 0.60x | 3.2e-01 |
-| sw | 16384 | 107.20 ms | 125.74 ms | 0.85x | 3.2e-01 |
+| lw | 1024 | 6.70 ms | 21.77 ms | 0.31x | 4.3e-04 |
+| lw | 2048 | 12.45 ms | 30.92 ms | 0.40x | 4.3e-04 |
+| lw | 4096 | 23.85 ms | 39.51 ms | 0.60x | 4.3e-04 |
+| lw | 8192 | 46.10 ms | 54.70 ms | 0.84x | 4.3e-04 |
+| lw | 16384 | 92.25 ms | 83.34 ms | 1.11x | 4.3e-04 |
+| sw | 1024 | 6.95 ms | 36.19 ms | 0.19x | 3.2e-01 |
+| sw | 2048 | 13.60 ms | 42.34 ms | 0.32x | 3.2e-01 |
+| sw | 4096 | 27.05 ms | 55.93 ms | 0.48x | 3.2e-01 |
+| sw | 8192 | 53.50 ms | 75.90 ms | 0.70x | 3.2e-01 |
+| sw | 16384 | 107.45 ms | 116.34 ms | 0.92x | 3.2e-01 |
 
 Double precision:
 
@@ -314,9 +314,11 @@ Double precision:
 | sw | 4096 | 104.85 ms | 226.98 ms | 0.46x | 5.0e-08 |
 | sw | 8192 | 208.20 ms | 403.59 ms | 0.52x | 5.0e-08 |
 
-The ratio is Fortran time over rte3d time: below 1 rte3d is slower. The longwave rows
-are with the no-scattering solver fused into its sweeps, [below](#the-longwave-solver-fused-into-its-sweeps);
-the shortwave rows are from before it, which that change does not touch.
+The ratio is Fortran time over rte3d time: below 1 rte3d is slower. The single-precision
+rows are with the no-scattering solver fused into its sweeps, [below](#the-longwave-solver-fused-into-its-sweeps),
+and the approximate divide in the solvers, [below that](#an-approximate-divide-in-the-solvers);
+the double-precision rows are from before both, and neither changes them: the divide is
+exact in double precision.
 
 **What is timed.** The same span on both sides: cloud optics, gas optics and the solver,
 with every input and output already on the device. For the reference that is the
@@ -420,3 +422,29 @@ copy of `col_dry_arr`, which every kernel after it reads, is never written, so a
 column amounts on the device are zero. `tests/build_reference_acc.sh` builds from a copy
 with the missing `!$acc update device(col_dry_arr)` added; the timings above are with that
 fix, and the flux columns show it is the whole of the problem.
+
+
+### An approximate divide in the solvers
+
+`-use_fast_math` on every file, rather than on the ray tracer alone, made the
+single-precision all-sky case 8-16% faster, but failed two gas-optics tests: `eta` no
+longer came out exactly 1 for a flavour without its second gas, and a Rayleigh `ssa`
+reached 1.0000001. With `--prec-div=true` added back the tests passed and the whole gain
+was gone, so the gain was the division and nothing else. `nsys` at 16384 columns put
+about 70% of it in the solvers -- the adding sweeps, the longwave no-scattering sweeps
+and the shortwave two-stream -- and the rest in `compute_tau`.
+
+`fast_div` in `include/types.h` is `__fdividef` on a GPU in single precision and `a/b`
+everywhere else. It is used for the reciprocals and quotients of the solvers only; gas
+optics keeps IEEE division. All-sky, single precision, GPU, mean of 20 loops:
+
+| | IEEE division | `fast_div` in the solvers | fast math everywhere |
+|---|---|---|---|
+| lw, 4096 columns | 43-46 ms | 39-42 ms | 40.7 ms |
+| lw, 16384 columns | 89 ms | 83-85 ms | 82.3 ms |
+| sw, 4096 columns | 67 ms | 56-59 ms | 56.1 ms |
+| sw, 16384 columns | 125 ms | 115-118 ms | 115.0 ms |
+
+The ranges are rebuilds of the same source, which on this card land up to 3 ms apart.
+Fluxes move by at most 4e-4 W/m2 in the shortwave and 3e-5 W/m2 in the longwave, and
+the CPU and double-precision builds give bit-identical fluxes.
