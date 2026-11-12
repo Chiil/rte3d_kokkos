@@ -130,7 +130,7 @@ percent faster than the reference's, and its gas optics and Planck source togeth
 to 62 percent slower. `--breakdown` does not show that split; see
 [`cases/RESULTS.md`](cases/RESULTS.md#where-things-stand) for why.
 
-On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1272 ms longwave and 1406 ms
+On a GPU, RCEMIP at 65536 columns x 256 layers runs in 1021 ms longwave and 1404 ms
 shortwave on an RTX A4500, single precision, and is bound by memory bandwidth
 throughout. Against rte-rrtmgp-cpp's CUDA solver, gas optics is at parity and the
 transport sweeps are not. The full picture, both hosts and both bands, is in
@@ -355,6 +355,10 @@ the solvers' share of the gain, and the CPU and double-precision builds are bit 
 what they were. A divisor that may be denormal stays an exact division: the hardware
 divide returns infinity there, which is why `source_gradient` in `lw_two_stream` still
 divides by `tau` with `/`.
+
+It is a gain at moderate column counts only: 9-12% on RCEMIP at 4096 columns, nothing at
+65536, where the sweeps are bound by memory bandwidth and the divide is off the critical
+path. It costs nothing there either, which is why it stays.
 
 Everywhere else the fix is to keep the transcendental off the device. Gas optics had
 one, Helmert's latitude correction to gravity in `compute_col_dry`, which was first

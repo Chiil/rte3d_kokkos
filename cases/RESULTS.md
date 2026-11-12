@@ -205,7 +205,7 @@ RCEMIP at 65536 columns x 256 layers, single precision, on an RTX A4500:
 | | longwave | shortwave |
 |---|---|---|
 | before | 1879 ms | 2167 ms |
-| now | **1272 ms** | **1406 ms** |
+| now | **1021 ms** | **1404 ms** |
 
 Every one of those milliseconds was memory traffic, not arithmetic and not
 parallelism: the kernels were already running at 400-650 GB/s, against a card that
@@ -222,12 +222,18 @@ single precision on one RTX A4500 --- that is now the whole of the gap:
 
 | stage | rte3d | rte-rrtmgp-cpp | ratio |
 |---|---|---|---|
-| longwave, optical depth + Planck | 36.0 ms | 28.0 ms | 1.29 |
-| longwave, transport | **71.4 ms** | **42.0 ms** | **1.70** |
-| shortwave, optical depth + Rayleigh | 23.8 ms | 28.4 ms | 0.84 |
-| shortwave, transport | **187 ms** | **45.2 ms** | **4.13** |
-| GPU kernel time, longwave / shortwave | 108 / 211 ms | 70 / 74 ms | |
-| what the driver's own timer reports | 120 / 223 ms | 73 / 74 ms | |
+| longwave, optical depth + Planck | 36.1 ms | 28.0 ms | 1.29 |
+| longwave, transport | **85.2 ms** | **42.0 ms** | **2.03** |
+| shortwave, optical depth + Rayleigh | 23.9 ms | 28.4 ms | 0.84 |
+| shortwave, transport | **151 ms** | **45.2 ms** | **3.35** |
+| GPU kernel time, longwave / shortwave | 121 / 175 ms | 70 / 74 ms | |
+| what the driver's own timer reports | 132 / 191 ms | 73 / 74 ms | |
+
+The rte3d column is re-measured at `55dd6ad`, the rte-rrtmgp-cpp column is unchanged.
+Since the first measurement the longwave transport went up and the shortwave transport
+down: fusing the longwave solver into its sweeps trades small column counts for large
+ones ([below](#the-longwave-solver-fused-into-its-sweeps)), and the approximate divide
+([below that](#an-approximate-divide-in-the-solvers)) helps exactly at sizes like this.
 
 Neither driver times a stage on its own, so the split is GPU kernel time from an `nsys`
 kernel summary, attributed by kernel name: gas optics is rte3d's `compute_tau`,
@@ -250,7 +256,7 @@ shortwave. The sweeps are not, and the launch geometry says why: it solves four 
 resolved, so its `sw_adding` runs 229376 threads and its `lw_solver_noscat_step_2`
 262144, where ours run `ncol` --- 4096. Same work, 64x the parallelism, and at 4096
 columns ours reach about 15% of peak bandwidth and 8% occupancy where at 65536 they
-reach 70%. The gap is a small-problem gap: 54.4 us/column at 4096 against 21.5 at 65536,
+reach 70%. The gap is a small-problem gap: 46.7 us/column at 4096 against 21.4 at 65536,
 while a chunked full-spectrum solver is flat in problem size and pays for it in
 memory --- 4 column blocks here, 64 for the case above.
 
@@ -448,3 +454,17 @@ optics keeps IEEE division. All-sky, single precision, GPU, mean of 20 loops:
 The ranges are rebuilds of the same source, which on this card land up to 3 ms apart.
 Fluxes move by at most 4e-4 W/m2 in the shortwave and 3e-5 W/m2 in the longwave, and
 the CPU and double-precision builds give bit-identical fluxes.
+
+The gain is a small-problem gain. On RCEMIP, 256 layers, clear sky, same card, best of
+three solves:
+
+| | IEEE division | `fast_div` in the solvers |
+|---|---|---|
+| lw, 4096 columns | 146.2 ms | 132.5 ms |
+| sw, 4096 columns | 218.0 ms | 191.3 ms |
+| lw, 65536 columns | 1021.8 ms | 1021.4 ms |
+| sw, 65536 columns | 1408.0 ms | 1404.1 ms |
+
+At 65536 columns the sweeps are bound by memory bandwidth, and a cheaper divide changes
+nothing there. At 4096 columns, where each g-point's sweep runs too few threads to hide
+latency, the divide is on the critical path, and removing it gives 9-12%.
