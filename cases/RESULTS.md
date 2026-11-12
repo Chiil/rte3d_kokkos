@@ -276,3 +276,99 @@ The rte3d column of this table was remeasured at `d789c1c`; the rte-rrtmgp-cpp c
 from the earlier session, its code unchanged since. Between the two sessions the
 longwave stages of rte3d read 3 to 5% higher with no change to the longwave code, which
 is the spread to allow between sessions.
+
+## All-sky against the Fortran reference with OpenACC
+
+rte-rrtmgp's own all-sky example on the GPU, against rte3d solving the same atmosphere.
+RTX A4500, NVHPC 25.3, 72 layers, clouds in two thirds of the columns, the mean of 20
+loops on each side. Run with [`bench_allsky_acc.py`](README.md#allsky_rtebench_allsky_accpy--performance-against-rte-rrtmgp-with-openacc),
+the reference built by `tests/build_reference_acc.sh`: the `accel` kernels, with the
+flags of rte-rrtmgp's own OpenACC CI (`.gitlab/dkrz.yml`, which are ICON's),
+`-g -O2 -Mrecursive -Mallocatable=03 -Mstack_arrays -acc=gpu,verystrict -gpu=cc86`.
+
+Single precision:
+
+| band | ncol | Fortran OpenACC | rte3d | ratio | max abs diff (W/m2) |
+|---|---|---|---|---|---|
+| lw | 1024 | 6.70 ms | 16.96 ms | 0.39x | 4.3e-04 |
+| lw | 2048 | 12.45 ms | 22.18 ms | 0.56x | 4.3e-04 |
+| lw | 4096 | 23.45 ms | 38.57 ms | 0.61x | 4.3e-04 |
+| lw | 8192 | 45.80 ms | 60.90 ms | 0.75x | 4.3e-04 |
+| lw | 16384 | 90.80 ms | 100.87 ms | 0.90x | 4.3e-04 |
+| sw | 1024 | 5.85 ms | 44.72 ms | 0.13x | 3.2e-01 |
+| sw | 2048 | 13.60 ms | 50.86 ms | 0.27x | 3.2e-01 |
+| sw | 4096 | 26.95 ms | 67.74 ms | 0.40x | 3.2e-01 |
+| sw | 8192 | 53.15 ms | 88.33 ms | 0.60x | 3.2e-01 |
+| sw | 16384 | 107.20 ms | 125.74 ms | 0.85x | 3.2e-01 |
+
+Double precision:
+
+| band | ncol | Fortran OpenACC | rte3d | ratio | max abs diff (W/m2) |
+|---|---|---|---|---|---|
+| lw | 1024 | 18.85 ms | 42.36 ms | 0.45x | 9.1e-13 |
+| lw | 2048 | 34.05 ms | 73.69 ms | 0.46x | 9.1e-13 |
+| lw | 4096 | 64.65 ms | 127.23 ms | 0.51x | 9.1e-13 |
+| lw | 8192 | 125.35 ms | 231.73 ms | 0.54x | 9.1e-13 |
+| sw | 1024 | 28.95 ms | 158.34 ms | 0.18x | 5.0e-08 |
+| sw | 2048 | 53.60 ms | 183.90 ms | 0.29x | 5.0e-08 |
+| sw | 4096 | 104.85 ms | 226.98 ms | 0.46x | 5.0e-08 |
+| sw | 8192 | 208.20 ms | 403.59 ms | 0.52x | 5.0e-08 |
+
+The ratio is Fortran time over rte3d time: below 1 rte3d is slower.
+
+**What is timed.** The same span on both sides: cloud optics, gas optics and the solver,
+with every input and output already on the device. For the reference that is the
+example's own loop timer. It prints only to the millisecond, so its time per loop is
+`(T(21 loops) - T(1 loop))/20`, which also drops the first loop's allocations. For
+rte3d it is `solve_time`, after a warm-up. The atmosphere is the one the example
+generates and writes out; rte3d reads it back, so both solve identical columns, and the
+last column of each table is the largest difference between their fluxes. In double
+precision that is round-off. In single precision it is the deliberate differences
+listed in [`CHANGES.md`](../CHANGES.md), the `k²` floor among them.
+
+**Where the reference stops.** It solves the whole spectrum for every column at once,
+and runs out of the card's 20 GB at 16384 columns in double precision and 32768 in
+single: 2.4 GB for each `(ncol, nlay, ngpt)` array. rte3d holds one g-point at a time,
+which is the difference in design between the two, so a reference run beyond these
+sizes would have to be done in blocks of columns.
+
+**Where rte3d stands.** rte3d is behind at every size the reference can reach, in
+both precisions. The gap narrows with column count in single precision but much less
+in double precision. Two separate costs make it up:
+
+- *A fixed cost per solve*, largest in the shortwave. Doubling from 1024 to 2048 columns
+  costs rte3d only 6 ms more in single precision and 26 ms in double, against a 45 and
+  158 ms solve at 1024. Part of that is the one-g-point-at-a-time design: each of 224
+  g-points launches its own kernels, too small at 1024 columns to fill the card, the
+  small-problem gap the RCEMIP comparison above describes. But launch overhead does not
+  depend on precision, and the fixed cost is 3.5 times larger in double, so something
+  else contributes there. Not yet diagnosed.
+- *The cost per additional column*, from the 8192 to 16384 step (single) and the 4096
+  to 8192 step (double):
+
+  | | rte3d | Fortran OpenACC |
+  |---|---|---|
+  | lw, single | 4.9 us | 5.5 us |
+  | sw, single | 4.6 us | 6.6 us |
+  | lw, double | 25.5 us | 14.8 us |
+  | sw, double | 43.1 us | 25.2 us |
+
+  In single precision each extra column costs rte3d less than the reference, so the
+  ratio should pass 1 just beyond 16384 columns. That is an inference from the slopes,
+  not a measurement: the reference cannot run there without blocking. In double precision
+  each extra column costs rte3d 1.7 times as much, so the gap does not close. The A4500
+  runs double precision at 1/32 of the single-precision rate, so arithmetic that is free
+  in single precision is not free in double. Recomputing quantities rather than storing
+  them, the trade rte3d makes to save memory traffic, is a likely cause but has not been
+  profiled.
+
+**A bug in the reference's GPU path.** As checked out (rte-rrtmgp main at #431),
+the example's fluxes are NaN on the GPU below the top level, in both bands and both
+precisions, and correct when the same binary runs on the host. Since #419,
+`rrtmgp/frontend/mo_gas_optics_rrtmgp.F90` computes
+`col_dry_arr = get_col_dry(...) * 1.e-4_wp`. `get_col_dry` works on the device and
+copies its result out, the scaling and assignment happen on the host, and the device
+copy of `col_dry_arr`, which every kernel after it reads, is never written, so all
+column amounts on the device are zero. `tests/build_reference_acc.sh` builds from a copy
+with the missing `!$acc update device(col_dry_arr)` added; the timings above are with that
+fix, and the flux columns show it is the whole of the problem.
