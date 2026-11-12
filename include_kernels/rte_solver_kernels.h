@@ -214,7 +214,7 @@ namespace Rte_kernels
         const TF tau_thresh = Kokkos::sqrt(Kokkos::sqrt(eps()));
 
         const TF fact = tau_loc > tau_thresh
-                ? (TF(1.) - trans)/tau_loc - trans
+                ? fast_div(TF(1.) - trans, tau_loc) - trans
                 : tau_loc * (TF(0.5) + tau_loc * (TF(-1.)/TF(3.) + tau_loc * TF(1.)/TF(8.)));
 
         source_dn = (TF(1.) - trans) * lev_source_dn + TF(2.) * fact * (lay_source - lev_source_dn);
@@ -425,8 +425,8 @@ namespace Rte_kernels
         const TF one_minus_exp_minus2ktau = one_minus_exp_minusktau * (TF(1.) + exp_minusktau);
 
         // Refactored to avoid rounding errors when k and gamma1 differ greatly in magnitude.
-        const TF RT_term = TF(1.) / (k      * (TF(1.) + exp_minus2ktau) +
-                                     gamma1 * one_minus_exp_minus2ktau);
+        const TF RT_term = fast_div(TF(1.), k      * (TF(1.) + exp_minus2ktau) +
+                                            gamma1 * one_minus_exp_minus2ktau);
 
         Rdif = RT_term * gamma2 * one_minus_exp_minus2ktau;  // Eq 25
         Tdif = RT_term * TF(2.) * k * exp_minusktau;         // Eq 26
@@ -438,7 +438,7 @@ namespace Rte_kernels
         // (1 + Rdif - Tdif)/(tau*(gamma1 + gamma2)) - Tdif, likewise; its two terms each
         // tend to 1 as tau -> 0. Zero for tau = 0, where it is 0/0.
         source_gradient = tau > TF(0.)
-            ? RT_term * (k_one_minus_e1_sq / gamma1_plus_gamma2
+            ? RT_term * (fast_div(k_one_minus_e1_sq, gamma1_plus_gamma2)
                          + two_exp_sinh_minus_x(k*tau, exp_minusktau, one_minus_exp_minus2ktau)) / tau
             : TF(0.);
     }
