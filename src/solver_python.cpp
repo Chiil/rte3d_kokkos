@@ -416,6 +416,8 @@ void Solver::init_python_bindings(py::module_& m)
             });
 
             py::dict out;
+            out["rt_flux_toa_dn"] = Numpy::from_device(fluxes.toa_dn);
+            out["rt_flux_toa_up"] = Numpy::from_device(fluxes.toa_up);
             out["rt_flux_tod_dn"] = Numpy::from_device(fluxes.tod_dn);
             out["rt_flux_tod_up"] = Numpy::from_device(fluxes.tod_up);
             out["rt_flux_sfc_dir"] = Numpy::from_device(fluxes.sfc_dir);

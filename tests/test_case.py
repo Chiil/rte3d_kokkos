@@ -337,7 +337,7 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
     # The domain sees the irradiance the case asks for, to within the fluctuation in
     # how many photons each pixel happens to have been given.
     incoming = make_input.TSI*np.cos(np.deg2rad(make_input.SOLAR_ZENITH_ANGLE))
-    assert float(out['rt_flux_tod_dn'].mean()) == pytest.approx(incoming, rel=0.02)
+    assert float(out['rt_flux_toa_dn'].mean()) == pytest.approx(incoming, rel=0.02)
 
     # The direct beam is Beer-Lambert in both solvers.
     assert float(out['rt_flux_sfc_dir'].mean()) == pytest.approx(
@@ -346,10 +346,10 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
     # And nothing is lost: in, out, absorbed.
     dz = 70.0e3/NLAY
     absorbed = float((out['rt_flux_abs_dir'] + out['rt_flux_abs_dif']).sum('z').mean())*dz
-    leaving = float((out['rt_flux_tod_up'] + out['rt_flux_sfc_dir']
+    leaving = float((out['rt_flux_toa_up'] + out['rt_flux_sfc_dir']
                      + out['rt_flux_sfc_dif'] - out['rt_flux_sfc_up']).mean())
     assert leaving + absorbed == pytest.approx(
-        float(out['rt_flux_tod_dn'].mean()), rel=0.02)
+        float(out['rt_flux_toa_dn'].mean()), rel=0.02)
 
 
 @requires_data

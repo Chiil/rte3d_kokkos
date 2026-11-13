@@ -107,13 +107,17 @@ namespace Raytracer
 
 
     // Where the fluxes go, accumulated over g-points by the caller. The two-dimensional
-    // ones are at the surface and at the top of the box; the three-dimensional ones are
+    // ones are at the surface, at the top of the atmosphere (toa, the top of the lumped
+    // cell) and at the top of the resolved domain (tod, the bottom of the lumped cell;
+    // the same as toa when nothing was lumped); the three-dimensional ones are
     // the absorbed flux per unit height [W/m3], which is what a heating rate is built
     // from and what the tracer produces naturally.
     struct Fluxes_rt
     {
-        Array_1d<TF> tod_dn;    // (ncol) downward at the top of the domain
-        Array_1d<TF> tod_up;    // (ncol) upward at the top of the domain
+        Array_1d<TF> toa_dn;    // (ncol) downward at the top of the atmosphere
+        Array_1d<TF> toa_up;    // (ncol) upward at the top of the atmosphere
+        Array_1d<TF> tod_dn;    // (ncol) downward at the top of the resolved domain
+        Array_1d<TF> tod_up;    // (ncol) upward at the top of the resolved domain
         Array_1d<TF> sfc_dir;   // (ncol) downward direct at the surface
         Array_1d<TF> sfc_dif;   // (ncol) downward diffuse at the surface
         Array_1d<TF> sfc_up;    // (ncol) upward at the surface
@@ -137,8 +141,9 @@ namespace Raytracer
 
         // Photon counts, zeroed at the start of every trace. Separate from the fluxes
         // because a count becomes a flux only once the trace is over.
-        Array_1d<Count> tod_dn, tod_up, sfc_dir, sfc_dif, sfc_up;   // (ncol)
-        Array_2d<Count> atmos_dir, atmos_dif;                       // (nz, ncol)
+        Array_1d<Count> toa_dn, toa_up, tod_dn, tod_up;          // (ncol)
+        Array_1d<Count> sfc_dir, sfc_dif, sfc_up;                // (ncol)
+        Array_2d<Count> atmos_dir, atmos_dif;                    // (nz, ncol)
 
         Rand::Qrng_table qrng;
 

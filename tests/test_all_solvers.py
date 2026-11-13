@@ -229,8 +229,8 @@ def mean(field):
 
 def sw_budget(out, dz):
     """What enters the shortwave domain, and what leaves it or stays [W/m2]."""
-    entering = mean(out['rt_flux_tod_dn'])
-    leaving = (mean(out['rt_flux_tod_up']) + mean(out['rt_flux_sfc_dir'])
+    entering = mean(out['rt_flux_toa_dn'])
+    leaving = (mean(out['rt_flux_toa_up']) + mean(out['rt_flux_sfc_dir'])
                + mean(out['rt_flux_sfc_dif']) - mean(out['rt_flux_sfc_up']))
     absorbed = dz*mean((out['rt_flux_abs_dir'] + out['rt_flux_abs_dif']).sum(axis=0))
 
@@ -326,7 +326,7 @@ def test_rcemip_shortwave_tracer_matches_the_two_stream(rcemip):
     assert mean(traced['rt_flux_sfc_dir']) == pytest.approx(
         mean(two_stream['flux_dir'][0]), rel=0.01)
 
-    assert mean(traced['rt_flux_tod_dn']) == pytest.approx(
+    assert mean(traced['rt_flux_toa_dn']) == pytest.approx(
         mean(two_stream['flux_dn'][-1]), rel=1e-6)
 
     total_dn = mean(traced['rt_flux_sfc_dir']) + mean(traced['rt_flux_sfc_dif'])
@@ -335,7 +335,7 @@ def test_rcemip_shortwave_tracer_matches_the_two_stream(rcemip):
     assert mean(traced['rt_flux_sfc_up']) == pytest.approx(
         mean(two_stream['flux_up'][0]), rel=0.03)
 
-    assert mean(traced['rt_flux_tod_up']) == pytest.approx(
+    assert mean(traced['rt_flux_toa_up']) == pytest.approx(
         mean(two_stream['flux_up'][-1]), rel=0.03)
 
 
@@ -458,7 +458,7 @@ def test_les_third_dimension_moves_the_direct_beam_into_the_diffuse(les):
     # The sun is the same, and so is the total the surface receives, to within the
     # tenths of a percent this is: the beam is redistributed, not created or destroyed.
     for out_ in (icol, three_d):
-        assert mean(out_['rt_flux_tod_dn']) == pytest.approx(
+        assert mean(out_['rt_flux_toa_dn']) == pytest.approx(
             mean(out['sw_2str']['flux_dn'][-1]), rel=1e-6)
 
     def sfc_dn(o):

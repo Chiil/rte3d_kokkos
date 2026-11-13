@@ -106,7 +106,8 @@ such thing as a flux profile per column once photons move sideways:
 |---|---|---|
 | `rt_flux_sfc_dir`, `rt_flux_sfc_dif` | `(y, x)` | downward direct and diffuse at the surface |
 | `rt_flux_sfc_up` | `(y, x)` | upward at the surface |
-| `rt_flux_tod_dn`, `rt_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
+| `rt_flux_tod_dn`, `rt_flux_tod_up` | `(y, x)` | at the top of the resolved box, the bottom of the lumped cell |
+| `rt_flux_toa_dn`, `rt_flux_toa_up` | `(y, x)` | at the top of the atmosphere; the `tod` ones when the box resolves the whole column |
 | `rt_flux_abs_dir`, `rt_flux_abs_dif` | `(z, y, x)` | absorbed flux per unit height, W/m3 |
 
 The `[longwave]` section takes the same four keys, plus `scattering` and
@@ -116,7 +117,7 @@ The longwave tracer's fluxes:
 | variable | dimensions | meaning |
 |---|---|---|
 | `rt_lw_flux_sfc_dn`, `rt_lw_flux_sfc_up` | `(y, x)` | at the surface |
-| `rt_lw_flux_tod_dn`, `rt_lw_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
+| `rt_lw_flux_tod_dn`, `rt_lw_flux_tod_up` | `(y, x)` | at the top of the resolved box, the bottom of the lumped cell |
 | `rt_lw_flux_toa_dn`, `rt_lw_flux_toa_up` | `(y, x)` | at the top of the atmosphere; the `tod` ones when the box resolves the whole column |
 | `rt_lw_flux_abs` | `(z, y, x)` | absorbed minus emitted flux per unit height, W/m3 |
 

@@ -81,8 +81,8 @@ def test_direct_beam_is_beer_lambert(rte3d, mu0, independent_column):
 
     assert out['sfc_dir'].mean() == pytest.approx(expected, rel=0.02)
     assert out['sfc_dif'].mean() == 0.0
-    assert out['tod_up'].mean() == 0.0
-    assert out['tod_dn'].mean() == pytest.approx(TSI*mu0, rel=exact_rtol(rte3d))
+    assert out['toa_up'].mean() == 0.0
+    assert out['toa_dn'].mean() == pytest.approx(TSI*mu0, rel=exact_rtol(rte3d))
 
 
 def test_layers_above_the_box_are_lumped_into_its_top_cell(rte3d):
@@ -99,6 +99,39 @@ def test_layers_above_the_box_are_lumped_into_its_top_cell(rte3d):
     expected = TSI*np.exp(-tau_lay*(NZ + 8))
     assert deep['sfc_dir'].mean() == pytest.approx(expected, rel=0.02)
 
+    # toa is the top of the lumped cell, where the sun comes in; tod its bottom face,
+    # where the resolved domain ends, which the beam reaches through the lump's own
+    # optical depth: its nine layers, the box's top cell and the eight above it.
+    assert deep['toa_dn'].mean() == pytest.approx(TSI, rel=exact_rtol(rte3d))
+    assert deep['tod_dn'].mean() == pytest.approx(TSI*np.exp(-tau_lay*9), rel=0.02)
+    assert deep['toa_up'].mean() == 0.0
+    assert deep['tod_up'].mean() == 0.0
+
+
+def test_the_resolved_domain_top_closes_the_budget_below_it(rte3d):
+    """What crosses into the box from the lump is what the box below it absorbs.
+
+    With a lump, tod is a level inside the grid, scored as photons cross it either way,
+    so the cells below it have a budget of their own: in at tod_dn, out at tod_up and
+    the surface, the rest absorbed. Without a lump the two levels are one and the same.
+    """
+    nlay = NZ + 8
+    out = trace(rte3d, uniform(0.1, nlay), uniform(0.6, nlay), np.full(NCOL, 0.2), 1.0,
+                ppp=8192)
+
+    net_sfc = out['sfc_dir'] + out['sfc_dif'] - out['sfc_up']
+    below = (out['abs_dir'] + out['abs_dif'])[:NZ-1].sum(axis=0)*DZ
+    residual = out['tod_dn'] - out['tod_up'] - net_sfc - below
+    assert abs(residual.mean()) < 0.01*TSI
+
+    # And the lump really is a level apart: it absorbs and reflects part of the sun.
+    assert out['tod_dn'].mean() < 0.9*out['toa_dn'].mean()
+
+    flat = trace(rte3d, uniform(0.1), uniform(0.6), np.full(NCOL, 0.2), 1.0)
+    rtol = exact_rtol(rte3d)
+    np.testing.assert_allclose(flat['tod_dn'], flat['toa_dn'], rtol=rtol)
+    np.testing.assert_allclose(flat['tod_up'], flat['toa_up'], rtol=rtol)
+
 
 def test_conservative_scattering_absorbs_nothing(rte3d):
     """Every photon leaves through the top or the surface, and none of them is lost.
@@ -112,8 +145,8 @@ def test_conservative_scattering_absorbs_nothing(rte3d):
 
     assert absorbed(out).max() == 0.0
 
-    leaving = (out['tod_up'] + out['sfc_dir'] + out['sfc_dif']).sum()
-    assert leaving == pytest.approx(out['tod_dn'].sum(), rel=exact_rtol(rte3d))
+    leaving = (out['toa_up'] + out['sfc_dir'] + out['sfc_dif']).sum()
+    assert leaving == pytest.approx(out['toa_dn'].sum(), rel=exact_rtol(rte3d))
 
 
 def test_energy_budget_closes(rte3d):
@@ -125,7 +158,7 @@ def test_energy_budget_closes(rte3d):
     out = trace(rte3d, uniform(0.1), uniform(0.6), np.full(NCOL, 0.2), 1.0, ppp=8192)
 
     net_sfc = out['sfc_dir'] + out['sfc_dif'] - out['sfc_up']
-    residual = out['tod_dn'] - out['tod_up'] - net_sfc - absorbed(out)
+    residual = out['toa_dn'] - out['toa_up'] - net_sfc - absorbed(out)
 
     assert abs(residual.mean()) < 0.01*TSI
 
@@ -141,7 +174,7 @@ def test_surface_albedo_reflects_what_it_should(rte3d):
 
     assert out['sfc_dir'].mean() == pytest.approx(TSI, rel=exact_rtol(rte3d))
     assert out['sfc_up'].mean() == pytest.approx(albedo*TSI, rel=exact_rtol(rte3d))
-    assert out['tod_up'].mean() == pytest.approx(albedo*TSI, rel=0.02)
+    assert out['toa_up'].mean() == pytest.approx(albedo*TSI, rel=0.02)
 
 
 @pytest.mark.parametrize('mu0', [1.0, 0.6])
@@ -176,7 +209,7 @@ def test_uniform_atmosphere_matches_the_two_stream(rte3d, mu0, ssa0):
     assert out['sfc_dir'].mean() == pytest.approx(flux_dir[0, 0].mean(), rel=0.02)
     assert (out['sfc_dir'] + out['sfc_dif']).mean() == pytest.approx(
         flux_dn[0, 0].mean(), rel=0.05)
-    assert out['tod_up'].mean() == pytest.approx(flux_up[0, -1].mean(), rel=0.07)
+    assert out['toa_up'].mean() == pytest.approx(flux_up[0, -1].mean(), rel=0.07)
 
 
 def test_both_vertical_orientations_give_the_same_answer(rte3d):
@@ -196,7 +229,7 @@ def test_both_vertical_orientations_give_the_same_answer(rte3d):
 
     rtol = exact_rtol(rte3d)
     np.testing.assert_allclose(down['sfc_dir'], up['sfc_dir'], rtol=rtol)
-    np.testing.assert_allclose(down['tod_up'], up['tod_up'], rtol=rtol)
+    np.testing.assert_allclose(down['toa_up'], up['toa_up'], rtol=rtol)
     np.testing.assert_allclose(down['abs_dir'], up['abs_dir'], rtol=rtol)
 
 
@@ -233,5 +266,5 @@ def test_a_cloud_casts_a_shadow_beside_itself(rte3d):
 
     # Both conserve the domain-mean energy, which is what the shadow moves around.
     for out in (three_d, columns):
-        total = out['tod_up'] + out['sfc_dir'] + out['sfc_dif'] + absorbed(out)
+        total = out['toa_up'] + out['sfc_dir'] + out['sfc_dif'] + absorbed(out)
         assert total.mean() == pytest.approx(TSI*mu0, rel=0.02)

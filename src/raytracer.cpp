@@ -206,17 +206,22 @@ namespace
     // Photon counts to fluxes. Every photon carries toa_src/photons_per_pixel watts
     // per square metre; the absorbed flux is per unit height, so it is divided by the
     // cell depth as well. Reference: count_to_flux_2d and count_to_flux_3d.
+    //
+    // Without a lump the box top is the domain top, nothing scores the crossing, and
+    // tod takes toa's counts, as in the longwave tracer.
     void count_to_flux(
-            const Grid& grid, const TF flux_per_photon,
+            const Grid& grid, const TF flux_per_photon, const bool lumped,
             const Raytracer::Scratch& s, const Raytracer::Fluxes_rt& f)
     {
         const int ncol = grid.ncol();
         const TF per_volume = flux_per_photon/grid.dz;
 
+        const auto toa_dn = s.toa_dn, toa_up = s.toa_up;
         const auto tod_dn = s.tod_dn, tod_up = s.tod_up;
         const auto sfc_dir = s.sfc_dir, sfc_dif = s.sfc_dif, sfc_up = s.sfc_up;
         const auto atmos_dir = s.atmos_dir, atmos_dif = s.atmos_dif;
 
+        const auto f_toa_dn = f.toa_dn, f_toa_up = f.toa_up;
         const auto f_tod_dn = f.tod_dn, f_tod_up = f.tod_up;
         const auto f_sfc_dir = f.sfc_dir, f_sfc_dif = f.sfc_dif, f_sfc_up = f.sfc_up;
         const auto f_abs_dir = f.abs_dir, f_abs_dif = f.abs_dif;
@@ -224,8 +229,10 @@ namespace
         parallel_for_1d("rt_count_to_flux_2d", 0, ncol,
             KOKKOS_LAMBDA(const int icol)
             {
-                f_tod_dn(icol) += from_count(tod_dn(icol))*flux_per_photon;
-                f_tod_up(icol) += from_count(tod_up(icol))*flux_per_photon;
+                f_toa_dn(icol) += from_count(toa_dn(icol))*flux_per_photon;
+                f_toa_up(icol) += from_count(toa_up(icol))*flux_per_photon;
+                f_tod_dn(icol) += from_count(lumped ? tod_dn(icol) : toa_dn(icol))*flux_per_photon;
+                f_tod_up(icol) += from_count(lumped ? tod_up(icol) : toa_up(icol))*flux_per_photon;
                 f_sfc_dir(icol) += from_count(sfc_dir(icol))*flux_per_photon;
                 f_sfc_dif(icol) += from_count(sfc_dif(icol))*flux_per_photon;
                 f_sfc_up(icol) += from_count(sfc_up(icol))*flux_per_photon;
@@ -265,6 +272,8 @@ Raytracer::Fluxes_rt Raytracer::Fluxes_rt::make(const Grid& grid)
     const int ncol = grid.ncol();
 
     return Fluxes_rt{
+            Array_1d<TF>("rt_toa_dn", ncol),
+            Array_1d<TF>("rt_toa_up", ncol),
             Array_1d<TF>("rt_tod_dn", ncol),
             Array_1d<TF>("rt_tod_up", ncol),
             Array_1d<TF>("rt_sfc_dir", ncol),
@@ -277,6 +286,8 @@ Raytracer::Fluxes_rt Raytracer::Fluxes_rt::make(const Grid& grid)
 
 void Raytracer::Fluxes_rt::zero() const
 {
+    Kokkos::deep_copy(toa_dn, TF(0.));
+    Kokkos::deep_copy(toa_up, TF(0.));
     Kokkos::deep_copy(tod_dn, TF(0.));
     Kokkos::deep_copy(tod_up, TF(0.));
     Kokkos::deep_copy(sfc_dir, TF(0.));
@@ -297,6 +308,8 @@ Raytracer::Scratch Raytracer::Scratch::make(const Grid& grid)
     s.k_null = Array_3d<TF>(Kokkos::view_alloc("rt_k_null", Kokkos::WithoutInitializing),
                             grid.kn_z, grid.kn_y, grid.kn_x);
 
+    s.toa_dn = Array_1d<Count>("rt_toa_dn_count", ncol);
+    s.toa_up = Array_1d<Count>("rt_toa_up_count", ncol);
     s.tod_dn = Array_1d<Count>("rt_tod_dn_count", ncol);
     s.tod_up = Array_1d<Count>("rt_tod_up_count", ncol);
     s.sfc_dir = Array_1d<Count>("rt_sfc_dir_count", ncol);
@@ -343,6 +356,8 @@ void Raytracer::trace_rays(
             Array_map_2d<const Optics_cell>(scratch.optics.data(), grid.nz, ncol),
             scratch.k_null);
 
+    Kokkos::deep_copy(scratch.toa_dn, Count(0));
+    Kokkos::deep_copy(scratch.toa_up, Count(0));
     Kokkos::deep_copy(scratch.tod_dn, Count(0));
     Kokkos::deep_copy(scratch.tod_up, Count(0));
     Kokkos::deep_copy(scratch.sfc_dir, Count(0));
@@ -357,6 +372,8 @@ void Raytracer::trace_rays(
             scratch.k_null.data(), grid.kn_z, grid.kn_y, grid.kn_x);
     scene.sfc_alb = sfc_alb;
 
+    scene.toa_dn = Array_map_1d<Count>(scratch.toa_dn.data(), ncol);
+    scene.toa_up = Array_map_1d<Count>(scratch.toa_up.data(), ncol);
     scene.tod_dn = Array_map_1d<Count>(scratch.tod_dn.data(), ncol);
     scene.tod_up = Array_map_1d<Count>(scratch.tod_up.data(), ncol);
     scene.sfc_dir = Array_map_1d<Count>(scratch.sfc_dir.data(), ncol);
@@ -377,6 +394,12 @@ void Raytracer::trace_rays(
     scene.grid_d_inv = Vector<TF>{TF(1.)/scene.grid_d.x,
                                   TF(1.)/scene.grid_d.y,
                                   TF(1.)/scene.grid_d.z};
+    // Where the resolved domain ends. With nothing lumped the box's top cell is a
+    // resolved cell like any other and the box top already is the domain top, so the
+    // crossing is not scored at all -- the two pairs are made equal after the trace.
+    const bool lumped = nlay > grid.nz;
+    scene.z_dom = lumped ? (grid.nz - 1)*grid.dz : TF(0.);
+
     scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,
                                      TF(1.)/scene.kn_grid_d.y,
                                      TF(1.)/scene.kn_grid_d.z};
@@ -423,5 +446,5 @@ void Raytracer::trace_rays(
     else
         launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
 
-    count_to_flux(grid, (inc_dir + inc_dif)/photons_per_pixel, scratch, fluxes);
+    count_to_flux(grid, (inc_dir + inc_dif)/photons_per_pixel, lumped, scratch, fluxes);
 }

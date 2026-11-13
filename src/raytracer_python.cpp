@@ -71,6 +71,8 @@ void Raytracer::init_python_bindings(py::module_& m)
             Kokkos::fence();
 
             py::dict out;
+            out["toa_dn"] = Numpy::from_device(fluxes.toa_dn);
+            out["toa_up"] = Numpy::from_device(fluxes.toa_up);
             out["tod_dn"] = Numpy::from_device(fluxes.tod_dn);
             out["tod_up"] = Numpy::from_device(fluxes.tod_up);
             out["sfc_dir"] = Numpy::from_device(fluxes.sfc_dir);
@@ -94,7 +96,8 @@ void Raytracer::init_python_bindings(py::module_& m)
         "Trace one g-point through a three-dimensional box. The optical properties are "
         "(nlay, ncol) with ncol = nx*ny and the column index i + j*nx; layers from "
         "nz-1 upward are lumped into the top cell. mu0 and azi give the sun's "
-        "direction, inc_dir the irradiance entering the top of the domain, already "
-        "multiplied by mu0. Returns a dict with the surface and top-of-domain fluxes, "
-        "(ncol) each, and the absorbed flux per unit height, (nz, ncol).");
+        "direction, inc_dir the irradiance entering the top of the atmosphere, already "
+        "multiplied by mu0. Returns a dict with the fluxes at the surface, at the top "
+        "of the atmosphere (toa) and at the bottom of the lumped cell (tod), (ncol) "
+        "each, and the absorbed flux per unit height, (nz, ncol).");
 }
