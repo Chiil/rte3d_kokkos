@@ -276,7 +276,6 @@ void Raytracer_lw::add_plane_parallel(
         const Grid& grid,
         const bool top_at_1,
         const int nlay,
-        const bool lumped,
         const Array_map_2d<const TF>& flux_up,
         const Array_map_2d<const TF>& flux_dn,
         const Fluxes_lw& fluxes)
@@ -291,14 +290,14 @@ void Raytracer_lw::add_plane_parallel(
     const auto level_of = [=](const int kc) { return top_at_1 ? nlay - kc : kc; };
 
     const int lev_sfc = level_of(0);
-
-    const int lev_tod = level_of(nz);
+    const int lev_toa = level_of(nlay);
 
     // The level between the box's top cell and the cell below it, which is where the
     // resolved domain ends once that cell stands in for the atmosphere above. With
-    // nothing lumped the box's top cell is a resolved cell like any other and the two
-    // levels are the same one.
-    const int lev_dom = lumped ? level_of(nz - 1) : lev_tod;
+    // nothing lumped the box's top cell is a resolved cell like any other and the
+    // resolved domain ends at the top of the atmosphere.
+    const bool lumped = nlay > nz;
+    const int lev_dom = lumped ? level_of(nz - 1) : lev_toa;
 
     const auto f_toa_dn = fluxes.toa_dn, f_toa_up = fluxes.toa_up;
     const auto f_tod_dn = fluxes.tod_dn, f_tod_up = fluxes.tod_up;
@@ -310,19 +309,21 @@ void Raytracer_lw::add_plane_parallel(
         {
             f_sfc_dn(icol) += flux_dn(lev_sfc, icol);
             f_sfc_up(icol) += flux_up(lev_sfc, icol);
-            f_toa_dn(icol) += flux_dn(lev_tod, icol);
-            f_toa_up(icol) += flux_up(lev_tod, icol);
+            f_toa_dn(icol) += flux_dn(lev_toa, icol);
+            f_toa_up(icol) += flux_up(lev_toa, icol);
             f_tod_dn(icol) += flux_dn(lev_dom, icol);
             f_tod_up(icol) += flux_up(lev_dom, icol);
         });
 
     // What a cell absorbs is what the net downward flux loses across it, which is the
-    // same quantity the tracer accumulates by following photons.
+    // same quantity the tracer accumulates by following photons. The top cell's upper
+    // bound is the top of the atmosphere, however many layers it stands in for, and
+    // its depth is the box's dz, as it is for the tracer.
     parallel_for_2d("rt_lw_plane_parallel_3d", {0, 0}, {nz, ncol},
         KOKKOS_LAMBDA(const int kc, const int icol)
         {
             const int lo = top_at_1 ? nlay - kc : kc;
-            const int hi = top_at_1 ? nlay - kc - 1 : kc + 1;
+            const int hi = kc + 1 == nz ? lev_toa : (top_at_1 ? nlay - kc - 1 : kc + 1);
 
             const TF net_lo = flux_dn(lo, icol) - flux_up(lo, icol);
             const TF net_hi = flux_dn(hi, icol) - flux_up(hi, icol);

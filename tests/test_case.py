@@ -353,18 +353,16 @@ def test_run_case_with_both_shortwave_solvers(rte3d, tmp_path, monkeypatch):
 
 
 @requires_data
-def test_the_air_above_the_box_can_stay_outside_it(rte3d, tmp_path, monkeypatch):
-    """The longwave tracer's two ways of dealing with an atmosphere deeper than the box.
+def test_the_lumped_top_cell_carries_the_air_above_exactly(rte3d, tmp_path, monkeypatch):
+    """With the tracer's whole spectrum on its plane-parallel fallback, the box is the
+    full column's own solve.
 
-    Lumped, the air above becomes the box's top cell: one temperature and the box's own
-    depth, so what it sends down is not what the air it stands in for sends. Left
-    outside, the box holds only the resolved cells and the air above enters as the
-    downward flux a plane-parallel solve of the full column leaves at the box's top.
-
-    Every g-point is pushed onto the plane-parallel fallback here, which makes the
-    check exact rather than a question about how many photons were shot: with the air
-    left outside, what the tracer's output carries has to be the full column's own
-    solve over the box, to the digit.
+    Every g-point is pushed onto the fallback here, which makes the check exact rather
+    than a question about how many photons were shot. The fallback solves the whole
+    column and hands the box what is in it: the resolved cells their own divergence, the
+    lumped top cell what the column loses between its bottom and the top of the
+    atmosphere, and the two levels the tracer reports the flux into the box and the
+    flux to space.
     """
     import sys
 
@@ -378,57 +376,44 @@ def test_the_air_above_the_box_can_stay_outside_it(rte3d, tmp_path, monkeypatch)
     # downward flux worth comparing rather than the trace of one.
     make_input.make_input('rtcase_input.nc', nx=NX, ny=NY, nlay=NLAY, rt_nz=RT_NZ)
 
-    def solve(name, lump_above):
-        (tmp_path/f'{name}.toml').write_text(
-            '[switches]\n'
-            'shortwave = false\n'
-            '\n'
-            '[longwave]\n'
-            'plane-parallel = true\n'
-            'raytracing = true\n'
-            'photons-per-pixel = 64\n'
-            # Opaque within a cell by construction, so nothing is traced and nothing
-            # is noisy.
-            'min-mfp-grid-ratio = 1e6\n'
-            f'lump-above = {str(lump_above).lower()}\n')
+    (tmp_path/'rtcase.toml').write_text(
+        '[switches]\n'
+        'shortwave = false\n'
+        '\n'
+        '[longwave]\n'
+        'plane-parallel = true\n'
+        'raytracing = true\n'
+        'photons-per-pixel = 64\n'
+        # Opaque within a cell by construction, so nothing is traced and nothing is
+        # noisy.
+        'min-mfp-grid-ratio = 1e6\n')
 
-        os.replace('rtcase_input.nc', f'{name}_input.nc')
-        monkeypatch.setattr(sys, 'argv', ['run_case.py', name])
-        assert run_case.main() == 0
-        os.replace(f'{name}_input.nc', 'rtcase_input.nc')
+    monkeypatch.setattr(sys, 'argv', ['run_case.py', 'rtcase'])
+    assert run_case.main() == 0
+    out = xr.open_dataset(tmp_path/'rtcase_output.nc')
 
-        return xr.open_dataset(tmp_path/f'{name}_output.nc')
-
-    lumped = solve('lumped', True)
-    outside = solve('outside', False)
-
-    # The full column's own answer, which the plane-parallel solver writes beside the
-    # tracer's output in both runs.
-    into_the_box = float(outside['lw_flux_dn'][RT_NZ].mean())
     dz = 70.0e3/NLAY
+    flux_up = out['lw_flux_up'].values
+    flux_dn = out['lw_flux_dn'].values
+    net = flux_dn - flux_up
 
-    net = outside['lw_flux_dn'] - outside['lw_flux_up']
-    divergence = ((net[1:RT_NZ + 1].values - net[:RT_NZ].values)/dz).mean(axis=(1, 2))
+    # The resolved cells and the lumped one on top of them, whose upper bound is the
+    # top of the atmosphere.
+    divergence = np.concatenate([
+        (net[1:RT_NZ + 1] - net[:RT_NZ])/dz,
+        (net[-1:] - net[RT_NZ:RT_NZ + 1])/dz])
 
-    # With the air left outside, the box is exactly that piece of the column -- to
-    # the precision it was computed in, the two paths differing only in the order they
-    # sum the g-points and the levels.
-    exact = 1e-4 if outside['rt_lw_flux_abs'].dtype == np.float32 else 1e-9
+    # The two paths differ only in the order they sum the g-points.
+    exact = 1e-4 if out['rt_lw_flux_abs'].dtype == np.float32 else 1e-9
 
-    assert outside['rt_lw_flux_abs'].sizes['z'] == RT_NZ
-    assert float(outside['rt_lw_flux_tod_dn'].mean()) == pytest.approx(
-        into_the_box, rel=exact)
-    assert outside['rt_lw_flux_abs'].mean(('y', 'x')).values == pytest.approx(
-        divergence, rel=exact)
-
-    # Lumped, the box carries one cell more and the lumped cell sends down materially
-    # less than the air it stands in for -- which is the reason the switch exists.
-    assert lumped['rt_lw_flux_abs'].sizes['z'] == RT_NZ + 1
-    assert float(lumped['rt_lw_flux_tod_dn'].mean()) < 0.95*into_the_box
-
-    # Below the box the two agree: what the lump costs is above, not underneath.
-    assert float(lumped['rt_lw_flux_sfc_dn'].mean()) == pytest.approx(
-        float(outside['rt_lw_flux_sfc_dn'].mean()), rel=0.01)
+    assert out['rt_lw_flux_abs'].sizes['z'] == RT_NZ + 1
+    np.testing.assert_allclose(
+        out['rt_lw_flux_abs'].mean(('y', 'x')).values, divergence.mean(axis=(1, 2)),
+        rtol=exact)
+    assert float(out['rt_lw_flux_tod_dn'].mean()) == pytest.approx(
+        flux_dn[RT_NZ].mean(), rel=exact)
+    assert float(out['rt_lw_flux_toa_up'].mean()) == pytest.approx(
+        flux_up[-1].mean(), rel=exact)
 
 
 @requires_data

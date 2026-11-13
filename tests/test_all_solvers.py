@@ -506,22 +506,31 @@ def test_les_longwave_tracer_only_traces_the_transparent_g_points(les):
 
 @requires_data
 @requires_les
-def test_les_longwave_lumped_top_cell_lets_more_out(les):
+def test_les_longwave_lumped_top_cell_stands_in_for_the_air_above(les):
     """Above the box the tracer holds one cell where the plane-parallel solver holds 132.
 
     The ray-tracing grid is the LES box, four kilometres deep; the sounding above it is
     lumped into a single cell on top so that the tracer still sees a whole atmosphere.
-    That cell absorbs less of the upwelling flux than the layers it replaces, so more
-    escapes at the top than the plane-parallel solver, which resolves them, reports.
-    The two agree at the surface -- see the test above -- because the lumping is far
-    from it. This is the approximation documented in include/raytracer_lw.h, not an
-    error, and the test is here to say how large it is on this case.
+    That air is 75 K warmer at its bottom than at its top, and the cell is told what it
+    emits out of each end, so it sends down into the box and up to space what the 132
+    layers do. With one source for both, a plane-parallel study of the same field put
+    the flux into the box 12 percent low and the flux to space 20 percent high.
     """
-    _, out = les
+    atm, out = les
 
-    plane = mean(out['lw_noscat']['flux_up'][-1])
+    lev_dom = atm['grid']['nz'] - 1
+    assert not atm['top_at_1']
 
-    for solver in ('lw_rt_1d', 'lw_rt_3d'):
-        escaping = mean(out[solver]['rt_lw_flux_toa_up'])
-        assert escaping > plane
-        assert escaping < 1.5*plane
+    into_the_box = mean(out['lw_noscat']['flux_dn'][lev_dom])
+    to_space = mean(out['lw_noscat']['flux_up'][-1])
+
+    # The flux to space is the plane-parallel one in independent columns, but not in
+    # three dimensions: there the cumulus seen at a slant hide more of the warm surface
+    # from space than they cover from straight above, and at 2048 photons per pixel the
+    # traced value converges 0.9 percent lower on every backend. That is the third
+    # dimension, not the lump, and it gets the room it needs at 256.
+    for solver, rel_up in (('lw_rt_1d', 0.01), ('lw_rt_3d', 0.02)):
+        assert mean(out[solver]['rt_lw_flux_tod_dn']) == pytest.approx(
+            into_the_box, rel=0.01)
+        assert mean(out[solver]['rt_lw_flux_toa_up']) == pytest.approx(
+            to_space, rel=rel_up)

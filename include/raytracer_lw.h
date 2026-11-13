@@ -150,17 +150,16 @@ namespace Raytracer_lw
     // and without Monte Carlo noise. Reference: convert_1d_to_rt_output, which the
     // reference reaches through min_mfp_grid_ratio.
     //
-    // flux_up and flux_dn are one g-point's profiles, (nlev, ncol), in the caller's own
-    // vertical orientation. Only the levels bounding the box are read, plus the one
-    // between its top cell and the cell below, which is where the resolved domain ends
-    // when the caller has lumped the atmosphere above into that cell.
+    // flux_up and flux_dn are one g-point's profiles over the whole column, (nlay+1,
+    // ncol), in the caller's own vertical orientation. With nlay > nz the layers from
+    // nz-1 upward are the box's top cell, as they are for trace_rays, and that cell's
+    // net flux runs to the top of the atmosphere.
     void add_plane_parallel(
             const Grid& grid,
             const bool top_at_1,
             const int nlay,
-            const bool lumped,
-            const Array_map_2d<const TF>& flux_up,   // (nlev, ncol)
-            const Array_map_2d<const TF>& flux_dn,   // (nlev, ncol)
+            const Array_map_2d<const TF>& flux_up,   // (nlay+1, ncol)
+            const Array_map_2d<const TF>& flux_dn,   // (nlay+1, ncol)
             const Fluxes_lw& fluxes);
 
     void init_python_bindings(py::module_& m);
