@@ -426,3 +426,23 @@ def test_a_cold_cloud_shades_the_clear_sky_beside_it(rte3d):
         boundaries = out['tod_dn'] - out['tod_up'] + out['sfc_up'] - out['sfc_dn']
         np.testing.assert_allclose(boundaries.mean(), column_net(out).mean(),
                                    rtol=exact_rtol(rte3d))
+
+
+def test_the_seed_changes_the_noise_but_not_the_mean(rte3d):
+    # As for the shortwave: a new seed per call keeps the noise from being a fixed
+    # pattern when the same scene is traced every radiation step.
+    tau = uniform(0.1)
+    lay_source, sfc_source, sfc_emis = uniform(100.0), np.full(NCOL, 150.0), np.full(NCOL, 1.0)
+    run = lambda **kw: column_net(trace(rte3d, tau, lay_source, sfc_source, sfc_emis, ppp=64, **kw))
+
+    a0, a1, a1_again, a2 = run(), run(seed=1), run(seed=1), run(seed=2)
+
+    np.testing.assert_array_equal(run(seed=0), a0)
+    np.testing.assert_array_equal(a1_again, a1)
+
+    d1, d2 = a1 - a1.mean(), a2 - a2.mean()
+    assert not np.array_equal(a1, a2)
+    assert abs(np.corrcoef(d1, d2)[0, 1]) < 0.5
+
+    noise = d1.std()/np.sqrt(NCOL)
+    assert abs(a1.mean() - a2.mean()) < 5*noise

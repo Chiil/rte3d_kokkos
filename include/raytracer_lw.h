@@ -121,7 +121,8 @@ namespace Raytracer_lw
     //
     // photons_per_pixel is per g-point: the trace shoots photons_per_pixel*nx*ny of
     // them, spread over the emitters rather than over the pixels. independent_column
-    // switches off horizontal transport.
+    // switches off horizontal transport. seed picks the photon paths, as for the
+    // shortwave tracer.
     void trace_rays(
             const Grid& grid,
             const bool top_at_1,
@@ -140,7 +141,8 @@ namespace Raytracer_lw
             const Array_map_1d<const TF>& lump_dn,     // (ncol), may be empty
             const Array_map_1d<const TF>& lump_up,     // (ncol), may be empty
             const Fluxes_lw& fluxes,
-            const Scratch& scratch);
+            const Scratch& scratch,
+            const unsigned int seed = 0);
 
     // Add a plane-parallel solve of one g-point into the ray tracer's own fluxes.
     //

@@ -42,7 +42,8 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& lump_dn,
            const std::optional<Numpy::In<TF>>& lump_up,
            const bool top_at_1, const bool independent_column,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const unsigned int seed) -> py::dict
         {
             Runtime::get();
 
@@ -93,7 +94,7 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
                     inc_dif,
                     Array_map_1d<const TF>(lump_dn_d.data(), lump_dn_d.extent(0)),
                     Array_map_1d<const TF>(lump_up_d.data(), lump_up_d.extent(0)),
-                    fluxes, scratch);
+                    fluxes, scratch, seed);
             Kokkos::fence();
 
             py::dict out;
@@ -118,6 +119,7 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
         py::arg("lump_dn") = py::none(), py::arg("lump_up") = py::none(),
         py::arg("top_at_1") = false, py::arg("independent_column") = false,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("seed") = 0,
         "Trace one longwave g-point through a three-dimensional box. The optical "
         "properties and the Planck sources are (nlay, ncol) with ncol = nx*ny and the "
         "column index i + j*nx; layers from nz-1 upward are lumped into the top cell, "

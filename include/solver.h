@@ -252,7 +252,8 @@ namespace Solver
             const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
             const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
             const Cloud_input& clouds,
-            const Raytracer::Fluxes_rt& fluxes);
+            const Raytracer::Fluxes_rt& fluxes,
+            const unsigned int seed = 0);         // photon paths, see Raytracer::trace_rays
 
     // The whole longwave spectrum through the Monte Carlo ray tracer instead of the
     // no-scattering solver, as solve_sw_rt is for the shortwave.
@@ -295,7 +296,8 @@ namespace Solver
             const TF min_mfp_grid_ratio,
             const Cloud_input& clouds,
             const bool scattering,
-            const Raytracer_lw::Fluxes_lw& fluxes);
+            const Raytracer_lw::Fluxes_lw& fluxes,
+            const unsigned int seed = 0);         // photon paths, see Raytracer::trace_rays
 
     void init_python_bindings(py::module_& m);
 }

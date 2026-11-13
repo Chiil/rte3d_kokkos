@@ -268,3 +268,26 @@ def test_a_cloud_casts_a_shadow_beside_itself(rte3d):
     for out in (three_d, columns):
         total = out['toa_up'] + out['sfc_dir'] + out['sfc_dif'] + absorbed(out)
         assert total.mean() == pytest.approx(TSI*mu0, rel=0.02)
+
+
+def test_the_seed_changes_the_noise_but_not_the_mean(rte3d):
+    # A model traces nearly the same scene every radiation step. Without a new seed
+    # each time, every call draws the same photons, and the noise is a fixed pattern
+    # rather than one that averages out. Few photons, so that there is noise to see.
+    tau, ssa, alb = uniform(0.05), uniform(0.9), np.full(NCOL, 0.2)
+    run = lambda **kw: absorbed(trace(rte3d, tau, ssa, alb, mu0=0.6, ppp=64, **kw))
+
+    a0, a1, a1_again, a2 = run(), run(seed=1), run(seed=1), run(seed=2)
+
+    # The default is seed 0, and a given seed is reproducible.
+    np.testing.assert_array_equal(run(seed=0), a0)
+    np.testing.assert_array_equal(a1_again, a1)
+
+    # Another seed gives noise that is unrelated to the first.
+    d1, d2 = a1 - a1.mean(), a2 - a2.mean()
+    assert not np.array_equal(a1, a2)
+    assert abs(np.corrcoef(d1, d2)[0, 1]) < 0.5
+
+    # And the same answer on average, within the noise of the domain mean.
+    noise = d1.std()/np.sqrt(NCOL)
+    assert abs(a1.mean() - a2.mean()) < 5*noise

@@ -431,7 +431,8 @@ void Solver::solve_sw_rt(
         const Array_1d_h<const TF>& toa_src,
         const Array_2d<const TF>& sfc_alb_dir,
         const Cloud_input& clouds,
-        const Raytracer::Fluxes_rt& fluxes)
+        const Raytracer::Fluxes_rt& fluxes,
+        const unsigned int seed)
 {
     // Every g-point is traced, so there is no plane-parallel solve to prepare for.
     const Solve_state state = prepare(
@@ -458,7 +459,7 @@ void Solver::solve_sw_rt(
                 state.tau, state.ssa, cloud.tau, cloud.ssa, cloud.g,
                 slice_1d(sfc_alb_dir, igpt),
                 mu0, azi, toa_src(igpt)*mu0, TF(0.),
-                fluxes, scratch);
+                fluxes, scratch, seed);
     }
 }
 
@@ -477,7 +478,8 @@ int Solver::solve_lw_rt(
         const TF min_mfp_grid_ratio,
         const Cloud_input& clouds,
         const bool scattering,
-        const Raytracer_lw::Fluxes_lw& fluxes)
+        const Raytracer_lw::Fluxes_lw& fluxes,
+        const unsigned int seed)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
     const int nlay = static_cast<int>(atm.play.extent(0));
@@ -635,7 +637,7 @@ int Solver::solve_lw_rt(
                     state.lay_source, state.sfc_source,
                     slice_1d(sfc_emis, igpt),
                     TF(0.), lump_dn, lump_up,
-                    fluxes, scratch);
+                    fluxes, scratch, seed);
         }
         else
         {

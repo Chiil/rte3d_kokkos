@@ -225,6 +225,11 @@ namespace Raytracer
     // photons_per_pixel is per g-point. independent_column switches off horizontal
     // transport, which turns the tracer into an expensive but exact column solver and
     // is what a comparison against the two-stream wants.
+    //
+    // seed picks the photon paths: a run is reproducible for a given seed, and a
+    // caller that traces the same scene repeatedly, as a model does every radiation
+    // step, passes a new seed each time so that the Monte Carlo noise is not the same
+    // pattern every call. Seed 0 is the default.
     void trace_rays(
             const Grid& grid,
             const bool top_at_1,
@@ -242,7 +247,8 @@ namespace Raytracer
             const TF inc_dir,
             const TF inc_dif,
             const Fluxes_rt& fluxes,
-            const Scratch& scratch);
+            const Scratch& scratch,
+            const unsigned int seed = 0);
 
     void init_python_bindings(py::module_& m);
 }

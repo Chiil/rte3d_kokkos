@@ -31,7 +31,8 @@ void Raytracer::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& ssa_cld,
            const std::optional<Numpy::In<TF>>& asy_cld,
            const bool top_at_1, const bool independent_column,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const unsigned int seed) -> py::dict
         {
             Runtime::get();
 
@@ -67,7 +68,7 @@ void Raytracer::init_python_bindings(py::module_& m)
                     as_const_2d(tau_gas_d), as_const_2d(ssa_gas_d),
                     as_const_2d(tau_cld_d), as_const_2d(ssa_cld_d), as_const_2d(asy_cld_d),
                     Array_map_1d<const TF>(sfc_alb_d.data(), ncol),
-                    mu0, azi, inc_dir, inc_dif, fluxes, scratch);
+                    mu0, azi, inc_dir, inc_dif, fluxes, scratch, seed);
             Kokkos::fence();
 
             py::dict out;
@@ -93,6 +94,7 @@ void Raytracer::init_python_bindings(py::module_& m)
         py::arg("asy_cld") = py::none(),
         py::arg("top_at_1") = false, py::arg("independent_column") = false,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("seed") = 0,
         "Trace one g-point through a three-dimensional box. The optical properties are "
         "(nlay, ncol) with ncol = nx*ny and the column index i + j*nx; layers from "
         "nz-1 upward are lumped into the top cell. mu0 and azi give the sun's "

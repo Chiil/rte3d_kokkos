@@ -92,6 +92,23 @@ namespace Rand
     }
 
 
+    // What a tracer XORs into its consecutive per-thread seeds to draw a different set
+    // of photon paths for a given seed: XOR keeps the seeds of one launch distinct.
+    // Seed 0 gives 0, so a call without a seed draws exactly what it always did.
+    // On the host, as the launch computes it, with its own copy of mix_seed's
+    // finalizer, which is device-only in the GPU builds.
+    inline unsigned int seed_offset(const unsigned int seed)
+    {
+        if (seed == 0)
+            return 0u;
+
+        std::uint64_t z = seed + 0x9e3779b97f4a7c15ULL;
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        return static_cast<unsigned int>((z ^ (z >> 31)) >> 32);
+    }
+
+
     // A uniform deviate in [0, 1). Seeded per thread, so a run is reproducible for a
     // given photon count and backend.
     //

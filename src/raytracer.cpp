@@ -185,7 +185,7 @@ namespace
     void launch_photons(
             const Rt_kernels::Scene& scene, const int nthread,
             const int photons_per_thread, const int photons_extra,
-            const unsigned int gpt_offset)
+            const unsigned int gpt_offset, const unsigned int seed_xor)
     {
         Kokkos::parallel_for("rt_trace_photons",
             Kokkos::RangePolicy<Default_exec>(0, nthread),
@@ -198,7 +198,7 @@ namespace
                         + static_cast<unsigned int>(n < photons_extra ? n : photons_extra);
 
                 Rt_kernels::trace_photons<independent_column>(
-                        scene, nshoot, gpt_offset + start, gpt_offset + start);
+                        scene, nshoot, gpt_offset + start, (gpt_offset + start) ^ seed_xor);
             });
     }
 
@@ -341,7 +341,8 @@ void Raytracer::trace_rays(
         const TF inc_dir,
         const TF inc_dif,
         const Fluxes_rt& fluxes,
-        const Scratch& scratch)
+        const Scratch& scratch,
+        const unsigned int seed)
 {
     const int nlay = static_cast<int>(tau_gas.extent(0));
     const int ncol = grid.ncol();
@@ -441,10 +442,14 @@ void Raytracer::trace_rays(
 
     const unsigned int gpt_offset = static_cast<unsigned int>(igpt*photons_total);
 
+    // The seed only changes the pseudo-random draws. The quasi-random pixel sequence
+    // stays, so every pixel still gets photons_per_pixel photons.
+    const unsigned int seed_xor = Rand::seed_offset(seed);
+
     if (independent_column)
-        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra, gpt_offset, seed_xor);
     else
-        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, gpt_offset);
+        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra, gpt_offset, seed_xor);
 
     count_to_flux(grid, (inc_dir + inc_dif)/photons_per_pixel, lumped, scratch, fluxes);
 }

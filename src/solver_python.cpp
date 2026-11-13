@@ -272,7 +272,8 @@ void Solver::init_python_bindings(py::module_& m)
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const bool scattering,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const unsigned int seed) -> py::dict
         {
             Runtime::get();
 
@@ -313,7 +314,7 @@ void Solver::init_python_bindings(py::module_& m)
                         photons_per_pixel, independent_column,
                         sfc_emis_d, secants_d, weights_d,
                         min_mfp_grid_ratio, clouds, scattering,
-                        fluxes);
+                        fluxes, seed);
             });
 
             py::dict out;
@@ -347,6 +348,8 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("col_dry") = py::none(),
         py::arg("scattering") = false,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("seed") = 0,
+        "seed picks the photon paths; pass a new one for every call on the same scene, or the Monte Carlo noise repeats. "
         "Longwave gas optics, Planck sources, clouds and the Monte Carlo ray tracer, "
         "one g-point at a time. The columns are the tracer's horizontal grid, "
         "ncol = nx*ny with the column index i + j*nx, and layers from nz-1 upward are "
@@ -377,7 +380,8 @@ void Solver::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& reliq, const std::optional<Numpy::In<TF>>& dgice,
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
-           const int kn_x, const int kn_y, const int kn_z) -> py::dict
+           const int kn_x, const int kn_y, const int kn_z,
+           const unsigned int seed) -> py::dict
         {
             Runtime::get();
 
@@ -412,7 +416,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw_rt(
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column, mu0, azi,
-                        toa_src_h, sfc_alb_dir_d, clouds, fluxes);
+                        toa_src_h, sfc_alb_dir_d, clouds, fluxes, seed);
             });
 
             py::dict out;
@@ -442,6 +446,8 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("delta_cloud") = true,
         py::arg("col_dry") = py::none(),
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
+        py::arg("seed") = 0,
+        "seed picks the photon paths; pass a new one for every call on the same scene, or the Monte Carlo noise repeats. "
         "Shortwave gas optics, clouds and the Monte Carlo ray tracer, one g-point at a "
         "time. The columns are the tracer's horizontal grid, ncol = nx*ny with the "
         "column index i + j*nx, and layers from nz-1 upward are lumped into the top "
