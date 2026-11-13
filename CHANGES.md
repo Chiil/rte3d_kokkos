@@ -66,5 +66,6 @@ precision the fluxes agree with the reference to about 1e-13.
 | 3D Monte Carlo ray tracers for SW and LW (after rte-rrtmgp-cpp) | 3D radiation for LES; use the same gas and cloud optics as the two-stream |
 | Integer photon counters (fixed point) and per-thread seeding | Traces reproduce bit for bit; RNG setup is cheaper |
 | `min_mfp_grid_ratio` fallback to plane-parallel for opaque g-points | No photons spent where there is no horizontal transport |
+| LW: the air above the box lumped into its top cell, which emits down and up at separate sources from a plane-parallel solve of that air | One source for air 75 K warmer at its bottom sent 12% too little into the box; rte-rrtmgp-cpp instead drops the air and feeds in a domain-mean flux, losing the outgoing longwave |
 | Fast math in the ray-tracer files only | Monte Carlo noise is far above the cost of fast math; everything else stays IEEE |
 | Approximate division (`fast_div`) in the SW and LW solvers, GPU single precision only | 5-16% faster solves up to ~16k columns, neutral at 65536 where the sweeps are memory-bound; gas optics keeps exact division for its invariants |

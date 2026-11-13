@@ -77,9 +77,16 @@ by every cell, the surface and the top boundary in proportion to the local sourc
 it scores absorption minus emission, the flux divergence. With `min_mfp_grid_ratio`
 set, the g-points whose gas is opaque within a cell are solved plane-parallel instead,
 since there is no horizontal transport to resolve there; at the default of zero every
-g-point is traced. The air above the box is either lumped into its top cell or, with
-`lump_above = false`, left outside it and brought in as the downward flux a
-plane-parallel solve of the full column leaves at the box's top, as the reference does.
+g-point is traced. The air above the box is lumped into its top cell, as in the
+shortwave. A single source cannot stand in for it: on the LES field that air is 75 K
+warmer at its bottom than at its top, and one optical-depth-weighted source sent 12
+percent too little down into the box and 20 percent too much to space. So every traced
+g-point first solves the lumped air plane-parallel on its own, over a black floor that
+emits nothing, and the cell emits each hemisphere at the source that gets that solve's
+flux out of the face on its side, through `1 - 2*E3(tau)` of its optical depth. Without
+scattering this is exact. The reference instead discards the air above the box and
+feeds its downward flux in as a domain-mean scalar, which loses the outgoing longwave and
+the column-to-column variation of what enters the box.
 
 On the RCEMIP case with clouds, 64x64 columns and a 42 degree sun, the two shortwave
 solvers agree to 1.1% on the downward surface flux, 0.2% on the direct beam and 0.4% on

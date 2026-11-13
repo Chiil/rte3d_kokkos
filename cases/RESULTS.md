@@ -90,12 +90,12 @@ worth knowing which half is which before reading anything into a difference.
 | `rt_lw_flux_sfc_dn` | 403.273 | 402.095 (-0.29%) |
 | `rt_lw_flux_tod_up` | 374.2 | 374.327 (+0.03%) |
 
-**The top-of-domain flux is comparable because the case sets `lump-above = false`.** The
-reference discards the 132 layers above the ray-tracing box, and so does rte3d with that
-setting, so the two codes see the same air. With the layers lumped into one more cell on
-top instead -- `lump-above = true` -- rte3d sees air the reference does not, and
-`rt_lw_flux_tod_up` comes out at 331.8 against 374.2. That difference is what the note in
-`include/raytracer_lw.h` is about, and it is not an error on either side.
+**The top-of-domain flux is comparable because these were taken with the input truncated
+to the 200 resolved layers.** The reference discards the 132 layers above the
+ray-tracing box, so the two codes then see the same air. The case as it stands lumps
+those layers into one more cell on top, so rte3d's `rt_lw_flux_toa_up` is what reaches
+space -- 268.0 W/m2 against the two-stream's 267.6 -- and not what leaves the box, which
+is what the reference reports. Not an error on either side.
 
 **The shortwave is not comparable, because of aerosols.** The input carries
 eleven aerosol mixing ratios, the reference reads them and rte3d has no aerosol optics

@@ -88,8 +88,10 @@ min-mfp-grid-ratio = 1.0
 # plane-parallel solve of it emits out of each end and sends down and up exactly that.
 # With one source for both directions it used to send 199.6 W/m2 down into the box
 # where the air it stands in for sends 227.9, and the cells just beneath it cooled far
-# too hard, 33 K/day against 0.3 in the topmost one. It costs one plane-parallel solve
-# of the air above per traced g-point.
+# too hard, 33 K/day against 0.3 in the topmost one. Now it sends 227.7 down against the
+# two-stream's 227.9, the topmost cell cools at 0.07 K/day against 0.16, and the outgoing
+# longwave is 268.0 against 267.6. It costs one plane-parallel solve of the air above
+# per traced g-point.
 
 # Verified against rte-rrtmgp-cpp's test_rte_rrtmgp_rt on this field, same 128
 # g-points, same photon budget, with the atmosphere truncated to the 200 resolved

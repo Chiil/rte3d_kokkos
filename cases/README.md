@@ -98,15 +98,15 @@ such thing as a flux profile per column once photons move sideways:
 | `rt_flux_tod_dn`, `rt_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
 | `rt_flux_abs_dir`, `rt_flux_abs_dif` | `(z, y, x)` | absorbed flux per unit height, W/m3 |
 
-The `[longwave]` section takes the same four keys, plus `scattering`,
-`min-mfp-grid-ratio` and `lump-above`, which [`example.toml`](example.toml) explains.
+The `[longwave]` section takes the same four keys, plus `scattering` and
+`min-mfp-grid-ratio`, which [`example.toml`](example.toml) explains.
 The longwave tracer's fluxes:
 
 | variable | dimensions | meaning |
 |---|---|---|
 | `rt_lw_flux_sfc_dn`, `rt_lw_flux_sfc_up` | `(y, x)` | at the surface |
 | `rt_lw_flux_tod_dn`, `rt_lw_flux_tod_up` | `(y, x)` | at the top of the ray-tracing domain |
-| `rt_lw_flux_toa_dn`, `rt_lw_flux_toa_up` | `(y, x)` | at the top of the atmosphere; the `tod` ones when `lump-above = false` |
+| `rt_lw_flux_toa_dn`, `rt_lw_flux_toa_up` | `(y, x)` | at the top of the atmosphere; the `tod` ones when the box resolves the whole column |
 | `rt_lw_flux_abs` | `(z, y, x)` | absorbed minus emitted flux per unit height, W/m3 |
 
 ### Making an input file
@@ -200,8 +200,8 @@ a different size is a different case and belongs in a folder of its own.
 
 The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
 2560 x 2560 x 4000 m RICO cumulus field at 20 m resolution. 128 x 128 columns, 200
-ray-tracing cells in the vertical and 332 layers. The shortwave tracer lumps the 132
-above the box into one cell on top; the longwave one leaves them outside, as below.
+ray-tracing cells in the vertical and 332 layers. Both tracers lump the 132 above the
+box into one cell on top, as below.
 Cloud is liquid-only and thin: 1.3% of cells, 19% of columns.
 
 ```bash
@@ -233,15 +233,13 @@ background and the tracer gives as very nearly uniform -- 6 W/m2 of spread again
 because photons reflected two kilometres below have spread across the whole domain by
 the time they leave it.
 
-The case leaves the 132 layers above the box outside it -- `lump-above = false` --
-rather than lumping them into the box's top cell, which is what the settings file
-explains. Lumped, that cell carries the right optical depth but one temperature and
-the box's own 20 m, and sends 199.6 W/m2 down into the box where the air it stands in
-for sends 227.9; the cells beneath it then cool far too hard, 33 K/day against 0.3 in
-the topmost one, dying away downward. Left outside, the air above enters as the
-downward flux a plane-parallel solve of the full column leaves at the box's top --
-227.8 against that solve's 227.9 -- and the cooling profile follows the two-stream all
-the way up. Switch it back and `plot_solvers.py` hatches the cells the lump spoils.
+In the longwave the lumped cell stands in for air 75 K warmer at its bottom than at its
+top, so one source will not do. With one, it sent 199.6 W/m2 down into the box where the
+air it stands in for sends 227.9, and the cells beneath it cooled far too hard, 33 K/day
+against 0.3 in the topmost one. It now emits down and up at separate sources, taken from a
+plane-parallel solve of that air per traced g-point, and sends 227.7 down against the
+two-stream's 227.9; the cooling profile follows the two-stream all the way up, and
+`plot_solvers.py` finds no cells to hatch.
 
 [`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the settings and,
 at length, what was checked against the reference and the two traps that
