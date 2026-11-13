@@ -80,6 +80,10 @@ namespace Raytracer_lw
         Array_2d<TF> emission;          // (nz+2, ncol)
         Array_1d<double> cdf;           // ((nz+2)*ncol)
 
+        // The share of the lumped top cell's emission that goes into the downward
+        // hemisphere, when the caller gives what the air above emits out of each face.
+        Array_1d<TF> lump_frac_dn;      // (ncol)
+
         // Photon counts, zeroed at the start of every trace.
         Array_1d<Count> toa_dn, toa_up, tod_dn, tod_up, sfc_dn, sfc_up;   // (ncol)
         Array_2d<Count> atmos;                                            // (nz, ncol)
@@ -107,6 +111,14 @@ namespace Raytracer_lw
     // plane-parallel solve above the box gives; with layers lumped into the top cell
     // that cell already emits downward, and passing both would count them twice.
     //
+    // lump_dn and lump_up, (ncol) each and both empty or both given, are what the air
+    // lumped into the top cell emits down out of its bottom and up out of its top
+    // [W/m2]. A homogeneous cell cannot get both from one source -- the air above is
+    // warm at the bottom and cold at the top, so it sends far more down than up -- so
+    // with them the cell emits each hemisphere at the source that gets its own flux
+    // out. Without them it emits isotropically at the optical-depth-weighted source.
+    // Only for a lumped box, nlay > nz.
+    //
     // photons_per_pixel is per g-point: the trace shoots photons_per_pixel*nx*ny of
     // them, spread over the emitters rather than over the pixels. independent_column
     // switches off horizontal transport.
@@ -125,6 +137,8 @@ namespace Raytracer_lw
             const Array_map_1d<const TF>& sfc_source,  // (ncol)
             const Array_map_1d<const TF>& sfc_emis,    // (ncol)
             const TF inc_dif,
+            const Array_map_1d<const TF>& lump_dn,     // (ncol), may be empty
+            const Array_map_1d<const TF>& lump_up,     // (ncol), may be empty
             const Fluxes_lw& fluxes,
             const Scratch& scratch);
 

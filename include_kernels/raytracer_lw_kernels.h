@@ -45,6 +45,10 @@ namespace Rt_lw_kernels
         Array_map_3d<const TF> k_null;            // (kn_z, kn_y, kn_x) [1/m]
         Array_map_1d<const TF> sfc_emis;          // (ncol)
 
+        // The share of the lumped top cell's emission that goes down; empty when the
+        // cell emits isotropically. See Raytracer_lw::trace_rays.
+        Array_map_1d<const TF> lump_frac_dn;      // (ncol), may be empty
+
         // The cumulative emitted power over the (nz+2)*ncol source slots, and how many
         // of them there are. Its last element is the total.
         Array_map_1d<const double> cdf;
@@ -238,8 +242,12 @@ namespace Rt_lw_kernels
         {
             photon.position.z = (k + rng())*s.grid_d.z;
 
-            // Isotropic, so the cosine is uniform rather than square-rooted.
-            const TF mu = TF(2.)*rng() - TF(1.);
+            // Isotropic, so the cosine is uniform rather than square-rooted. The
+            // lumped top cell, given its two hemispheres' shares, is isotropic within
+            // each: pick the hemisphere, then a cosine uniform in it.
+            const bool split = s.lump_frac_dn.size() > 0 && k == s.grid_cells.z - 1;
+            const TF mu = !split ? TF(2.)*rng() - TF(1.)
+                    : (rng() < s.lump_frac_dn(ij) ? -rng() : rng());
             const TF azimuth = TF(2.*M_PI)*rng();
             const TF sin_theta = Kokkos::sqrt(TF(1.) - mu*mu + eps());
 

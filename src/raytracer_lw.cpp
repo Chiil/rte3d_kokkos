@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
+#include "exp_int.h"
 #include "raytracer.h"
 #include "raytracer_lw.h"
 #include "raytracer_lw_kernels.h"
@@ -59,7 +61,10 @@ namespace
             const Array_map_1d<const TF>& sfc_source,
             const Array_map_1d<const TF>& sfc_emis,
             const TF inc_dif,
-            const Array_2d<TF>& emission)
+            const Array_map_1d<const TF>& lump_dn,
+            const Array_map_1d<const TF>& lump_up,
+            const Array_2d<TF>& emission,
+            const Array_1d<TF>& lump_frac_dn)
     {
         const int ncol = grid.ncol();
         const int nz = grid.nz;
@@ -87,20 +92,48 @@ namespace
         // sum of theirs. Not the lumped absorption times one Planck source: the
         // temperature varies over the layers that were lumped, and it is the product
         // that is summed, not the factors.
+        //
+        // That sum is right for the total but not for where it goes. The lumped cell
+        // is homogeneous, so it sends as much down as up, where the air it stands in
+        // for sends down what its warm bottom emits and up what its cold top emits.
+        // Given what that air emits out of each face, lump_dn and lump_up, the cell
+        // radiates each hemisphere at the source that gets that flux out: a
+        // homogeneous slab of absorption optical depth tau emitting 2*pi*tau*B into a
+        // hemisphere lets pi*B*(1 - 2*E3(tau)) of it out of the face on that side, so
+        // it has to emit 2*tau/(1 - 2*E3(tau)) times the flux. reset_photon picks the
+        // hemisphere by lump_frac_dn.
         const int ktod = nz - 1;
+        const bool split = lump_dn.size() > 0;
 
         parallel_for_1d("rt_lw_emission_tod", 0, ncol,
             KOKKOS_LAMBDA(const int icol)
             {
+                TF tau_sum = TF(0.);
                 TF power = TF(0.);
                 for (int k=ktod; k<nlay; ++k)
                 {
                     const int ilay = layer_of(k, nlay, top_at_1);
-                    power += tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, cld_scatters, ilay, icol)
-                            *lay_source(ilay, icol);
+                    const TF t = tau_abs(tau_gas, ssa_gas, tau_cld, ssa_cld, clouds, cld_scatters, ilay, icol);
+                    tau_sum += t;
+                    power += t*lay_source(ilay, icol);
                 }
 
-                emission(ktod + 1, icol) = TF(4.*M_PI)*power;
+                if (!split)
+                {
+                    emission(ktod + 1, icol) = TF(4.*M_PI)*power;
+                    return;
+                }
+
+                // Tends to one as the slab thins, where 1 - 2*E3 tends to 2*tau.
+                const TF esc = Exp_int::one_minus_2_exp_int_3(tau_sum);
+                const TF gain = esc > TF(0.) ? TF(2.)*tau_sum/esc : TF(1.);
+
+                const TF p_dn = gain*lump_dn(icol);
+                const TF p_up = gain*lump_up(icol);
+                const TF p = p_dn + p_up;
+
+                emission(ktod + 1, icol) = p;
+                lump_frac_dn(icol) = p > TF(0.) ? p_dn/p : TF(0.5);
             });
     }
 
@@ -225,6 +258,7 @@ Raytracer_lw::Scratch Raytracer_lw::Scratch::make(const Grid& grid)
                               grid.nz + 2, ncol);
     s.cdf = Array_1d<double>(Kokkos::view_alloc("rt_lw_cdf", no_init),
                              std::size_t(grid.nz + 2)*ncol);
+    s.lump_frac_dn = Array_1d<TF>(Kokkos::view_alloc("rt_lw_lump_frac_dn", no_init), ncol);
 
     s.toa_dn = Array_1d<Count>("rt_lw_toa_dn_count", ncol);
     s.toa_up = Array_1d<Count>("rt_lw_toa_up_count", ncol);
@@ -313,6 +347,8 @@ void Raytracer_lw::trace_rays(
         const Array_map_1d<const TF>& sfc_source,
         const Array_map_1d<const TF>& sfc_emis,
         const TF inc_dif,
+        const Array_map_1d<const TF>& lump_dn,
+        const Array_map_1d<const TF>& lump_up,
         const Fluxes_lw& fluxes,
         const Scratch& scratch)
 {
@@ -329,8 +365,15 @@ void Raytracer_lw::trace_rays(
 
     Raytracer::create_knull_grid(grid, optics, scratch.k_null);
 
+    const bool lumped = nlay > grid.nz;
+
+    if (lump_dn.size() > 0 && !lumped)
+        throw std::invalid_argument(
+                "lump_dn and lump_up are for a lumped top cell, and nothing was lumped");
+
     bundle_emission(grid, top_at_1, nlay, tau_gas, ssa_gas, tau_cld, ssa_cld,
-                    lay_source, sfc_source, sfc_emis, inc_dif, scratch.emission);
+                    lay_source, sfc_source, sfc_emis, inc_dif, lump_dn, lump_up,
+                    scratch.emission, scratch.lump_frac_dn);
 
     // The running total of the emitted power, which is what a launch samples. In
     // double whatever TF is, and its last element is the total, so nothing about the
@@ -360,6 +403,8 @@ void Raytracer_lw::trace_rays(
     scene.k_null = Array_map_3d<const TF>(
             scratch.k_null.data(), grid.kn_z, grid.kn_y, grid.kn_x);
     scene.sfc_emis = sfc_emis;
+    if (lump_dn.size() > 0)
+        scene.lump_frac_dn = Array_map_1d<const TF>(scratch.lump_frac_dn.data(), ncol);
 
     scene.cdf = Array_map_1d<const double>(scratch.cdf.data(), nslot);
     scene.nslot = nslot;
@@ -387,7 +432,6 @@ void Raytracer_lw::trace_rays(
     // Where the resolved domain ends. With nothing lumped the box's top cell is a
     // resolved cell like any other and the box top already is the domain top, so the
     // crossing is not scored at all -- the two pairs are made equal after the trace.
-    const bool lumped = nlay > grid.nz;
     scene.z_dom = lumped ? (grid.nz - 1)*grid.dz : TF(0.);
 
     scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,

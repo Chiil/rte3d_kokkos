@@ -304,6 +304,65 @@ def test_layers_above_the_box_are_lumped_into_its_top_cell(rte3d, nlay):
     assert out['tod_dn'].mean() > 0.1*expected
 
 
+def layer_fluxes(tau, lay_source):
+    """What each of a stack of isothermal layers emits out of the stack's two ends.
+
+    tau and lay_source are (nlay,) from the bottom up, over a black surface that emits
+    nothing and under empty space. A layer at source B between optical depths a and
+    a + t from an end sends pi*B*(2*E3(a) - 2*E3(a + t)) out of it, the exact angular
+    integral, so the sums are the exact downward flux out of the bottom and upward flux
+    out of the top.
+    """
+    e3 = np.vectorize(exp_int_3)
+    edges = np.concatenate([[0.], np.cumsum(tau)])
+
+    below = edges[:-1]
+    above = edges[-1] - edges[1:]
+
+    dn = (np.pi*lay_source*(2.*e3(below) - 2.*e3(below + tau))).sum()
+    up = (np.pi*lay_source*(2.*e3(above) - 2.*e3(above + tau))).sum()
+
+    return dn, up
+
+
+def test_the_lumped_cell_sends_down_what_the_air_above_does(rte3d):
+    """With a temperature gradient above the box, the lump needs a source per direction.
+
+    The air above the box is warm at the bottom and cold at the top. Lumped into one
+    homogeneous cell at its optical-depth-weighted source it sends too little down and
+    too much up. Told what that air emits out of each end, the cell emits each
+    hemisphere at the source that gets exactly that out -- and since a non-scattering
+    slab transmits what enters it by its total optical depth alone, however that is
+    spread over it, the whole column is then exact: the flux into the box, the
+    outgoing longwave, and the flux at the surface.
+    """
+    nlump = 24
+    nlay = NZ + nlump
+
+    tau_1d = np.concatenate([np.full(NZ - 1, 0.05), np.full(nlump + 1, 0.1)])
+    src_1d = np.linspace(120., 30., nlay)
+    tau = tau_1d[:, None]*np.ones((nlay, NCOL))
+    lay_source = src_1d[:, None]*np.ones((nlay, NCOL))
+
+    # The lumped air alone, and the whole column.
+    lump_dn, lump_up = layer_fluxes(tau_1d[NZ - 1:], src_1d[NZ - 1:])
+    sfc_dn, toa_up = layer_fluxes(tau_1d, src_1d)
+
+    args = (rte3d, tau, lay_source, np.zeros(NCOL), np.ones(NCOL))
+    split = trace(*args, ppp=32768, independent_column=True,
+                  lump_dn=np.full(NCOL, lump_dn), lump_up=np.full(NCOL, lump_up))
+
+    assert split['tod_dn'].mean() == pytest.approx(lump_dn, rel=0.01)
+    assert split['toa_up'].mean() == pytest.approx(toa_up, rel=0.01)
+    assert split['sfc_dn'].mean() == pytest.approx(sfc_dn, rel=0.01)
+
+    # The isotropic cell is materially off in both directions, which is what the two
+    # fluxes are for.
+    iso = trace(*args, ppp=32768, independent_column=True)
+    assert iso['tod_dn'].mean() < 0.95*lump_dn
+    assert iso['toa_up'].mean() > 1.05*toa_up
+
+
 def test_uniform_atmosphere_matches_the_plane_parallel_solver(rte3d):
     """On a horizontally uniform column the two solvers solve the same problem.
 

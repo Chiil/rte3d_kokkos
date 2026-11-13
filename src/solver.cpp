@@ -710,7 +710,7 @@ int Solver::solve_lw_rt(
                     box_rows(cloud.tau), box_rows(cloud.ssa), box_rows(cloud.g),
                     box_rows(state.lay_source), state.sfc_source,
                     slice_1d(sfc_emis, igpt),
-                    inc_dif,
+                    inc_dif, Array_map_1d<const TF>(), Array_map_1d<const TF>(),
                     fluxes, scratch);
         }
         else if (truncate)

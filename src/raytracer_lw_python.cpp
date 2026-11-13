@@ -15,6 +15,14 @@ namespace
 
         return Numpy::to_device_2d<TF>(*a, name);
     }
+
+    Array_1d<TF> optional_1d(const std::optional<Numpy::In<TF>>& a, const std::string& name)
+    {
+        if (!a.has_value())
+            return Array_1d<TF>();
+
+        return Numpy::to_device_1d<TF>(*a, name);
+    }
 }
 
 
@@ -31,6 +39,8 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& ssa_cld,
            const std::optional<Numpy::In<TF>>& asy_cld,
            const TF inc_dif,
+           const std::optional<Numpy::In<TF>>& lump_dn,
+           const std::optional<Numpy::In<TF>>& lump_up,
            const bool top_at_1, const bool independent_column,
            const int kn_x, const int kn_y, const int kn_z) -> py::dict
         {
@@ -46,6 +56,8 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
             auto tau_cld_d = optional_2d(tau_cld, "tau_cld");
             auto ssa_cld_d = optional_2d(ssa_cld, "ssa_cld");
             auto asy_cld_d = optional_2d(asy_cld, "asy_cld");
+            auto lump_dn_d = optional_1d(lump_dn, "lump_dn");
+            auto lump_up_d = optional_1d(lump_up, "lump_up");
 
             const int nlay = static_cast<int>(tau_gas_d.extent(0));
             const int ncol = static_cast<int>(tau_gas_d.extent(1));
@@ -55,6 +67,12 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
                         + " columns where the grid has " + std::to_string(grid.ncol()));
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
+            if (lump_dn.has_value() != lump_up.has_value())
+                throw std::invalid_argument("Give both lump_dn and lump_up, or neither");
+            if (lump_dn.has_value()
+                    && (lump_dn_d.extent(0) != std::size_t(ncol)
+                        || lump_up_d.extent(0) != std::size_t(ncol)))
+                throw std::invalid_argument("lump_dn and lump_up are (ncol)");
 
             const auto fluxes = Fluxes_lw::make(grid);
             fluxes.zero();
@@ -72,7 +90,10 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
                     as_const_2d(lay_source_d),
                     Array_map_1d<const TF>(sfc_source_d.data(), ncol),
                     Array_map_1d<const TF>(sfc_emis_d.data(), ncol),
-                    inc_dif, fluxes, scratch);
+                    inc_dif,
+                    Array_map_1d<const TF>(lump_dn_d.data(), lump_dn_d.extent(0)),
+                    Array_map_1d<const TF>(lump_up_d.data(), lump_up_d.extent(0)),
+                    fluxes, scratch);
             Kokkos::fence();
 
             py::dict out;
@@ -94,12 +115,15 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
         py::arg("tau_cld") = py::none(), py::arg("ssa_cld") = py::none(),
         py::arg("asy_cld") = py::none(),
         py::arg("inc_dif") = TF(0.),
+        py::arg("lump_dn") = py::none(), py::arg("lump_up") = py::none(),
         py::arg("top_at_1") = false, py::arg("independent_column") = false,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         "Trace one longwave g-point through a three-dimensional box. The optical "
         "properties and the Planck sources are (nlay, ncol) with ncol = nx*ny and the "
         "column index i + j*nx; layers from nz-1 upward are lumped into the top cell, "
-        "their emission included. sfc_source and sfc_emis are (ncol). Returns a dict "
+        "their emission included. lump_dn and lump_up, (ncol), are what that air "
+        "emits down out of its bottom and up out of its top; given, the top cell "
+        "emits each hemisphere so as to reproduce them. sfc_source and sfc_emis are (ncol). Returns a dict "
         "with the surface and top-of-domain fluxes, (ncol) each, and flux_net, the "
         "absorbed minus emitted flux per unit height, (nz, ncol).");
 }
