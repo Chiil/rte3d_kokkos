@@ -18,17 +18,10 @@
 # frontend's automatic arrays on the stack, so the example needs `ulimit -s unlimited`;
 # the benchmark script raises the limit itself.
 #
-# The build is of a patched copy of the reference, in <output-dir>/src; the reference
-# itself is never modified. One patch, for a bug in the GPU path since rte-rrtmgp #419:
-#
-#   col_dry_arr = get_col_dry(ncol, nlay, vmr(:,:,idx_h2o), plev) * 1.e-4_wp
-#
-# in rrtmgp/frontend/mo_gas_optics_rrtmgp.F90. get_col_dry computes on the device and
-# copies its result out; the scaling and the assignment then happen on the host, and
-# the device copy of col_dry_arr, which every kernel after it reads, is never written.
-# Every flux below the boundary comes out NaN on the GPU, right on the host. The patch
-# adds the missing update device. It is applied only where the line is followed by no
-# update already, so a reference with the fix upstream builds unchanged.
+# The build is of a copy of the reference, in <output-dir>/src; the reference itself is
+# never modified. Up to rte-rrtmgp #433 the copy was patched for a GPU bug in col_dry
+# (the device copy of col_dry_arr was never written, so every flux below the boundary
+# came out NaN); #433 fixed it upstream, so the copy is now built unchanged.
 set -euo pipefail
 
 precision="${1:-dp}"
@@ -54,23 +47,6 @@ out="$(cd "$out" && pwd)"
 rm -rf "$out/src"
 mkdir -p "$out/src"
 git -C "$src" ls-files -z | rsync -a --from0 --files-from=- "$src/" "$out/src/"
-
-frontend="$out/src/rrtmgp/frontend/mo_gas_optics_rrtmgp.F90"
-awk '{
-       print
-       if ($0 ~ /^[[:space:]]*col_dry_arr = get_col_dry\(.*\* *1\.e-4_wp/) {
-         getline next_line
-         if (next_line !~ /update/) {
-           print "        !$acc        update device(col_dry_arr)  ! added by build_reference_acc.sh"
-           print "        !$omp target update to(col_dry_arr)      ! added by build_reference_acc.sh"
-         }
-         print next_line
-       }
-     }' "$frontend" > "$frontend.patched"
-mv "$frontend.patched" "$frontend"
-grep -q "added by build_reference_acc.sh" "$frontend" \
-    && echo "Patched $frontend: update device(col_dry_arr)" \
-    || echo "No col_dry patch needed in $frontend"
 
 cmake -S "$out/src" -B "$out" \
     -DCMAKE_Fortran_COMPILER=nvfortran \
