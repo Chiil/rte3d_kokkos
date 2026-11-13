@@ -51,7 +51,8 @@ Rte_lw::Two_stream_scratch Rte_lw::Two_stream_scratch::make(const int nlay, cons
 // the upward radiance at different levels relative to the layer during the second
 // downward sweep -- the top-at-1 branch at the upstream level, the other at the
 // destination level -- and that asymmetry should be resolved against the reference
-// authors before it is reproduced.
+// authors before it is reproduced. It is reported as rte-rrtmgp #429, where changing
+// the top-at-1 branch to the destination level gave the smaller error in most tests.
 namespace
 {
     template<bool top_at_1>
@@ -124,15 +125,18 @@ namespace
             const bool later_mu = imu > 0;
 
             // Transport down, from the top of the atmosphere. Transport is for
-            // intensity, so the incident flux is converted assuming azimuthal
-            // isotropy; that boundary condition rides along at j == 0 rather than
-            // costing a parallel region of its own.
+            // intensity, so the incident flux is converted assuming isotropy: the
+            // radiance is inc_flux/pi at every angle, and the quadrature weights
+            // return inc_flux * sum(weights). The reference divides by pi*weight
+            // instead, which hands every angle the full incident flux, nmus times in
+            // total (rte-rrtmgp #427). That boundary condition rides along at j == 0
+            // rather than costing a parallel region of its own.
             parallel_for_column_sweep_carry("lw_noscat_transport_dn", nlay, ncol, carry,
                 KOKKOS_LAMBDA(const int j, const int icol, TF carried[2])
                 {
                     if (j == 0)
                     {
-                        const TF rad_toa = has_inc_flux ? inc_flux(icol) / scaling : TF(0.);
+                        const TF rad_toa = has_inc_flux ? inc_flux(icol) / pi : TF(0.);
 
                         flux_dn.put(lev_toa, icol, scaling * rad_toa, later_mu);
                         carried[0] = rad_toa;

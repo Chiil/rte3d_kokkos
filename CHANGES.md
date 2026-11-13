@@ -40,7 +40,7 @@ precision the fluxes agree with the reference to about 1e-13.
 | SW direct beam interpolated across the singularity at k·μ0 = 1 | The reference's `+eps` denominator loses Rdir/Tdir in single precision (errors up to 0.2 of the incoming flux) |
 | Floor on `k²` is 1e-12 in both bands, not `1e4·eps` | `1e4·eps` = 1.2e-3 in single precision and biases k (up to 0.6 W/m²) |
 | LW two-stream source rewritten without the divide-by-τ difference | The reference's error grows like eps/τ (37.6 W/m² single precision at τ = 1e-6) |
-| `feta` relative to the clamped `jeta` | The reference jumps to the wrong node at eta = 1, exactly what an absent second gas gives |
+| `feta` relative to the clamped `jeta` | The reference jumps to the wrong node at eta = 1, exactly what an absent second gas gives (#425) |
 
 ## Reference defects
 
@@ -49,12 +49,14 @@ precision the fluxes agree with the reference to about 1e-13.
 | `interpolation` indexes `temp_ref` out of bounds off the table (#315, open) | rte3d keeps v1.8's clamped index; tests compare only where the reference is defined |
 | `LW_diff_sec = 1.66` is a single-precision literal | Matched bit-for-bit, not fixed |
 | `flux_upJac` mis-documented in `rte_kernels.h` | Follows the Fortran declaration `(ncol, nlay+1)` |
+| `lw_solver_noscat` sets the top radiance to `inc_flux/(pi*weight)`, so each of `nmus` angles returns the full incident flux (#427, open) | Fixed: `inc_flux/pi`, so the quadrature returns `inc_flux*sum(weights)`; tests compare against the reference with a matched boundary condition |
+| `interpolate1D` takes the Planck fraction from the unclamped position: the next-to-last node at the table maximum, a wrapped fraction above it (#426, open) | Fixed: fraction relative to the clamped index, identical inside the table |
 
 ## Not ported
 
 | item | reason |
 |---|---|
-| `lw_transport_1rescl` (Tang et al. 2018 rescaling) | Its two orientation branches read the upward radiance at different levels; to be resolved with the reference authors before reproducing it |
+| `lw_transport_1rescl` (Tang et al. 2018 rescaling) | Its two orientation branches read the upward radiance at different levels; reported as #429, to be resolved with the reference authors before reproducing it |
 | `zero_array_*` | `Kokkos::deep_copy` does the same |
 | Pade cloud optics | No shipped coefficient file has Pade coefficients; lookup tables only |
 | Aerosol optics | Not done yet |

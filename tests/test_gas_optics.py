@@ -296,6 +296,57 @@ def test_planck_source_matches_reference(rte3d, fortran_ref, nlay, ncol):
                                    err_msg=f'{key} differs from the reference')
 
 
+def test_planck_table_edges_extrapolate(rte3d):
+    """At and beyond the ends of the Planck table the interpolation must continue the
+    edge interval linearly. The reference takes the fraction from the unclamped
+    position (rte-rrtmgp #426): at exactly the table maximum it returns the
+    next-to-last node, and above it wraps back into the last interval. With the Planck
+    fractions all one, the sources are the band Planck function itself."""
+    rng = np.random.default_rng(52)
+    bundle = kdist_full(rng)
+    kd, grid = flatten_kdist(bundle)
+
+    ngpt = kd['kmajor'].shape[0]
+    nbnd = kd['band_lims_gpt'].shape[0]
+    npres = grid['press_ref_log'].shape[0]
+    neta, ntemp = grid['neta'], grid['temp_ref'].shape[0]
+    nplancktemp = 196
+
+    kd['pfracin'] = np.ones((ngpt, npres + 1, neta, ntemp))
+    kd['totplnk'] = np.sort(rng.uniform(0.0, 100.0, (nbnd, nplancktemp)), axis=1)
+    kd['temp_ref_min'] = grid['temp_ref_min']
+    kd['totplnk_delta'] = 1.0
+    t_max = grid['temp_ref_min'] + (nplancktemp - 1)*kd['totplnk_delta']
+
+    # Exactly the maximum, half a node above it, and a quarter node below the minimum.
+    t_edge = np.array([t_max, t_max + 0.5, grid['temp_ref_min'] - 0.25])
+    ncol = t_edge.size
+    nlay = 2
+
+    ngas = grid['vmr_ref'].shape[1] - 1
+    a = atmosphere(rng, ngas, nlay, ncol)
+    tlev = np.broadcast_to(t_edge, (nlay + 1, ncol)).copy()
+
+    out = rte3d.compute_planck_source(
+        kdist=kd, tlev=tlev, tsfc=t_edge, sfc_lay=nlay - 1, **grid, **a)
+
+    def planck(t):
+        table = kd['totplnk'][kd['gpt_band']]                     # (ngpt, nplancktemp)
+        x = (t - grid['temp_ref_min'])/kd['totplnk_delta']
+        i = np.clip(np.floor(x).astype(int), 0, nplancktemp - 2)
+        return table[:, i] + (x - i)*(table[:, i + 1] - table[:, i])  # (ngpt, ncol)
+
+    expected = planck(t_edge)
+    # At the maximum this is the last node, not the next-to-last.
+    np.testing.assert_array_equal(expected[:, 0], kd['totplnk'][kd['gpt_band'], -1])
+
+    tol = tolerance(rte3d)
+    assert_close(out['sfc_source'], expected, rtol=tol)
+    assert_close(out['sfc_source_jac'], planck(t_edge + 1.0) - expected, rtol=tol)
+    for ilev in range(nlay + 1):
+        assert_close(out['lev_source'][:, ilev], expected, rtol=tol)
+
+
 def test_planck_sources_feed_the_longwave_solver(rte3d):
     """The Planck kernel's output shapes are exactly what Source_func_lw and the
     longwave solvers already take, so the two halves compose without adaptation."""

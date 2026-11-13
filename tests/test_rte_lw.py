@@ -35,12 +35,28 @@ def random_inputs(ngpt, nlay, ncol, nmus=1, seed=0, inc_flux=True):
     )
 
 
+def reference_inputs(a):
+    """The reference's arguments for the same problem as rte3d's.
+
+    The reference sets the top boundary radiance to inc_flux/(pi*weight) for each
+    angle, rte3d to inc_flux/pi (rte-rrtmgp #427). With one angle, scaling the
+    reference's incident flux by the weight gives it the same radiance. With more there
+    is no single incident flux that does, so both get zero and the boundary condition is
+    pinned by test_transparent_atmosphere_is_exact instead.
+    """
+    if a['weights'].size == 1:
+        return dict(a, inc_flux=a['inc_flux']*a['weights'][0])
+
+    a['inc_flux'] = np.zeros_like(a['inc_flux'])
+    return a
+
+
 @pytest.mark.parametrize('top_at_1', [True, False])
 @pytest.mark.parametrize('ngpt,nlay,ncol', SHAPES)
 def test_noscat_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol):
     a = random_inputs(ngpt, nlay, ncol, seed=1)
 
-    expected = fortran_ref.lw_solver_noscat(top_at_1, **a)
+    expected = fortran_ref.lw_solver_noscat(top_at_1, **reference_inputs(a))
     actual = rte3d.lw_solver_noscat(top_at_1, **a)
 
     for name, exp, act in zip(('flux_up', 'flux_dn'), expected, actual):
@@ -57,7 +73,7 @@ def test_noscat_matches_reference(rte3d, fortran_ref, top_at_1, ngpt, nlay, ncol
 def test_noscat_multi_angle_matches_reference(rte3d, fortran_ref, top_at_1, nmus):
     a = random_inputs(8, 20, 6, nmus=nmus, seed=2)
 
-    expected = fortran_ref.lw_solver_noscat(top_at_1, **a)
+    expected = fortran_ref.lw_solver_noscat(top_at_1, **reference_inputs(a))
     actual = rte3d.lw_solver_noscat(top_at_1, **a)
 
     for exp, act in zip(expected[:2], actual[:2]):
@@ -76,7 +92,7 @@ def test_noscat_jacobian_matches_reference(rte3d, fortran_ref, top_at_1, nmus):
     a = random_inputs(8, 20, 6, nmus=nmus, seed=3)
     a['sfc_source_jac'] = np.random.default_rng(9).uniform(0.0, 1.0, (8, 6))
 
-    expected = fortran_ref.lw_solver_noscat(top_at_1, **a)
+    expected = fortran_ref.lw_solver_noscat(top_at_1, **reference_inputs(a))
     actual = rte3d.lw_solver_noscat(top_at_1, **a)
 
     assert actual[2].shape == (21, 6)
@@ -94,7 +110,10 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1, nmus):
     nlev = nlay + 1
     rng = np.random.default_rng(7)
 
+    # Normalised like the Gauss weights the frontend passes, so that the incident flux
+    # comes back unchanged.
     weights = rng.uniform(0.1, 0.6, nmus)
+    weights /= weights.sum()
     a = dict(
         secants=rng.uniform(1.2, 2.0, (nmus, ngpt, ncol)),
         weights=weights,
@@ -108,14 +127,16 @@ def test_transparent_atmosphere_is_exact(rte3d, top_at_1, nmus):
 
     flux_up, flux_dn, _ = rte3d.lw_solver_noscat(top_at_1, **a)
 
-    # Each angle converts the incident flux to intensity by dividing by pi*weight and
-    # converts back by multiplying, so every angle contributes the incident flux itself.
-    expected_dn = np.broadcast_to((nmus*a['inc_flux'])[:, None, :], (ngpt, nlev, ncol))
+    # An isotropic incident flux is the radiance inc_flux/pi at every angle, and the
+    # quadrature returns the incident flux itself. The reference contributes it once
+    # per angle instead (rte-rrtmgp #427).
+    expected_dn = np.broadcast_to(a['inc_flux'][:, None, :], (ngpt, nlev, ncol))
 
     # Upwelling is reflection of the incident diffuse flux plus surface emission,
     # weighted by the quadrature.
-    rad_up = a['inc_flux']/(np.pi*weights[:, None, None])*(1.0 - a['sfc_emis']) \
-        + a['sfc_emis']*a['sfc_source']
+    rad_up = np.broadcast_to(
+        a['inc_flux']/np.pi*(1.0 - a['sfc_emis']) + a['sfc_emis']*a['sfc_source'],
+        (nmus, ngpt, ncol))
     expected_up = np.broadcast_to(
         (np.pi*weights[:, None, None]*rad_up).sum(axis=0)[:, None, :], (ngpt, nlev, ncol))
 
