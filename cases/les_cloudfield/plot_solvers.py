@@ -105,8 +105,12 @@ def domain_top_up(d, band, nz):
     up = field(d, f'{band}_flux_up')
     lumped = tracer_cells(d, band) > nz
 
+    # What leaves the top of the grid is rt_flux_tod_up in the shortwave but
+    # rt_lw_flux_toa_up in the longwave: there, tod_up is where the photons cross from
+    # the box into the lump, at the box's top and not the atmosphere's. Without a lump
+    # the two are the same.
     plane_parallel = up[-1] if lumped else up[nz]
-    tracer = field(d, 'rt_flux_tod_up' if band == 'sw' else 'rt_lw_flux_tod_up')
+    tracer = field(d, 'rt_flux_tod_up' if band == 'sw' else 'rt_lw_flux_toa_up')
     where = ('at the top of the atmosphere, the air above the box lumped into it'
              if lumped else 'at the top of the box')
 
