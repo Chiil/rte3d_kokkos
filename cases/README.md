@@ -7,8 +7,8 @@ a folder holding a `.toml` and nothing else that has to be code. Two are here al
 
 | case | what it is |
 |---|---|
-| [`rcemip/`](#rcemip--a-radiative-convective-equilibrium-sounding) | an analytic RCEMIP sounding over a 64x64 domain, generated on the spot |
-| [`les_cloudfield/`](#les_cloudfield--a-three-dimensional-cloud-field) | the LES cumulus field the ray tracer was validated on |
+| [`rcemip/`](rcemip/README.md) | an analytic RCEMIP sounding over a 64x64 domain, generated on the spot |
+| [`les_cloudfield/`](les_cloudfield/README.md) | the LES cumulus field the ray tracer was validated on |
 
 The three `_rte` directories are the exception, and the suffix is what marks them: they
 are the fixed comparisons against the reference implementations -- `rte-rrtmgp`'s own
@@ -16,7 +16,14 @@ RFMIP and all-sky examples and `rte-rrtmgp-cpp`'s RCEMIP benchmark -- so each ca
 script of its own that reads that case's file layout and checks against that case's
 reference numbers. They are tests, not a template to copy.
 
-This file is how to run all of it. [`RESULTS.md`](RESULTS.md) is what they produce: the
+| case | what it is |
+|---|---|
+| [`rfmip_rte/`](rfmip_rte/README.md) | clear-sky validation against rte-rrtmgp's RFMIP example |
+| [`allsky_rte/`](allsky_rte/README.md) | cloudy validation against rte-rrtmgp's all-sky example, and its OpenACC benchmark |
+| [`rcemip_rte/`](rcemip_rte/README.md) | performance against the Fortran reference and rte-rrtmgp-cpp |
+
+Each case's own `README.md` is how to run it. This file is what they share: the setup
+below and the general runner. [`RESULTS.md`](RESULTS.md) is what they produce: the
 timings, the comparisons against the reference, and what those comparisons can and
 cannot check.
 
@@ -169,183 +176,3 @@ top-first -- the orientation is read from `p_lay` rather than assumed.
 
 Aerosols are not read: rte3d has no aerosol optics yet. Cloud coefficients must be the
 band-resolved `-bnd` files, since the solvers take cloud properties by band.
-
----
-
-## `rcemip/` — a radiative-convective-equilibrium sounding
-
-The RCEMIP sounding of Wing et al. (2018) at a 300 K sea surface, with the two cloud
-layers, over a 64x64 domain at 100 m spacing and 256 layers. Every column holds the
-same profile, so it says nothing a single column would not, but it is a full
-three-dimensional field of a realistic size and it is the case the ray tracer's
-optimizations were measured on -- see
-[`doc/raytracer_base_optimizations.md`](../doc/raytracer_base_optimizations.md).
-
-The sounding is analytic, so there is no input file to fetch: `make_input.py` writes
-one, and only [`rcemip.toml`](rcemip/rcemip.toml) is kept in git.
-
-```bash
-python cases/make_input.py cases/rcemip/rcemip --clouds --no-settings
-python cases/run_case.py cases/rcemip/rcemip
-```
-
-`--no-settings` because the settings are the committed half of the case; without it
-`make_input.py` would offer to write a `.toml` and leave the existing one alone anyway.
-Any of its flags changes the field -- `--nx`, `--ny`, `--nlay`, `--rt-nz` -- so a run at
-a different size is a different case and belongs in a folder of its own.
-
----
-
-## `les_cloudfield/` — a three-dimensional cloud field
-
-The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
-2560 x 2560 x 4000 m RICO cumulus field at 20 m resolution. 128 x 128 columns, 200
-ray-tracing cells in the vertical and 332 layers. Both tracers lump the 132 above the
-box into one cell on top, as below.
-Cloud is liquid-only and thin: 1.3% of cells, 19% of columns.
-
-```bash
-python cases/fetch_data.py les_cloudfield
-python cases/run_case.py cases/les_cloudfield/les_cloudfield
-python cases/les_cloudfield/plot_solvers.py      # optional, needs matplotlib
-```
-
-`plot_solvers.py` writes three figures beside the case: `les_solvers_profiles.png`,
-the domain-mean heating and cooling the two transports give; `les_solvers_sfc_down.png`,
-the downward flux at the surface in both bands, each solver's map and their difference;
-and `les_solvers_tod_up.png`, the upward flux leaving the top of the tracer's domain,
-laid out the same way.
-
-The input is the same `test_input.nc` that `rte-rrtmgp-cpp`'s `test_rte_rrtmgp_rt`
-reads, published at [10.5281/zenodo.18757088](https://doi.org/10.5281/zenodo.18757088)
-(CC BY 4.0). Fetching it writes `les_cloudfield_input.nc` beside the settings, which is
-the name `run_case.py` derives from the case prefix; the fluxes go to
-`les_cloudfield_output.nc` in the input's own `(z, y, x)` layout.
-
-Both bands are run through both transports: traced, and plane-parallel beside it. The
-g-point counts are the reference case's -- 112 shortwave and 128 longwave -- so that a
-run here and a run of `test_rte_rrtmgp_rt` cover the same spectrum. `plot_solvers.py`
-draws the two transports against each other afterwards. What the third dimension moves
-is plain in both directions: at the surface, shortwave shadows displaced from under the
-cloud with the bright rim beside them, 11 W/m2 in the domain mean and 318 W/m2 per
-column; at the top, a shortwave field the 1D solver gives as a bright cloud on a dark
-background and the tracer gives as very nearly uniform -- 6 W/m2 of spread against 141 --
-because photons reflected two kilometres below have spread across the whole domain by
-the time they leave it.
-
-In the longwave the lumped cell stands in for air 75 K warmer at its bottom than at its
-top, so one source will not do. With one, it sent 199.6 W/m2 down into the box where the
-air it stands in for sends 227.9, and the cells beneath it cooled far too hard, 33 K/day
-against 0.3 in the topmost one. It now emits down and up at separate sources, taken from a
-plane-parallel solve of that air per traced g-point, and sends 227.7 down against the
-two-stream's 227.9; the cooling profile follows the two-stream all the way up, and
-`plot_solvers.py` finds no cells to hatch.
-
-[`les_cloudfield.toml`](les_cloudfield/les_cloudfield.toml) carries the settings and,
-at length, what was checked against the reference and the two traps that
-make the comparison come out wrong if you skip them: the sun has to be set explicitly
-in the reference's `test.ini`, and `min_mfp_grid_ratio` has to match, since the ini
-misspells the key and the built-in default applies instead of what it says.
-
-For how long it takes and how it compares against `rte-rrtmgp-cpp`'s own fluxes for
-this field, see [`RESULTS.md`](RESULTS.md#les_cloudfield).
-
----
-
-## `rfmip_rte/run_rfmip_rte.py` — clear-sky validation against rte-rrtmgp
-
-100 sites, 60 layers, no clouds. Runs longwave and shortwave, writes the broadband
-fluxes, and prints the largest difference from the reference for each of the four
-quantities `rlu`, `rld`, `rsu`, `rsd`.
-
-```bash
-python cases/rfmip_rte/run_rfmip_rte.py --plot
-```
-
-| flag | default | meaning |
-|---|---|---|
-| `--expt N` | `0` | RFMIP experiment index, 0–17. 0 is present-day, 1 pre-industrial, and the rest vary CO2 and the other forcing agents. |
-| `--plot` | off | also write `<output>.png` |
-| `-o`, `--output` | `rfmip_fluxes.nc` | where the fluxes go |
-
-Exits non-zero if any quantity exceeds RFMIP's own acceptance threshold of
-5.8e-2 W/m2, the one `compare-to-reference.py` uses in the reference repository.
-
----
-
-## `allsky_rte/run_allsky_rte.py` — cloudy validation against rte-rrtmgp
-
-24 columns, 72 layers, clouds in 16 of them. Exercises cloud optics and the by-band
-increments, and is stored surface-first where RFMIP is top-first, so between them the
-two cases cover both vertical orientations.
-
-```bash
-python cases/allsky_rte/run_allsky_rte.py --plot
-```
-
-| flag | default | meaning |
-|---|---|---|
-| `--plot` | off | also write `<output>.png`; the third panel shows where the clouds sit |
-| `-o`, `--output` | `allsky_fluxes.nc` | where the fluxes go |
-
-Its reference fluxes were generated with the coefficient data that ships beside them,
-where RFMIP's date from 2018, so this one agrees to round-off and is checked against
-1e-10 relative rather than RFMIP's threshold.
-
----
-
-## `allsky_rte/bench_allsky_acc.py` — performance against rte-rrtmgp with OpenACC
-
-The reference's own all-sky example, built for the GPU with NVHPC, timed against rte3d
-on the atmosphere it generates. Build the reference once per precision, then run the
-script with the rte3d build of the same precision:
-
-```bash
-./tests/build_reference_acc.sh sp          # -> build_acc_sp/; dp -> build_acc_dp/
-RTE3D_PYTHON_PATH=$PWD/build_gpu_sp/main_python \
-    python cases/allsky_rte/bench_allsky_acc.py --acc-build build_acc_sp
-```
-
-| flag | default | meaning |
-|---|---|---|
-| `--acc-build DIR` | required | the build directory of `build_reference_acc.sh` |
-| `--ncol N,N,...` | `1024,...,32768` | column counts; sizes the reference cannot fit on the card are reported as failed |
-| `--nlay N` | `72` | layers |
-| `--nloops N` | `20` | timed loops on each side |
-| `--bands` | `lw,sw` | which bands |
-| `--workdir DIR` | a temporary directory | where the example writes its NetCDF |
-
-The build needs `nvfortran` and a NetCDF-Fortran built with it (`NETCDF_DIR`, by default
-`~/devel/netcdf-nvidia`), and patches a bug in the reference's GPU path in a copy of its
-source. What is timed, the results, and the bug are in [`RESULTS.md`](RESULTS.md).
-
----
-
-## `rcemip_rte/run_rcemip_rte.py` — performance against the references
-
-A single radiative-convective-equilibrium profile of 256 layers, replicated over a
-64x64 domain. All 4096 columns are identical, so `--ncol` tiles the profile to any
-count you want and the case scales cleanly.
-
-```bash
-python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --breakdown
-python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --compare-fortran
-OMP_NUM_THREADS=1 python cases/rcemip_rte/run_rcemip_rte.py --ncol 256 --compare-fortran
-```
-
-| flag | default | meaning |
-|---|---|---|
-| `--ncol N` | `4096` | columns to solve. The default is the whole domain. |
-| `--band lw\|sw\|both` | `both` | which band to run |
-| `--repeats N` | `3` | timed repetitions after one warm-up; the best is reported |
-| `--breakdown` | off | additionally time gas optics and transport separately |
-| `--compare-fortran` | off | also time the reference Fortran kernels and report the ratio. Needs `RTE3D_FORTRAN_REF`. |
-| `--input PATH` | the copy in `rte-rrtmgp-cpp` | where `rcemip_input.nc` lives |
-
-**Memory.** Nothing in the solve carries a g-point dimension, so the full `--ncol 4096`
-needs about 1.2 GB for both bands. `--breakdown` is the exception: timing gas optics
-and transport separately means holding the whole spectrum between them, which is
-roughly 11 GB at 4096 columns. Use it at 1024 or below.
-
-For what `--compare-fortran` actually times, where rte3d stands against the reference
-on a host, and where it stands on a GPU, see [`RESULTS.md`](RESULTS.md).

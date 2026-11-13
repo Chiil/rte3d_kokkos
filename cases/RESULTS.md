@@ -6,7 +6,7 @@ comparisons can and cannot check. [`README.md`](README.md) is how to run them.
 ## les_cloudfield
 
 The three-dimensional cloud field the ray tracer was validated on, described in
-[`README.md`](README.md#les_cloudfield--a-three-dimensional-cloud-field). This is the
+[`les_cloudfield/README.md`](les_cloudfield/README.md). This is the
 ray tracer's benchmark: single precision, which is what the tracer is run at, on an
 RTX A4500, with the settings file as it stands -- 512 photons per pixel in both bands.
 Best of three runs of `run_case.py`, which spread by under 6 percent, against best of
@@ -287,7 +287,7 @@ is the spread to allow between sessions.
 
 rte-rrtmgp's own all-sky example on the GPU, against rte3d solving the same atmosphere.
 RTX A4500, NVHPC 25.3, 72 layers, clouds in two thirds of the columns, the mean of 20
-loops on each side. Run with [`bench_allsky_acc.py`](README.md#allsky_rtebench_allsky_accpy--performance-against-rte-rrtmgp-with-openacc),
+loops on each side. Run with [`bench_allsky_acc.py`](allsky_rte/README.md#bench_allsky_accpy--performance-against-rte-rrtmgp-with-openacc),
 the reference built by `tests/build_reference_acc.sh`: the `accel` kernels, with the
 flags of rte-rrtmgp's own OpenACC CI (`.gitlab/dkrz.yml`, which are ICON's),
 `-g -O2 -Mrecursive -Mallocatable=03 -Mstack_arrays -acc=gpu,verystrict -gpu=cc86`.
