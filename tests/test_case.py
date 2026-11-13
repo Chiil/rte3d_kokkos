@@ -29,7 +29,7 @@ SW_REF = os.path.join(REFERENCE, 'rrtmgp-allsky-sw-no-aerosols.nc')
 NX, NY, NLAY = 3, 2, 48
 
 # The resolved depth of the ray-tracing box where a case is made shallower than the
-# atmosphere it sits in, which is what the tracer has to lump or leave outside.
+# atmosphere it sits in, which is what the tracer has to lump into its top cell.
 RT_NZ = 8
 
 requires_data = pytest.mark.skipif(

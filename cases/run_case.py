@@ -40,7 +40,7 @@ SHORTWAVE = dict(plane_parallel=True, raytracing=False,
 # without it clouds absorb and emit but do not deflect a photon.
 LONGWAVE = dict(plane_parallel=True, raytracing=False,
                 photons_per_pixel=256, independent_column=False, scattering=False,
-                min_mfp_grid_ratio=0.0, lump_above=True)
+                min_mfp_grid_ratio=0.0)
 
 FILES = dict(gas_lw='rrtmgp-gas-lw-g256.nc', gas_sw='rrtmgp-gas-sw-g224.nc',
              cloud_lw='rrtmgp-clouds-lw-bnd.nc', cloud_sw='rrtmgp-clouds-sw-bnd.nc',
@@ -120,14 +120,9 @@ def run_band(band, atm, switches, files, shortwave, longwave,
 
         if longwave['raytracing']:
             grid = atm['grid']
-
-            # Without the lump the box is the resolved cells and nothing else, which
-            # is one cell fewer than the grid the file describes.
-            nz = grid['nz'] if longwave['lump_above'] else atm['nz_resolved']
-            above = '' if longwave['lump_above'] else ', the air above it outside'
             print(f'lw ray tracer                tracing '
                   f'{longwave["photons_per_pixel"]} photons per pixel through '
-                  f'{grid["nx"]}x{grid["ny"]}x{nz} cells{above}, '
+                  f'{grid["nx"]}x{grid["ny"]}x{grid["nz"]} cells, '
                   f'{kdist.ngpt} g-points', flush=True)
 
             # Once, not the timer's usual four: a trace is minutes rather than
@@ -140,7 +135,6 @@ def run_band(band, atm, switches, files, shortwave, longwave,
                                     longwave['independent_column'],
                                     longwave['scattering'],
                                     longwave['min_mfp_grid_ratio'],
-                                    longwave['lump_above'],
                                     switches['delta_cloud']),
                 repeats=1, warmup=0))
             print(rt_timer.report(ncol=atm['ncol']))
@@ -202,21 +196,13 @@ def write_output(path, atm, results, rt_results, nbnd):
 
     # The ray tracer's fluxes are not profiles: two-dimensional at the surface and the
     # top of the domain, three-dimensional for the absorption, which is per unit height.
-    #
-    # The two bands need not trace the same box: one may lump the atmosphere above it
-    # into a cell on top and the other not, which is one cell of difference. So the
-    # vertical dimension is named after the depth it has, and the two coincide again
-    # as soon as the boxes do.
-    nz_plain = max((flux.shape[0] for flux in rt_results.values() if flux.ndim > 1),
-                   default=0)
-
+    # Both bands trace the same box, so they share its vertical dimension.
     for name, flux in rt_results.items():
         if flux.ndim == 1:
             variables[name] = (dims, flux.reshape(shape))
             continue
 
-        vertical = 'z' if flux.shape[0] == nz_plain else f'z{flux.shape[0]}'
-        variables[name] = ((vertical,) + dims, flux.reshape((-1,) + shape))
+        variables[name] = (('z',) + dims, flux.reshape((-1,) + shape))
 
     xr.Dataset(variables).to_netcdf(path)
     print(f'wrote {path}')

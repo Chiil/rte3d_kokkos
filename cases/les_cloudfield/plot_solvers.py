@@ -21,18 +21,17 @@ The heating rates come from the fluxes the way a model would take them: from the
 two-stream's flux divergence over a layer, and from the tracer's absorbed flux per
 unit height, which is what it reports.
 
-The two bands need not trace the same box. Where a band lumps the atmosphere above the
-box into the box's top cell, that cell stands for everything above it, so what leaves
-the top of that box is what leaves the atmosphere and the two-stream's own top of
-atmosphere is what it compares against; where the air above is left outside instead,
-the box ends at its own top and so does the comparison. The figures say which.
+Both bands lump the atmosphere above the box into the box's top cell, which then stands
+for everything above it, so what leaves the top of that box is what leaves the
+atmosphere and the two-stream's own top of atmosphere is what it compares against. A
+file whose box resolves the whole column has no lump, and then the box ends at its own
+top and so does the comparison. The figures say which.
 
-A lumped cell also costs the cells just below it, so where the case does lump --
-lump-above = true in the settings -- the profile figure hatches the region rather than
-hide it. The lump carries all the air above the box at one temperature and the box's
-own depth, which on this field sends 28 W/m2 less down into the box than the air it
-stands in for, and the cells beneath cool too hard by an amount that dies away
-downward. The case leaves that air outside the box, and then nothing is hatched.
+Should the lumped cell still spoil the cells just below it, the profile figure hatches
+the run of them that stands out of the noise rather than hide it. The longwave lump
+used to: one source for air 75 K warmer at its bottom than at its top sent 28 W/m2 too
+little down into the box. It now emits each direction at its own source, and on this
+field nothing is hatched.
 """
 import argparse
 import os
@@ -99,9 +98,9 @@ def surface_down(d, band, nz):
 def domain_top_up(d, band, nz):
     """The upward flux leaving the top of the tracer's domain, from each solver.
 
-    Which level of the column that is depends on what the band did with the air above
-    the box: lumped into the box's top cell, the box stands for the whole atmosphere
-    and what leaves it leaves the atmosphere; left outside, the box ends where it ends.
+    Which level of the column that is depends on whether there was air above the box:
+    lumped into the box's top cell, the box stands for the whole atmosphere and what
+    leaves it leaves the atmosphere; without any, the box ends where it ends.
     """
     up = field(d, f'{band}_flux_up')
     lumped = tracer_cells(d, band) > nz

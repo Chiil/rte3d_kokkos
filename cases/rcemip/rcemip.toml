@@ -30,9 +30,9 @@ raytracing = false
 photons-per-pixel = 256
 independent-column = false
 
-# The same two solvers in the longwave. scattering, min-mfp-grid-ratio and lump-above
-# matter only once the tracer is on; see les_cloudfield.toml for what they are worth on
-# a real field.
+# The same two solvers in the longwave. scattering and min-mfp-grid-ratio matter only
+# once the tracer is on; see les_cloudfield.toml for what they are worth on a real
+# field.
 [longwave]
 plane-parallel = true
 raytracing = false
@@ -40,7 +40,6 @@ photons-per-pixel = 256
 independent-column = false
 scattering = false
 min-mfp-grid-ratio = 0.0
-lump-above = true
 
 # The full k-distributions and the band-resolved cloud coefficients, all defaults. The
 # sounding carries an ice layer, so icergh does bite: 0 is the smoothest ice.

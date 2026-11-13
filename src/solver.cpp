@@ -477,7 +477,6 @@ int Solver::solve_lw_rt(
         const TF min_mfp_grid_ratio,
         const Cloud_input& clouds,
         const bool scattering,
-        const bool lump_above,
         const Raytracer_lw::Fluxes_lw& fluxes)
 {
     const int ngpt = static_cast<int>(k.kmajor.extent(0));
@@ -504,28 +503,7 @@ int Solver::solve_lw_rt(
     // g-points depend on how much atmosphere was handed in above the same box.
     const int nz_scan = nlay > grid.nz ? grid.nz - 1 : grid.nz;
 
-    // Where the box's slab of the layer arrays begins. Stored bottom-up the box is the
-    // bottom nz layers; stored top-down it is the top nz, at the far end of the array.
     const int nz = grid.nz;
-    const int lay_off = top_at_1 ? nlay - nz : 0;
-
-    // The box's rows of a layer or level array; an empty array, as absent clouds are,
-    // stays empty.
-    const auto box = [=](const auto& v, const int rows)
-    {
-        using T = typename std::decay_t<decltype(v)>::value_type;
-        return v.size() > 0 ? Array_map_2d<T>(v.data() + lay_off*ncol, rows, ncol)
-                            : Array_map_2d<T>();
-    };
-
-    // An atmosphere deeper than the box, with the caller asking for it to stay outside
-    // rather than be lumped into the box's top cell. Every g-point is then solved
-    // plane-parallel over the full column first, and what that solve leaves coming
-    // down at the box's top is what enters the box -- the reference's arrangement.
-    const bool truncate = !lump_above && nlay > nz;
-
-    // The level where the box ends, in the full column's own numbering.
-    const int lev_box_top = top_at_1 ? nlay - nz : nz;
 
     // The plane-parallel solves write their g-point's fluxes and nothing else.
     const Flux_sink up{state.flux_up};
@@ -542,7 +520,7 @@ int Solver::solve_lw_rt(
     //
     // The lumped layers are nz-1 upward from the surface: the top nlump of the arrays
     // stored bottom-up, the first nlump stored top-down.
-    const bool lumped = nlay > nz && !truncate;
+    const bool lumped = nlay > nz;
     const int nlump = nlay - nz + 1;
     const int lump_off = top_at_1 ? 0 : nz - 1;
 
@@ -608,52 +586,15 @@ int Solver::solve_lw_rt(
                 Kokkos::Max<TF>(tau_max));
         }
 
-        // With the air above the box left outside it, the column is solved
-        // plane-parallel first, whatever becomes of the box afterwards: the tracer
-        // needs what that solve leaves coming down at the box's top, and a g-point
-        // that is not traced needs the solve anyway.
-        TF inc_dif = TF(0.);
-
-        if (truncate)
-        {
-            solve_lw_gpt(k, state, atm, top_at_1, igpt, secants, weights,
-                         slice_1d(sfc_emis, igpt), Array_map_1d<const TF>(),
-                         cloud, scattering, up, dn, Array_2d<TF>());
-
-            // That solve incremented the clouds into the optical depth, and the tracer
-            // takes the two apart: it has to know which of gas and cloud deflected a
-            // photon. So put the gas back, which costs one interpolation.
-            Gas_optics::compute_tau_lw(
-                    k, state.interp, atm.play, atm.tlay, state.col_gas, igpt,
-                    state.tau, state.pfrac);
-
-            // One number for the whole box, as the tracer takes it and as the
-            // reference feeds it: the mean over the columns of what arrives at the
-            // box's top.
-            const auto flux_dn = state.flux_dn;
-            TF sum = TF(0.);
-
-            Kokkos::parallel_reduce("lw_rt_inc_dif",
-                Kokkos::RangePolicy<Default_exec>(0, ncol),
-                KOKKOS_LAMBDA(const int icol, TF& acc)
-                {
-                    acc += flux_dn(lev_box_top, icol);
-                },
-                sum);
-
-            inc_dif = sum/TF(ncol);
-        }
-
         if (tau_max < tau_max_traced)
         {
             ++traced;
 
             // The sources come out of the gas optics' Planck fraction, exactly as
-            // solve_lw_gpt does it. The truncated path has them already.
-            if (!truncate)
-                Gas_optics::compute_planck_source(
-                        k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
-                        state.sources(), state.pfrac);
+            // solve_lw_gpt does it.
+            Gas_optics::compute_planck_source(
+                    k, atm.tlay, atm.tlev, atm.tsfc, state.sfc_lay, igpt,
+                    state.sources(), state.pfrac);
 
             if (lumped)
             {
@@ -687,27 +628,14 @@ int Solver::solve_lw_rt(
                             state.tau, state.pfrac);
             }
 
-            // Only the box's own layers are handed over when the air above stays
-            // outside, so that the tracer has nothing left to lump.
-            const auto box_rows = [=](const Array_map_2d<const TF>& v)
-            { return truncate ? box(v, nz) : v; };
-
             Raytracer_lw::trace_rays(
                     grid, top_at_1, independent_column, photons_per_pixel, igpt,
-                    box_rows(state.tau), Array_map_2d<const TF>(),
-                    box_rows(cloud.tau), box_rows(cloud.ssa), box_rows(cloud.g),
-                    box_rows(state.lay_source), state.sfc_source,
+                    state.tau, Array_map_2d<const TF>(),
+                    cloud.tau, cloud.ssa, cloud.g,
+                    state.lay_source, state.sfc_source,
                     slice_1d(sfc_emis, igpt),
-                    inc_dif, lump_dn, lump_up,
+                    TF(0.), lump_dn, lump_up,
                     fluxes, scratch);
-        }
-        else if (truncate)
-        {
-            // The full column is already solved; the box is the part of it the tracer
-            // would have covered.
-            Raytracer_lw::add_plane_parallel(
-                    grid, top_at_1, nz,
-                    box(state.flux_up, nz + 1), box(state.flux_dn, nz + 1), fluxes);
         }
         else
         {

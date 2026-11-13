@@ -264,10 +264,13 @@ namespace Solver
     // which is a cloud that only absorbs, and is what a longwave case without
     // scattering wants.
     //
-    // Layers above the box are lumped into its top cell, emission included. The
-    // reference instead runs the plane-parallel solver over the whole column and feeds
-    // its downward flux at the top of the box in as a scalar; see the note in
-    // raytracer_lw.h.
+    // Layers above the box are lumped into its top cell, as the shortwave lumps them.
+    // That air is warm at its bottom and cold at its top, so each traced g-point first
+    // solves it plane-parallel on its own and the cell emits down and up what that
+    // solve says it does; see Raytracer_lw::trace_rays. The reference instead runs
+    // the plane-parallel solver over the whole column and feeds its downward flux at
+    // the top of the box in as a domain-mean scalar.
+    //
     // min_mfp_grid_ratio makes the tracer skip the g-points it cannot learn anything
     // from. Where the gas is opaque on the scale of a grid cell -- the shortest gas
     // mean free path in the box below min_mfp_grid_ratio times the horizontal grid
@@ -278,15 +281,6 @@ namespace Solver
     //
     // The fallback solve follows the caller's own scattering switch, so it is the same
     // solver a plane-parallel run of the case would have used.
-    //
-    // lump_above chooses what to do with an atmosphere deeper than the box. Lumping
-    // it into the box's top cell, which is the default and what rte-rrtmgp-cpp's input
-    // files are shaped for, keeps every watt in the domain but gives the cell one
-    // temperature and the box's own depth, so what it sends down is not what the air
-    // it stands in for would send. Without it the box is the whole of what the tracer
-    // sees -- the grid must then hold only the resolved cells -- and the air above
-    // enters as the downward flux a plane-parallel solve of the full column leaves at
-    // the box's top, which is how the reference does it.
     int solve_lw_rt(
             const Kdist_gas& k,
             const Gas_concs& gas_concs,
@@ -301,7 +295,6 @@ namespace Solver
             const TF min_mfp_grid_ratio,
             const Cloud_input& clouds,
             const bool scattering,
-            const bool lump_above,
             const Raytracer_lw::Fluxes_lw& fluxes);
 
     void init_python_bindings(py::module_& m);

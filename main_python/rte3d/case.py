@@ -141,11 +141,6 @@ def read_grid(d, atm, nx, ny):
     nz_in = int(d.sizes['z'])
     dx = spacing('xh', 1.0)
 
-    # The resolved cells, kept beside the grid itself: a solve that leaves the air
-    # above the box outside it wants a box of exactly these, with no cell standing in
-    # for the rest of the atmosphere.
-    atm['nz_resolved'] = nz_in
-
     return dict(nx=nx, ny=ny,
                 nz=nz_in + 1 if nz_in < atm['nlay'] else nz_in,
                 dx=dx, dy=spacing('yh', dx), dz=spacing('zh', 1.0),
@@ -268,7 +263,7 @@ def solve_sw(rte3d, kdist, gas_concs, atm, gpt_band,
 
 def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
                 photons_per_pixel=256, independent_column=False, scattering=False,
-                min_mfp_grid_ratio=0.0, lump_above=True, delta_cloud=False):
+                min_mfp_grid_ratio=0.0, delta_cloud=False):
     """Longwave fluxes for the case, from the Monte Carlo ray tracer.
 
     The counterpart of solve_sw_rt, and it returns the same shape of answer: the
@@ -287,21 +282,14 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
     horizontal transport left to resolve, so tracing them buys nothing but noise. Zero
     traces the whole spectrum; rte-rrtmgp-cpp's own default is 1.
 
-    lump_above puts the atmosphere above the box into the box's top cell, which is how
-    rte-rrtmgp-cpp reads these files. Turning it off shrinks the box to the resolved
-    cells and lets the air above enter as the downward flux a plane-parallel solve of
-    the full column leaves at the box's top: the lumped cell has one temperature and
-    the box's own depth, so what it sends down is not what the air it stands in for
-    would send, and the cells just beneath it cool too hard.
+    The atmosphere above the box is lumped into the box's top cell, as it is in the
+    shortwave. That cell emits down and up what a plane-parallel solve of the air it
+    stands in for says it does, so it sends into the box what that air sends.
     """
     if atm.get('grid') is None:
         raise SystemExit(
             'The ray tracer needs the Cartesian grid: give x, xh, y, yh, z and zh in '
             'the input file. cases/make_input.py writes them.')
-
-    grid = dict(atm['grid'])
-    if not lump_above:
-        grid['nz'] = atm['nz_resolved']
 
     return rte3d.solve_lw_rt(
         kdist, gas_concs, atm['top_at_1'],
@@ -311,10 +299,9 @@ def solve_lw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         weights=np.array([1.0]),
         min_mfp_grid_ratio=min_mfp_grid_ratio,
         scattering=scattering,
-        lump_above=lump_above,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column, delta_cloud=delta_cloud,
-        col_dry=atm.get('col_dry'), **grid, **cloud_args(cloud_optics, atm))
+        col_dry=atm.get('col_dry'), **atm['grid'], **cloud_args(cloud_optics, atm))
 
 
 def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
