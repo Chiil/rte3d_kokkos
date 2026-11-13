@@ -281,6 +281,10 @@ namespace Gas_optics
     // Everything in the result is 0-based, unlike the reference.
     Kdist_gas load(const Kdist_file& file, const Gas_concs& available_gases);
 
+    // Fill a Kdist_file from the dict that rte3d.kdist.read_kdist returns, so a host
+    // model that reads the coefficient file in Python can hand it straight to load.
+    Kdist_file kdist_file_from_dict(const py::dict& f);
+
     // Full longwave gas optics: interpolation, absorption optical depth and the
     // Planck sources. Reference: ty_gas_optics_rrtmgp%gas_optics for the longwave.
     // Kept for the kernel-by-kernel tests; Solver::solve_lw is the way to run a case.

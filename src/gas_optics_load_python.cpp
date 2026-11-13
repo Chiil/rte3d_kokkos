@@ -34,6 +34,68 @@ namespace
 }
 
 
+Kdist_file Gas_optics::kdist_file_from_dict(const py::dict& f)
+{
+    Kdist_file file;
+    file.gas_names = get_names(f, "gas_names");
+    file.gas_minor = get_names(f, "gas_minor");
+    file.identifier_minor = get_names(f, "identifier_minor");
+    file.minor_gases_lower = get_names(f, "minor_gases_lower");
+    file.minor_gases_upper = get_names(f, "minor_gases_upper");
+    file.scaling_gas_lower = get_names(f, "scaling_gas_lower");
+    file.scaling_gas_upper = get_names(f, "scaling_gas_upper");
+
+    file.key_species = Numpy::to_host_3d<int>(get<int>(f, "key_species"), "key_species");
+    file.band2gpt = Numpy::to_host_2d<int>(get<int>(f, "band2gpt"), "band2gpt");
+    file.press_ref = Numpy::to_host_1d<TF>(get<TF>(f, "press_ref"), "press_ref");
+    file.temp_ref = Numpy::to_host_1d<TF>(get<TF>(f, "temp_ref"), "temp_ref");
+    file.press_ref_trop = f["press_ref_trop"].cast<TF>();
+    file.temp_ref_p = f["temp_ref_p"].cast<TF>();
+    file.temp_ref_t = f["temp_ref_t"].cast<TF>();
+    file.vmr_ref = Numpy::to_host_3d<TF>(get<TF>(f, "vmr_ref"), "vmr_ref");
+    file.kmajor = Numpy::to_host_4d<TF>(get<TF>(f, "kmajor"), "kmajor");
+
+    file.kminor_lower = Numpy::to_host_3d<TF>(get<TF>(f, "kminor_lower"), "kminor_lower");
+    file.kminor_upper = Numpy::to_host_3d<TF>(get<TF>(f, "kminor_upper"), "kminor_upper");
+    file.minor_limits_gpt_lower = Numpy::to_host_2d<int>(
+            get<int>(f, "minor_limits_gpt_lower"), "minor_limits_gpt_lower");
+    file.minor_limits_gpt_upper = Numpy::to_host_2d<int>(
+            get<int>(f, "minor_limits_gpt_upper"), "minor_limits_gpt_upper");
+    file.minor_scales_with_density_lower = Numpy::to_host_1d<Bool>(
+            get<Bool>(f, "minor_scales_with_density_lower"), "msd_lower");
+    file.minor_scales_with_density_upper = Numpy::to_host_1d<Bool>(
+            get<Bool>(f, "minor_scales_with_density_upper"), "msd_upper");
+    file.scale_by_complement_lower = Numpy::to_host_1d<Bool>(
+            get<Bool>(f, "scale_by_complement_lower"), "sbc_lower");
+    file.scale_by_complement_upper = Numpy::to_host_1d<Bool>(
+            get<Bool>(f, "scale_by_complement_upper"), "sbc_upper");
+    file.kminor_start_lower = Numpy::to_host_1d<int>(
+            get<int>(f, "kminor_start_lower"), "kminor_start_lower");
+    file.kminor_start_upper = Numpy::to_host_1d<int>(
+            get<int>(f, "kminor_start_upper"), "kminor_start_upper");
+
+    if (f.contains("totplnk"))
+    {
+        file.totplnk = Numpy::to_host_2d<TF>(get<TF>(f, "totplnk"), "totplnk");
+        file.planck_frac = Numpy::to_host_4d<TF>(get<TF>(f, "planck_frac"), "planck_frac");
+    }
+    if (f.contains("rayl"))
+    {
+        file.rayl = Numpy::to_host_4d<TF>(get<TF>(f, "rayl"), "rayl");
+        file.solar_source_quiet = Numpy::to_host_1d<TF>(
+                get<TF>(f, "solar_source_quiet"), "solar_source_quiet");
+        file.solar_source_facular = Numpy::to_host_1d<TF>(
+                get<TF>(f, "solar_source_facular"), "solar_source_facular");
+        file.solar_source_sunspot = Numpy::to_host_1d<TF>(
+                get<TF>(f, "solar_source_sunspot"), "solar_source_sunspot");
+        file.mg_default = f["mg_default"].cast<TF>();
+        file.sb_default = f["sb_default"].cast<TF>();
+    }
+
+    return file;
+}
+
+
 void Gas_optics::init_load_python_bindings(py::module_& m)
 {
     py::class_<Kdist_gas>(m, "Kdist_gas",
@@ -67,61 +129,7 @@ void Gas_optics::init_load_python_bindings(py::module_& m)
         {
             Runtime::get();
 
-            Kdist_file file;
-            file.gas_names = get_names(f, "gas_names");
-            file.gas_minor = get_names(f, "gas_minor");
-            file.identifier_minor = get_names(f, "identifier_minor");
-            file.minor_gases_lower = get_names(f, "minor_gases_lower");
-            file.minor_gases_upper = get_names(f, "minor_gases_upper");
-            file.scaling_gas_lower = get_names(f, "scaling_gas_lower");
-            file.scaling_gas_upper = get_names(f, "scaling_gas_upper");
-
-            file.key_species = Numpy::to_host_3d<int>(get<int>(f, "key_species"), "key_species");
-            file.band2gpt = Numpy::to_host_2d<int>(get<int>(f, "band2gpt"), "band2gpt");
-            file.press_ref = Numpy::to_host_1d<TF>(get<TF>(f, "press_ref"), "press_ref");
-            file.temp_ref = Numpy::to_host_1d<TF>(get<TF>(f, "temp_ref"), "temp_ref");
-            file.press_ref_trop = f["press_ref_trop"].cast<TF>();
-            file.temp_ref_p = f["temp_ref_p"].cast<TF>();
-            file.temp_ref_t = f["temp_ref_t"].cast<TF>();
-            file.vmr_ref = Numpy::to_host_3d<TF>(get<TF>(f, "vmr_ref"), "vmr_ref");
-            file.kmajor = Numpy::to_host_4d<TF>(get<TF>(f, "kmajor"), "kmajor");
-
-            file.kminor_lower = Numpy::to_host_3d<TF>(get<TF>(f, "kminor_lower"), "kminor_lower");
-            file.kminor_upper = Numpy::to_host_3d<TF>(get<TF>(f, "kminor_upper"), "kminor_upper");
-            file.minor_limits_gpt_lower = Numpy::to_host_2d<int>(
-                    get<int>(f, "minor_limits_gpt_lower"), "minor_limits_gpt_lower");
-            file.minor_limits_gpt_upper = Numpy::to_host_2d<int>(
-                    get<int>(f, "minor_limits_gpt_upper"), "minor_limits_gpt_upper");
-            file.minor_scales_with_density_lower = Numpy::to_host_1d<Bool>(
-                    get<Bool>(f, "minor_scales_with_density_lower"), "msd_lower");
-            file.minor_scales_with_density_upper = Numpy::to_host_1d<Bool>(
-                    get<Bool>(f, "minor_scales_with_density_upper"), "msd_upper");
-            file.scale_by_complement_lower = Numpy::to_host_1d<Bool>(
-                    get<Bool>(f, "scale_by_complement_lower"), "sbc_lower");
-            file.scale_by_complement_upper = Numpy::to_host_1d<Bool>(
-                    get<Bool>(f, "scale_by_complement_upper"), "sbc_upper");
-            file.kminor_start_lower = Numpy::to_host_1d<int>(
-                    get<int>(f, "kminor_start_lower"), "kminor_start_lower");
-            file.kminor_start_upper = Numpy::to_host_1d<int>(
-                    get<int>(f, "kminor_start_upper"), "kminor_start_upper");
-
-            if (f.contains("totplnk"))
-            {
-                file.totplnk = Numpy::to_host_2d<TF>(get<TF>(f, "totplnk"), "totplnk");
-                file.planck_frac = Numpy::to_host_4d<TF>(get<TF>(f, "planck_frac"), "planck_frac");
-            }
-            if (f.contains("rayl"))
-            {
-                file.rayl = Numpy::to_host_4d<TF>(get<TF>(f, "rayl"), "rayl");
-                file.solar_source_quiet = Numpy::to_host_1d<TF>(
-                        get<TF>(f, "solar_source_quiet"), "solar_source_quiet");
-                file.solar_source_facular = Numpy::to_host_1d<TF>(
-                        get<TF>(f, "solar_source_facular"), "solar_source_facular");
-                file.solar_source_sunspot = Numpy::to_host_1d<TF>(
-                        get<TF>(f, "solar_source_sunspot"), "solar_source_sunspot");
-                file.mg_default = f["mg_default"].cast<TF>();
-                file.sb_default = f["sb_default"].cast<TF>();
-            }
+            const Kdist_file file = Gas_optics::kdist_file_from_dict(f);
 
             return Gas_optics::load(file, gas_concs);
         },
