@@ -29,11 +29,15 @@ cannot check.
 
 ## Before you start
 
-Every script needs `RTE3D_PYTHON_PATH` pointing at a build directory:
+Every script runs from the repository root and needs `RTE3D_PYTHON_PATH` pointing at
+the `main_python/` directory of a build. Load it in each new shell:
 
 ```bash
-export RTE3D_PYTHON_PATH=$PWD/build/main_python      # or build_gcc/main_python
+cd /path/to/rte3d                                        # the repository root
+export RTE3D_PYTHON_PATH=$PWD/build_cpu_dp/main_python   # or build_cpu_sp, build_gpu_dp, build_gpu_sp
 ```
+
+Each case's README gives the build it is meant for and the full set of commands.
 
 In full:
 

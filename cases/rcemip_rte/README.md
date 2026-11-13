@@ -1,11 +1,25 @@
 # `rcemip_rte/` — performance against the references
 
-Run from the repository root, with `RTE3D_PYTHON_PATH` pointing at a build; see
-[`../README.md`](../README.md#before-you-start).
-
 A single radiative-convective-equilibrium profile of 256 layers, replicated over a
 64x64 domain. All 4096 columns are identical, so `--ncol` tiles the profile to any
 count you want and the case scales cleanly.
+
+## How to run
+
+Every command runs from the repository root, in a shell where the environment is
+loaded. `RTE3D_PYTHON_PATH` tells the scripts which rte3d build to import; without it
+they stop at the import.
+
+```bash
+cd /path/to/rte3d                                        # the repository root
+export RTE3D_PYTHON_PATH=$PWD/build_cpu_dp/main_python
+export RTE3D_FORTRAN_REF=$PWD/build_ref_dp/librte_kernels.so   # only for --compare-fortran
+```
+
+`RTE3D_FORTRAN_REF` is the Fortran reference, built once with
+`./tests/build_reference.sh`; it must be the precision of the rte3d build
+(`build_ref_sp` with an `_sp` build). On macOS the library ends in `.dylib`. The
+input is read from `rte-rrtmgp-cpp/`. Then:
 
 ```bash
 python cases/rcemip_rte/run_rcemip_rte.py --ncol 512 --breakdown

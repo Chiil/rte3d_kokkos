@@ -1,23 +1,37 @@
 # `les_cloudfield/` — a three-dimensional cloud field
 
-Run from the repository root, with `RTE3D_PYTHON_PATH` pointing at a build; see
-[`../README.md`](../README.md#before-you-start).
-
-It is a case like any other: run through the general runner,
-[`run_case.py`](../README.md#run_casepy--the-general-runner), whose page documents
-the settings and the input layout.
-
 The case the ray tracer was validated on: the example LES field of `rte-rrtmgp-cpp`, a
 2560 x 2560 x 4000 m RICO cumulus field at 20 m resolution. 128 x 128 columns, 200
 ray-tracing cells in the vertical and 332 layers. Both tracers lump the 132 above the
 box into one cell on top, as below.
 Cloud is liquid-only and thin: 1.3% of cells, 19% of columns.
 
+## How to run
+
+Every command runs from the repository root, in a shell where the environment is
+loaded. `RTE3D_PYTHON_PATH` tells the scripts which rte3d build to import; without it
+they stop at the import.
+
 ```bash
-python cases/fetch_data.py les_cloudfield
-python cases/run_case.py cases/les_cloudfield/les_cloudfield
-python cases/les_cloudfield/plot_solvers.py      # optional, needs matplotlib
+cd /path/to/rte3d                                        # the repository root
+export RTE3D_PYTHON_PATH=$PWD/build_gpu_sp/main_python
 ```
+
+`build_gpu_sp` is the build the ray tracer is benchmarked with; `build_cpu_sp`, or any
+other build, runs it too.
+
+Then fetch the input once (26 MB, checksum-verified; does nothing if it is already
+here), solve it, and optionally plot:
+
+```bash
+python cases/fetch_data.py les_cloudfield                       # -> les_cloudfield_input.nc
+python cases/run_case.py cases/les_cloudfield/les_cloudfield    # -> les_cloudfield_output.nc
+python cases/les_cloudfield/plot_solvers.py                     # optional, needs matplotlib
+```
+
+The settings are in [`les_cloudfield.toml`](les_cloudfield.toml). It is run by the
+general runner, [`run_case.py`](../README.md#run_casepy--the-general-runner), whose
+section documents every setting and the output variables.
 
 `plot_solvers.py` writes three figures beside the case: `les_solvers_profiles.png`,
 the domain-mean heating and cooling the two transports give; `les_solvers_sfc_down.png`,
