@@ -264,7 +264,7 @@ void Solver::init_python_bindings(py::module_& m)
            const Numpy::In<TF>& secants, const Numpy::In<TF>& weights,
            const TF min_mfp_grid_ratio,
            const int nx, const int ny, const int nz,
-           const TF dx, const TF dy, const TF dz,
+           const TF dx, const TF dy, const Numpy::In<TF>& z_lev,
            const int photons_per_pixel, const bool independent_column,
            const Cloud_optics* cloud_optics,
            const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
@@ -285,8 +285,9 @@ void Solver::init_python_bindings(py::module_& m)
             atm.tsfc = Numpy::to_device_1d<TF>(tsfc, "tsfc");
             atm.col_dry = optional_2d(col_dry, "col_dry");
 
-            const Raytracer_lw::Grid grid =
-                    Raytracer_lw::Grid::make(nx, ny, nz, dx, dy, dz, kn_x, kn_y, kn_z);
+            const Raytracer_lw::Grid grid = Raytracer_lw::Grid::make(
+                    nx, ny, nz, dx, dy, Numpy::to_vector<TF>(z_lev, "z_lev"),
+                    kn_x, kn_y, kn_z);
 
             const int nlay = static_cast<int>(atm.play.extent(0));
             const int ncol = static_cast<int>(atm.play.extent(1));
@@ -339,7 +340,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("secants"), py::arg("weights"),
         py::arg("min_mfp_grid_ratio") = TF(0.),
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
-        py::arg("dx"), py::arg("dy"), py::arg("dz"),
+        py::arg("dx"), py::arg("dy"), py::arg("z_lev"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
         py::arg("cloud_optics") = py::none(),
         py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),
@@ -373,7 +374,7 @@ void Solver::init_python_bindings(py::module_& m)
            const TF mu0, const TF azi,
            const Numpy::In<TF>& sfc_alb_dir, const Numpy::In<TF>& toa_src,
            const int nx, const int ny, const int nz,
-           const TF dx, const TF dy, const TF dz,
+           const TF dx, const TF dy, const Numpy::In<TF>& z_lev,
            const int photons_per_pixel, const bool independent_column,
            const Cloud_optics* cloud_optics,
            const std::optional<Numpy::In<TF>>& clwp, const std::optional<Numpy::In<TF>>& ciwp,
@@ -391,8 +392,9 @@ void Solver::init_python_bindings(py::module_& m)
             atm.tlay = Numpy::to_device_2d<TF>(tlay, "tlay");
             atm.col_dry = optional_2d(col_dry, "col_dry");
 
-            const Raytracer::Grid grid =
-                    Raytracer::Grid::make(nx, ny, nz, dx, dy, dz, kn_x, kn_y, kn_z);
+            const Raytracer::Grid grid = Raytracer::Grid::make(
+                    nx, ny, nz, dx, dy, Numpy::to_vector<TF>(z_lev, "z_lev"),
+                    kn_x, kn_y, kn_z);
 
             const int nlay = static_cast<int>(atm.play.extent(0));
             const int ncol = static_cast<int>(atm.play.extent(1));
@@ -438,7 +440,7 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("mu0"), py::arg("azi"),
         py::arg("sfc_alb_dir"), py::arg("toa_src"),
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
-        py::arg("dx"), py::arg("dy"), py::arg("dz"),
+        py::arg("dx"), py::arg("dy"), py::arg("z_lev"),
         py::arg("photons_per_pixel") = 256, py::arg("independent_column") = false,
         py::arg("cloud_optics") = py::none(),
         py::arg("clwp") = py::none(), py::arg("ciwp") = py::none(),

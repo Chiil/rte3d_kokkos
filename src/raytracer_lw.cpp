@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <tuple>
 
 #include "exp_int.h"
 #include "raytracer.h"
@@ -138,11 +139,10 @@ namespace
     }
 
 
-    // One launch of the photon walk. Templated on the transport mode so that the
-    // independent-column test is compiled away rather than taken per step; in an
-    // anonymous namespace, so the two closure types cannot collide with another
-    // translation unit's.
-    template<bool independent_column>
+    // One launch of the photon walk. Templated on the transport mode and on the
+    // vertical spacing so that neither test is taken per step; in an anonymous
+    // namespace, so the closure types cannot collide with another translation unit's.
+    template<bool independent_column, bool dz_constant>
     void launch_photons(
             const Rt_lw_kernels::Scene& scene, const int nthread,
             const int photons_per_thread, const int photons_extra,
@@ -161,7 +161,7 @@ namespace
                 // The thread's slice of the emitted power: photons are stratified
                 // over the launch, one to each 1/photons_total of it, and the threads
                 // partition that exactly because start and nshoot do.
-                Rt_lw_kernels::trace_photons<independent_column>(
+                Rt_lw_kernels::trace_photons<independent_column, dz_constant>(
                         scene, nshoot, (gpt_offset + start) ^ seed_xor, start*du, du);
             });
     }
@@ -177,7 +177,7 @@ namespace
             const Raytracer_lw::Scratch& s, const Raytracer_lw::Fluxes_lw& f)
     {
         const int ncol = grid.ncol();
-        const TF dz_inv = TF(1.)/grid.dz;
+        const auto z_lev = grid.z_lev_d;
 
         const auto cdf = s.cdf;
         const int nslot = static_cast<int>(cdf.extent(0));
@@ -208,7 +208,8 @@ namespace
         parallel_for_2d("rt_lw_count_to_flux_3d", {0, 0}, {grid.nz, ncol},
             KOKKOS_LAMBDA(const int k, const int icol)
             {
-                const TF per_volume = TF(cdf(nslot - 1)/photons_total)*dz_inv;
+                const TF per_volume = TF(cdf(nslot - 1)/photons_total)
+                        /(z_lev(k + 1) - z_lev(k));
 
                 f_net(k, icol) += from_count(atmos(k, icol))*per_volume;
             });
@@ -282,7 +283,7 @@ void Raytracer_lw::add_plane_parallel(
 {
     const int ncol = grid.ncol();
     const int nz = grid.nz;
-    const TF dz_inv = TF(1.)/grid.dz;
+    const auto z_lev = grid.z_lev_d;
 
     // The level bounding cell kc from below, counting cells up from the surface. Level
     // 0 is the surface when the caller stores bottom-up and the top of the atmosphere
@@ -318,7 +319,7 @@ void Raytracer_lw::add_plane_parallel(
     // What a cell absorbs is what the net downward flux loses across it, which is the
     // same quantity the tracer accumulates by following photons. The top cell's upper
     // bound is the top of the atmosphere, however many layers it stands in for, and
-    // its depth is the box's dz, as it is for the tracer.
+    // its depth is the top cell's, as it is for the tracer.
     parallel_for_2d("rt_lw_plane_parallel_3d", {0, 0}, {nz, ncol},
         KOKKOS_LAMBDA(const int kc, const int icol)
         {
@@ -328,7 +329,7 @@ void Raytracer_lw::add_plane_parallel(
             const TF net_lo = flux_dn(lo, icol) - flux_up(lo, icol);
             const TF net_hi = flux_dn(hi, icol) - flux_up(hi, icol);
 
-            f_net(kc, icol) += (net_hi - net_lo)*dz_inv;
+            f_net(kc, icol) += (net_hi - net_lo)/(z_lev(kc + 1) - z_lev(kc));
         });
 }
 
@@ -420,25 +421,25 @@ void Raytracer_lw::trace_rays(
     scene.atmos = Array_map_2d<Count>(scratch.atmos.data(), grid.nz, ncol);
 
     scene.grid_cells = grid.cells();
-    scene.grid_d = grid.d();
     scene.grid_size = grid.size();
     scene.kn_grid = grid.kn_cells();
+    scene.grid_d = Vector<TF>{grid.dx, grid.dy};
     scene.kn_grid_d = Vector<TF>{scene.grid_size.x/grid.kn_x,
-                                 scene.grid_size.y/grid.kn_y,
-                                 scene.grid_size.z/grid.kn_z};
+                                 scene.grid_size.y/grid.kn_y};
 
     // The walk indexes cells by multiplying with these rather than dividing.
     scene.grid_d_inv = Vector<TF>{TF(1.)/scene.grid_d.x,
-                                  TF(1.)/scene.grid_d.y,
-                                  TF(1.)/scene.grid_d.z};
+                                  TF(1.)/scene.grid_d.y};
+    scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,
+                                     TF(1.)/scene.kn_grid_d.y};
+
+    scene.z = grid.z_axis();
+    scene.kn_z = grid.kn_z_axis();
+
     // Where the resolved domain ends. With nothing lumped the box's top cell is a
     // resolved cell like any other and the box top already is the domain top, so the
     // crossing is not scored at all -- the two pairs are made equal after the trace.
-    scene.z_dom = lumped ? (grid.nz - 1)*grid.dz : TF(0.);
-
-    scene.kn_grid_d_inv = Vector<TF>{TF(1.)/scene.kn_grid_d.x,
-                                     TF(1.)/scene.kn_grid_d.y,
-                                     TF(1.)/scene.kn_grid_d.z};
+    scene.z_dom = lumped ? grid.z_lev[grid.nz - 1] : TF(0.);
 
     // Photons are spread over the emitters rather than over the pixels, so the count
     // is a domain total; per pixel is how the caller thinks about it, and how the
@@ -464,12 +465,17 @@ void Raytracer_lw::trace_rays(
     // The seed only changes the pseudo-random draws; the emission stays stratified.
     const unsigned int seed_xor = Rand::seed_offset(seed);
 
-    if (independent_column)
-        launch_photons<true>(scene, nthread, photons_per_thread, photons_extra,
-                             gpt_offset, seed_xor, du);
+    const auto args = std::make_tuple(
+            scene, nthread, photons_per_thread, photons_extra, gpt_offset, seed_xor, du);
+
+    if (independent_column && grid.dz_constant)
+        std::apply(launch_photons<true, true>, args);
+    else if (independent_column)
+        std::apply(launch_photons<true, false>, args);
+    else if (grid.dz_constant)
+        std::apply(launch_photons<false, true>, args);
     else
-        launch_photons<false>(scene, nthread, photons_per_thread, photons_extra,
-                              gpt_offset, seed_xor, du);
+        std::apply(launch_photons<false, false>, args);
 
     count_to_flux(grid, static_cast<double>(photons_total), lumped, scratch, fluxes);
 }

@@ -295,7 +295,7 @@ def test_generated_case_carries_the_ray_tracing_grid(rte3d, tmp_path):
     assert (grid['nx'], grid['ny']) == (NX, NY)
     assert grid['nz'] == NLAY          # every layer resolved, so nothing is lumped
     assert grid['dx'] == pytest.approx(100.0)
-    assert grid['dz'] == pytest.approx(70.0e3/NLAY)
+    np.testing.assert_allclose(np.diff(grid['z_lev']), 70.0e3/NLAY)
 
 
 @requires_data

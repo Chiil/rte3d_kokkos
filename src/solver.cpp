@@ -490,11 +490,13 @@ int Solver::solve_lw_rt(
     const auto scratch = Raytracer_lw::Scratch::make(grid);
 
     // The shortest gas mean free path the box may hold before the tracer gives up on
-    // it, as an optical depth per cell: a mean free path of ratio*min(dx, dy) is an
-    // optical depth of dz/(ratio*min(dx, dy)) across a cell of depth dz.
+    // it, as an extinction: a mean free path of ratio*min(dx, dy) is an extinction of
+    // 1/(ratio*min(dx, dy)). An extinction rather than an optical depth per cell, so
+    // that a thin cell is not let through for being thin. Reference: 04913ac in
+    // rte-rrtmgp-cpp.
     const TF d_xy_min = std::min(grid.dx, grid.dy);
-    const TF tau_max_traced = min_mfp_grid_ratio > TF(0.)
-            ? grid.dz/(min_mfp_grid_ratio*d_xy_min)
+    const TF k_max_traced = min_mfp_grid_ratio > TF(0.)
+            ? TF(1.)/(min_mfp_grid_ratio*d_xy_min)
             : std::numeric_limits<TF>::infinity();
 
     // The cells the threshold may ask about: those that stand for one layer each. When
@@ -504,6 +506,7 @@ int Solver::solve_lw_rt(
     // could cross a *resolved* cell sideways. Leaving it in made the choice of
     // g-points depend on how much atmosphere was handed in above the same box.
     const int nz_scan = nlay > grid.nz ? grid.nz - 1 : grid.nz;
+    const auto z_lev = grid.z_lev_d;
 
     const int nz = grid.nz;
 
@@ -570,25 +573,26 @@ int Solver::solve_lw_rt(
 
         const auto tau = state.tau;
 
-        // The largest gas optical depth across a cell of the resolved box, which is
-        // where the shortest mean free path is. Clouds are left out of it, as the
-        // reference leaves them out: the threshold asks whether the *gas* alone
-        // already closes the cell. Reference: max_tau_gas.
-        TF tau_max = TF(0.);
+        // The largest gas extinction in a cell of the resolved box, which is where
+        // the shortest mean free path is. Clouds are left out of it, as the reference
+        // leaves them out: the threshold asks whether the *gas* alone already closes
+        // the cell. Reference: max_kext_gas.
+        TF k_max = TF(0.);
         if (min_mfp_grid_ratio > TF(0.))
         {
-            Kokkos::parallel_reduce("lw_rt_max_tau",
+            Kokkos::parallel_reduce("lw_rt_max_k_ext",
                 Kokkos::MDRangePolicy<Default_exec, Kokkos::Rank<2>>({0, 0}, {nz_scan, ncol}),
                 KOKKOS_LAMBDA(const int kc, const int icol, TF& acc)
                 {
-                    const TF t = tau(Raytracer::layer_of(kc, nlay, top_at_1), icol);
-                    if (t > acc)
-                        acc = t;
+                    const TF k_ext = tau(Raytracer::layer_of(kc, nlay, top_at_1), icol)
+                            /(z_lev(kc + 1) - z_lev(kc));
+                    if (k_ext > acc)
+                        acc = k_ext;
                 },
-                Kokkos::Max<TF>(tau_max));
+                Kokkos::Max<TF>(k_max));
         }
 
-        if (tau_max < tau_max_traced)
+        if (k_max < k_max_traced)
         {
             ++traced;
 

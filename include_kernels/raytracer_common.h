@@ -19,6 +19,7 @@ namespace Rt_common
     using Raytracer::Count;
     using Raytracer::Optics_cell;
     using Raytracer::Vector;
+    using Raytracer::Z_axis;
 
     KOKKOS_INLINE_FUNCTION constexpr TF eps() { return std::numeric_limits<TF>::epsilon(); }
 

@@ -33,7 +33,7 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
            const Numpy::In<TF>& lay_source, const Numpy::In<TF>& sfc_source,
            const Numpy::In<TF>& sfc_emis,
            const int nx, const int ny, const int nz,
-           const TF dx, const TF dy, const TF dz,
+           const TF dx, const TF dy, const Numpy::In<TF>& z_lev,
            const int photons_per_pixel,
            const std::optional<Numpy::In<TF>>& tau_cld,
            const std::optional<Numpy::In<TF>>& ssa_cld,
@@ -47,7 +47,9 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
         {
             Runtime::get();
 
-            const Grid grid = Grid::make(nx, ny, nz, dx, dy, dz, kn_x, kn_y, kn_z);
+            const Grid grid = Grid::make(
+                    nx, ny, nz, dx, dy, Numpy::to_vector<TF>(z_lev, "z_lev"),
+                    kn_x, kn_y, kn_z);
 
             auto tau_gas_d = Numpy::to_device_2d<TF>(tau_gas, "tau_gas");
             auto ssa_gas_d = Numpy::to_device_2d<TF>(ssa_gas, "ssa_gas");
@@ -111,7 +113,7 @@ void Raytracer_lw::init_python_bindings(py::module_& m)
         py::arg("tau_gas"), py::arg("ssa_gas"),
         py::arg("lay_source"), py::arg("sfc_source"), py::arg("sfc_emis"),
         py::arg("nx"), py::arg("ny"), py::arg("nz"),
-        py::arg("dx"), py::arg("dy"), py::arg("dz"),
+        py::arg("dx"), py::arg("dy"), py::arg("z_lev"),
         py::arg("photons_per_pixel") = 256,
         py::arg("tau_cld") = py::none(), py::arg("ssa_cld") = py::none(),
         py::arg("asy_cld") = py::none(),

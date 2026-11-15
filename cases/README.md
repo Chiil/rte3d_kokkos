@@ -164,14 +164,15 @@ Columns are flattened as x fastest, which is what `(lay, y, x)` already is in me
 | `sfc_alb_dir`, `sfc_alb_dif` | `(y, x, band_sw)` | shortwave; `dif` defaults to `dir` |
 | `tsi` `(y, x)` or `tsi_scaling` | scalar | optional; the k-distribution's own solar source otherwise |
 | `lwp`, `iwp`, `rel`, `dei` | `(lay, y, x)` | `cloud-optics` |
-| `x`, `xh`, `y`, `yh`, `z`, `zh` | `(x)`, `(xh)`, ... | `raytracing`; the Cartesian grid, equally spaced |
+| `x`, `xh`, `y`, `yh`, `z`, `zh` | `(x)`, `(xh)`, ... | `raytracing`; the Cartesian grid, equally spaced in x and y |
 | `ngrid_x`, `ngrid_y`, `ngrid_z` | scalar | optional; blocks of the null-collision grid |
 | `azi` | `(y, x)` | optional; solar azimuth in radians from north, clockwise |
 
-The ray tracer needs a box of equally spaced cells, which is what `x`/`xh`, `y`/`yh`
-and `z`/`zh` describe. The `z` dimension is the part it resolves in three dimensions;
-every layer above it is lumped into one more cell on top, so the tracer still sees the
-whole atmosphere. The sun is one direction for the whole domain, taken from the first
+The ray tracer needs a box of cells, equally spaced in x and y, which is what
+`x`/`xh`, `y`/`yh` and `z`/`zh` describe; the face heights `zh` may be spaced as they
+like. The `z` dimension is the part it resolves in three dimensions; every layer above
+it is lumped into one more cell on top, as deep as the one below it, so the tracer
+still sees the whole atmosphere. The sun is one direction for the whole domain, taken from the first
 column's `mu0` and `azi`.
 
 `dei` is an effective *diameter*, as RRTMGP's current cloud coefficient files document

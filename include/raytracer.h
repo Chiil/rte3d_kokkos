@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "random.h"
 #include "types.h"
@@ -15,12 +16,12 @@
 // out: clouds scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP
 // tables give, gases as Rayleigh.
 //
-// The domain is nx by ny by nz cells of dx by dy by dz, periodic in x and y. The
-// column index is i + j*nx, which is how the case reader already flattens (y, x), so
-// no array is ever reshaped. Optical properties come in as (nlay, ncol) for one
-// g-point, as everywhere else in rte3d, with nlay >= nz: the layers from nz-1 upward
-// are lumped into the top cell of the box, so the tracer sees the whole atmosphere
-// while resolving only the part that is worth resolving.
+// The domain is nx by ny by nz cells of dx by dy by dz, periodic in x and y, where dz
+// may vary with height. The column index is i + j*nx, which is how the case reader
+// already flattens (y, x), so no array is ever reshaped. Optical properties come in as
+// (nlay, ncol) for one g-point, as everywhere else in rte3d, with nlay >= nz: the
+// layers from nz-1 upward are lumped into the top cell of the box, so the tracer sees
+// the whole atmosphere while resolving only the part that is worth resolving.
 //
 // One call traces one g-point and adds its share into the fluxes. Nothing here carries
 // a g-point dimension.
@@ -80,29 +81,101 @@ namespace Raytracer
     }
 
 
+    // The vertical axis of a grid: n cells between the n+1 face heights lev, the first
+    // of which is the surface at zero. The walk asks it which cell a height is in and
+    // where a cell's faces are.
+    //
+    // dz_constant picks how. With equal spacing that is a multiplication by d_inv, as
+    // it is in x and y. Otherwise a lookup table on a spacing no coarser than the
+    // thinnest cell gives the cell at most one face away from the right one, and a
+    // step against lev corrects it -- the scheme of rte-rrtmgp-cpp's height_to_int.
+    // The walk is compiled for both, and the grid says which applies.
+    struct Z_axis
+    {
+        Array_map_1d<const TF> lev;   // (n+1) face heights [m]
+        Array_map_1d<const int> lut;  // (lut_size) the cell each table point is in
+        TF d = TF(0.), d_inv = TF(0.);
+        TF lut_d_inv = TF(0.);
+        int n = 0, lut_size = 0;
+
+        template<bool dz_constant> KOKKOS_INLINE_FUNCTION
+        int index(const TF z) const
+        {
+            if constexpr (dz_constant)
+            {
+                // The cast rounds toward zero, which is the rounding this wants.
+                const int k = static_cast<int>(z*d_inv);
+                return k < n ? k : n - 1;
+            }
+            else
+            {
+                const int i = static_cast<int>(z*lut_d_inv);
+                int k = lut(i < 0 ? 0 : (i < lut_size ? i : lut_size - 1));
+                while (k > 0 && z < lev(k))
+                    --k;
+                while (k < n - 1 && z >= lev(k + 1))
+                    ++k;
+                return k;
+            }
+        }
+
+        // The bottom face of cell k, and so the top face of cell k-1.
+        template<bool dz_constant> KOKKOS_INLINE_FUNCTION
+        TF face(const int k) const
+        {
+            if constexpr (dz_constant)
+                return k*d;
+            else
+                return lev(k);
+        }
+    };
+
+
     // The ray-tracing box, and the coarser grid the null-collision extinction is taken
     // over. kn_* of 1 in every direction is legal and makes the tracer take a single
     // maximum over the whole domain; the finer that grid, the fewer null collisions,
     // at the price of the memory it takes and the cell crossings it adds.
+    //
+    // The vertical is given by its nz+1 face heights, which need not be equally
+    // spaced. The null-collision blocks in z then have their faces on cell faces, block
+    // kn_k starting at cell kn_k*nz/kn_z, so that each holds whole cells.
     struct Grid
     {
         int nx = 0, ny = 0, nz = 0;
-        TF dx = TF(0.), dy = TF(0.), dz = TF(0.);
+        TF dx = TF(0.), dy = TF(0.);
         int kn_x = 1, kn_y = 1, kn_z = 1;
+
+        // The face heights, on the host and on the device, counted from the surface:
+        // make subtracts the first one.
+        std::vector<TF> z_lev;          // (nz+1)
+        Array_1d<TF> z_lev_d;           // (nz+1)
+        Array_1d<TF> kn_z_lev_d;        // (kn_z+1)
+        Array_1d<int> z_lut, kn_z_lut;  // (lut_size)
+        TF lut_dz = TF(0.);
+
+        // Whether every cell is equally deep, to the round-off of the face heights.
+        // The walk then takes the equally spaced arithmetic, which is faster.
+        bool dz_constant = true;
 
         // Build a grid, filling in any null-collision block count left at zero with
         // blocks a quarter of the domain across. That is a compromise: coarser and the
         // tracer takes null collisions it did not have to, finer and it crosses block
         // faces it did not have to.
         static Grid make(const int nx, const int ny, const int nz,
-                         const TF dx, const TF dy, const TF dz,
+                         const TF dx, const TF dy, const std::vector<TF>& z_lev,
                          const int kn_x = 0, const int kn_y = 0, const int kn_z = 0);
 
         int ncol() const { return nx*ny; }
+        TF dz(const int k) const { return z_lev[k+1] - z_lev[k]; }
+        TF dz_min() const;
         Vector<int> cells() const { return Vector<int>{nx, ny, nz}; }
-        Vector<TF> d() const { return Vector<TF>{dx, dy, dz}; }
         Vector<int> kn_cells() const { return Vector<int>{kn_x, kn_y, kn_z}; }
-        Vector<TF> size() const { return Vector<TF>{nx*dx, ny*dy, nz*dz}; }
+        Vector<TF> size() const { return Vector<TF>{nx*dx, ny*dy, z_lev[nz]}; }
+
+        // The vertical axes of the box and of the null-collision grid, as the walk
+        // reads them.
+        Z_axis z_axis() const;
+        Z_axis kn_z_axis() const;
     };
 
 

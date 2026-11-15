@@ -64,6 +64,8 @@ namespace Rt_lw_kernels
         // the crossing is never scored -- the box top already is the domain top.
         TF z_dom = TF(0.);
 
+        // The horizontal spacing is uniform and lives in the x and y of these; the
+        // vertical, which need not be, is the two axes below them.
         Vector<int> grid_cells;
         Vector<TF> grid_d;
         Vector<TF> grid_d_inv;
@@ -71,6 +73,8 @@ namespace Rt_lw_kernels
         Vector<int> kn_grid;
         Vector<TF> kn_grid_d;
         Vector<TF> kn_grid_d_inv;
+        Z_axis z;
+        Z_axis kn_z;
 
         KOKKOS_INLINE_FUNCTION
         int column(const int i, const int j) const { return i + j*grid_cells.x; }
@@ -197,6 +201,7 @@ namespace Rt_lw_kernels
     // The slot order is the reference's: 0 the surface, 1 to nz the cells of the box
     // from the bottom up, nz+1 the top boundary. The surface radiates up and the top
     // boundary down, both by the cosine law; a cell radiates isotropically.
+    template<bool dz_constant>
     RTE3D_DEVICE_FUNCTION
     void reset_photon(
             Photon& photon, TF& weight, int& photons_shot, const int photons_to_shoot,
@@ -240,7 +245,10 @@ namespace Rt_lw_kernels
         }
         else
         {
-            photon.position.z = (k + rng())*s.grid_d.z;
+            if constexpr (dz_constant)
+                photon.position.z = (k + rng())*s.z.d;
+            else
+                photon.position.z = s.z.lev(k) + rng()*(s.z.lev(k + 1) - s.z.lev(k));
 
             // Isotropic, so the cosine is uniform rather than square-rooted. The
             // lumped top cell, given its two hemispheres' shares, is isotropic within
@@ -283,7 +291,7 @@ namespace Rt_lw_kernels
 
     // Walk photons_to_shoot photons through the scene, from wherever they were emitted
     // until they leave it or their weight runs out.
-    template<bool independent_column>
+    template<bool independent_column, bool dz_constant>
     RTE3D_DEVICE_FUNCTION
     void trace_photons(
             const Scene& s, const int photons_to_shoot, const unsigned int rng_seed,
@@ -303,8 +311,9 @@ namespace Rt_lw_kernels
         TF weight = TF(0.);
         int photons_shot = -1;
 
-        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
-                     cursor, u0, du, rng);
+        reset_photon<dz_constant>(
+                photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                cursor, u0, du, rng);
 
         TF tau = TF(0.);
         TF d_max = TF(0.);
@@ -329,7 +338,7 @@ namespace Rt_lw_kernels
             {
                 i_n = coord_to_index(photon.position.x, s.kn_grid_d_inv.x, s.kn_grid.x);
                 j_n = coord_to_index(photon.position.y, s.kn_grid_d_inv.y, s.kn_grid.y);
-                k_n = coord_to_index(photon.position.z, s.kn_grid_d_inv.z, s.kn_grid.z);
+                k_n = s.kn_z.index<dz_constant>(photon.position.z);
 
                 const TF sx = Kokkos::abs((photon.direction.x > 0
                         ? (i_n+1)*s.kn_grid_d.x - photon.position.x
@@ -338,8 +347,8 @@ namespace Rt_lw_kernels
                         ? (j_n+1)*s.kn_grid_d.y - photon.position.y
                         : j_n*s.kn_grid_d.y - photon.position.y) / photon.direction.y);
                 const TF sz = Kokkos::abs((photon.direction.z > 0
-                        ? (k_n+1)*s.kn_grid_d.z - photon.position.z
-                        : k_n*s.kn_grid_d.z - photon.position.z) / photon.direction.z);
+                        ? s.kn_z.face<dz_constant>(k_n+1) - photon.position.z
+                        : s.kn_z.face<dz_constant>(k_n) - photon.position.z) / photon.direction.z);
 
                 d_max = independent_column ? sz : Kokkos::min(sx, Kokkos::min(sy, sz));
                 k_ext_null = s.k_null(k_n, j_n, i_n);
@@ -395,8 +404,9 @@ namespace Rt_lw_kernels
                     else
                     {
                         write_emission(s, photon);
-                        reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
-                     cursor, u0, du, rng);
+                        reset_photon<dz_constant>(
+                                photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                                cursor, u0, du, rng);
                     }
                 }
                 else if (photon.position.z >= s.grid_size.z)
@@ -412,8 +422,9 @@ namespace Rt_lw_kernels
                     photon.emitted += weight;
 
                     write_emission(s, photon);
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
-                     cursor, u0, du, rng);
+                    reset_photon<dz_constant>(
+                            photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                            cursor, u0, du, rng);
                 }
                 else
                 {
@@ -451,8 +462,8 @@ namespace Rt_lw_kernels
                 const Vector<TF> p_old = photon.position;
                 const TF dz = photon.direction.z*dn;
                 photon.position.z = dz > 0
-                        ? Kokkos::min(photon.position.z + dz, (k_n+1)*s.kn_grid_d.z - s_min)
-                        : Kokkos::max(photon.position.z + dz, k_n*s.kn_grid_d.z + s_min);
+                        ? Kokkos::min(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n+1) - s_min)
+                        : Kokkos::max(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n) + s_min);
 
                 if (!independent_column)
                 {
@@ -472,7 +483,7 @@ namespace Rt_lw_kernels
 
                 const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                 const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
-                const int k = coord_to_index(photon.position.z, s.grid_d_inv.z, s.grid_cells.z);
+                const int k = s.z.index<dz_constant>(photon.position.z);
                 const int ij = s.column(i, j);
 
                 // A new cell ends the accumulation the last one was collecting, and
@@ -540,8 +551,9 @@ namespace Rt_lw_kernels
                     d_max = TF(0.);
 
                     write_emission(s, photon);
-                    reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min,
-                     cursor, u0, du, rng);
+                    reset_photon<dz_constant>(
+                            photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                            cursor, u0, du, rng);
                 }
             }
         }

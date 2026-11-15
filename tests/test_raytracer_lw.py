@@ -47,9 +47,19 @@ def exact_rtol(rte3d):
     return 1e-4 if rte3d.runtime().precision == 'single' else 1e-9
 
 
-def grid(**kwargs):
+# The face heights of the standard test box, equally spaced.
+Z_LEV = np.arange(NZ + 1)*DZ
+
+
+def stretched(nz=NZ, depth=NZ*DZ, ratio=1.2):
+    """Face heights over the same depth, each cell ratio times as deep as the one below."""
+    dz = ratio**np.arange(nz)
+    return np.append(0.0, np.cumsum(dz))*depth/dz.sum()
+
+
+def grid(z_lev=Z_LEV, **kwargs):
     """The keyword arguments describing the standard test box."""
-    return dict(nx=NX, ny=NY, nz=NZ, dx=DX, dy=DY, dz=DZ, **kwargs)
+    return dict(nx=NX, ny=NY, nz=len(z_lev) - 1, dx=DX, dy=DY, z_lev=z_lev, **kwargs)
 
 
 def uniform(value, nlay=NZ):
@@ -77,9 +87,9 @@ def exp_int_3(x, n=200000):
     return float((mu*np.exp(-x/mu)).sum()/n)
 
 
-def column_net(out):
+def column_net(out, z_lev=Z_LEV):
     """Column-integrated net absorption [W/m2], from the per-unit-height flux."""
-    return out['flux_net'].sum(axis=0)*DZ
+    return (out['flux_net']*np.diff(z_lev)[:, None]).sum(axis=0)
 
 
 @pytest.mark.parametrize('tau_tot', [0.1, 0.3, 1.0, 2.4, 8.0])
@@ -446,3 +456,66 @@ def test_the_seed_changes_the_noise_but_not_the_mean(rte3d):
 
     noise = d1.std()/np.sqrt(NCOL)
     assert abs(a1.mean() - a2.mean()) < 5*noise
+
+
+# ---------------------------------------------------------------------------
+# A vertical grid that is not equally spaced.
+
+def test_stretched_grid_isothermal_slab_matches_the_exponential_integral(rte3d):
+    """The closed-form slab, with its optical depth spread over cells of unequal depth.
+
+    Emission is drawn per cell in proportion to the cell's optical depth and placed
+    uniformly within it, so a grid that put the photons at the wrong heights would get
+    the escape right in the thick limit and wrong in the thin one; tau = 1 is between.
+    """
+    tau_tot = 1.0
+    z_lev = stretched()
+    tau = np.repeat((tau_tot*np.diff(z_lev)/z_lev[-1])[:, None], NCOL, axis=1)
+
+    out = trace(rte3d, tau, uniform(B), np.zeros(NCOL), np.ones(NCOL), ppp=32768,
+                z_lev=z_lev)
+
+    expected = np.pi*B*(1. - 2.*exp_int_3(tau_tot))
+    assert out['tod_up'].mean() == pytest.approx(expected, rel=0.01)
+    assert out['sfc_dn'].mean() == pytest.approx(expected, rel=0.01)
+
+
+@pytest.mark.parametrize('independent_column', [False, True])
+def test_stretched_grid_energy_budget_closes(rte3d, independent_column):
+    """The exact budget of test_energy_budget_closes, on cells of unequal depth.
+
+    The net flux per unit height is divided by each cell's own depth, and multiplied
+    back by it here, so a cell given the wrong depth would break the identity.
+    """
+    rng = np.random.default_rng(0)
+    tau = rng.uniform(0.02, 0.3, (NZ, NCOL))
+    lay_source = rng.uniform(40., 120., (NZ, NCOL))
+    z_lev = stretched()
+
+    out = trace(rte3d, tau, lay_source, np.full(NCOL, 125.), np.full(NCOL, 0.9),
+                independent_column=independent_column, z_lev=z_lev)
+
+    boundaries = out['tod_dn'] - out['tod_up'] + out['sfc_up'] - out['sfc_dn']
+    assert boundaries.mean() == pytest.approx(
+        column_net(out, z_lev).mean(), rel=exact_rtol(rte3d))
+
+
+def test_stretched_grid_agrees_with_the_equal_one(rte3d):
+    """An isothermal medium with constant absorption, cut two ways, cools the same."""
+    k_abs = 0.3/DZ
+
+    def run(z_lev):
+        tau = np.repeat((k_abs*np.diff(z_lev))[:, None], NCOL, axis=1)
+        return trace(rte3d, tau, uniform(B), np.full(NCOL, B), np.ones(NCOL),
+                     ppp=16384, z_lev=z_lev)
+
+    equal = run(Z_LEV)
+    z_lev = stretched()
+    other = run(z_lev)
+
+    for key in ('tod_up', 'sfc_dn'):
+        assert other[key].mean() == pytest.approx(equal[key].mean(), rel=0.01), key
+
+    assert column_net(other, z_lev).mean() == pytest.approx(
+        column_net(equal).mean(), rel=0.03)
+

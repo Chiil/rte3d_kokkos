@@ -442,6 +442,18 @@ namespace Numpy
                     + std::to_string(info.ndim) + "-dimensional.");
     }
 
+    // Copy a one-dimensional numpy array into a host vector, for the few inputs the
+    // host works on before anything goes to the device.
+    template<typename T>
+    std::vector<T> to_vector(const In<T>& a, const std::string& name)
+    {
+        const py::buffer_info info = a.request();
+        check_rank(info, 1, name);
+
+        const T* p = static_cast<const T*>(info.ptr);
+        return std::vector<T>(p, p + info.shape[0]);
+    }
+
     // Copy a numpy array into a freshly allocated device View. The numpy shape is the
     // View shape one-to-one: no transposes anywhere, because gpt-outer row-major and
     // the reference's col-outer column-major are the same bytes.

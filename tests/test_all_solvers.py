@@ -227,12 +227,14 @@ def mean(field):
     return float(np.mean(np.asarray(field)))
 
 
-def sw_budget(out, dz):
+def sw_budget(out, z_lev):
     """What enters the shortwave domain, and what leaves it or stays [W/m2]."""
     entering = mean(out['rt_flux_toa_dn'])
     leaving = (mean(out['rt_flux_toa_up']) + mean(out['rt_flux_sfc_dir'])
                + mean(out['rt_flux_sfc_dif']) - mean(out['rt_flux_sfc_up']))
-    absorbed = dz*mean((out['rt_flux_abs_dir'] + out['rt_flux_abs_dif']).sum(axis=0))
+    abs_tot = np.asarray(out['rt_flux_abs_dir'] + out['rt_flux_abs_dif'])
+    dz = np.diff(z_lev).reshape((-1,) + (1,)*(abs_tot.ndim - 1))
+    absorbed = mean((abs_tot*dz).sum(axis=0))
 
     return entering, leaving + absorbed
 
@@ -274,7 +276,7 @@ def test_rcemip_shortwave_tracer_closes_its_energy_budget(rcemip, solver):
     """In at the top, out at the boundaries or absorbed on the way."""
     atm, out = rcemip
 
-    entering, accounted = sw_budget(out[solver], atm['grid']['dz'])
+    entering, accounted = sw_budget(out[solver], atm['grid']['z_lev'])
     assert accounted == pytest.approx(entering, rel=0.01)
 
 
@@ -416,7 +418,7 @@ def test_les_shortwave_tracer_closes_its_energy_budget(les, solver):
     """Photons are conserved over a broken cloud field as over a uniform one."""
     atm, out = les
 
-    entering, accounted = sw_budget(out[solver], atm['grid']['dz'])
+    entering, accounted = sw_budget(out[solver], atm['grid']['z_lev'])
     assert accounted == pytest.approx(entering, rel=0.01)
 
 

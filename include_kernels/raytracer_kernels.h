@@ -52,6 +52,8 @@ namespace Rt_kernels
         // the crossing is never scored -- the box top already is the domain top.
         TF z_dom = TF(0.);
 
+        // The horizontal spacing is uniform and lives in the x and y of these; the
+        // vertical, which need not be, is the two axes below them.
         Vector<int> grid_cells;
         Vector<TF> grid_d;
         Vector<TF> grid_d_inv;
@@ -59,6 +61,8 @@ namespace Rt_kernels
         Vector<int> kn_grid;
         Vector<TF> kn_grid_d;
         Vector<TF> kn_grid_d_inv;
+        Z_axis z;
+        Z_axis kn_z;
 
         Vector<TF> sun_direction;
         TF inc_dir = TF(0.);
@@ -204,7 +208,7 @@ namespace Rt_kernels
     // qrng_offset is the photon's index in the global quasi-random sequence, so that
     // the threads of one launch together cover a contiguous block of it; rng_seed is
     // its counterpart for the pseudo-random stream.
-    template<bool independent_column>
+    template<bool independent_column, bool dz_constant>
     RTE3D_DEVICE_FUNCTION
     void trace_photons(
             const Scene& s, const int photons_to_shoot,
@@ -250,7 +254,7 @@ namespace Rt_kernels
             {
                 i_n = coord_to_index(photon.position.x, s.kn_grid_d_inv.x, s.kn_grid.x);
                 j_n = coord_to_index(photon.position.y, s.kn_grid_d_inv.y, s.kn_grid.y);
-                k_n = coord_to_index(photon.position.z, s.kn_grid_d_inv.z, s.kn_grid.z);
+                k_n = s.kn_z.index<dz_constant>(photon.position.z);
 
                 const TF sx = Kokkos::abs((photon.direction.x > 0
                         ? (i_n+1)*s.kn_grid_d.x - photon.position.x
@@ -259,8 +263,8 @@ namespace Rt_kernels
                         ? (j_n+1)*s.kn_grid_d.y - photon.position.y
                         : j_n*s.kn_grid_d.y - photon.position.y) / photon.direction.y);
                 const TF sz = Kokkos::abs((photon.direction.z > 0
-                        ? (k_n+1)*s.kn_grid_d.z - photon.position.z
-                        : k_n*s.kn_grid_d.z - photon.position.z) / photon.direction.z);
+                        ? s.kn_z.face<dz_constant>(k_n+1) - photon.position.z
+                        : s.kn_z.face<dz_constant>(k_n) - photon.position.z) / photon.direction.z);
 
                 d_max = independent_column ? sz : Kokkos::min(sx, Kokkos::min(sy, sz));
                 k_ext_null = s.k_null(k_n, j_n, i_n);
@@ -367,8 +371,8 @@ namespace Rt_kernels
 
                 const TF dz = photon.direction.z*dn;
                 photon.position.z = dz > 0
-                        ? Kokkos::min(photon.position.z + dz, (k_n+1)*s.kn_grid_d.z - s_min)
-                        : Kokkos::max(photon.position.z + dz, k_n*s.kn_grid_d.z + s_min);
+                        ? Kokkos::min(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n+1) - s_min)
+                        : Kokkos::max(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n) + s_min);
 
                 if (!independent_column)
                 {
@@ -388,7 +392,7 @@ namespace Rt_kernels
 
                 const int i = coord_to_index(photon.position.x, s.grid_d_inv.x, s.grid_cells.x);
                 const int j = coord_to_index(photon.position.y, s.grid_d_inv.y, s.grid_cells.y);
-                const int k = coord_to_index(photon.position.z, s.grid_d_inv.z, s.grid_cells.z);
+                const int k = s.z.index<dz_constant>(photon.position.z);
                 const int ij = s.column(i, j);
 
                 // A new cell, or a new kind of photon in it, ends the accumulation

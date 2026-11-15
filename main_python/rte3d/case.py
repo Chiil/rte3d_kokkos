@@ -121,10 +121,11 @@ def read_case(path):
 def read_grid(d, atm, nx, ny):
     """The Cartesian grid the ray tracer needs, or None if the file does not carry it.
 
-    The tracer works on a box of equally spaced cells, which the two-stream solver
-    never asks about, so a file may leave it out. The vertical is the `z` dimension:
-    those cells are resolved in three dimensions and everything above them is lumped
-    into one more cell on top, which is how rte-rrtmgp-cpp reads the same files.
+    The tracer works on a box of equally spaced cells in x and y, over face heights zh
+    that may be spaced as they like, which the two-stream solver never asks about, so a
+    file may leave it out. The vertical is the `z` dimension: those cells are resolved
+    in three dimensions and everything above them is lumped into one more cell on top,
+    as deep as the one below it, which is how rte-rrtmgp-cpp reads the same files.
 
     ngrid_x/y/z give the null-collision grid; a file without them gets the default.
     """
@@ -141,9 +142,14 @@ def read_grid(d, atm, nx, ny):
     nz_in = int(d.sizes['z'])
     dx = spacing('xh', 1.0)
 
+    z_lev = d['zh'].values.astype(np.float64)[:nz_in + 1]
+    lumped = nz_in < atm['nlay']
+    if lumped:
+        z_lev = np.append(z_lev, 2.0*z_lev[-1] - z_lev[-2])
+
     return dict(nx=nx, ny=ny,
-                nz=nz_in + 1 if nz_in < atm['nlay'] else nz_in,
-                dx=dx, dy=spacing('yh', dx), dz=spacing('zh', 1.0),
+                nz=nz_in + 1 if lumped else nz_in,
+                dx=dx, dy=spacing('yh', dx), z_lev=z_lev,
                 kn_x=int(d['ngrid_x'].values) if 'ngrid_x' in d else 0,
                 kn_y=int(d['ngrid_y'].values) if 'ngrid_y' in d else 0,
                 kn_z=int(d['ngrid_z'].values) if 'ngrid_z' in d else 0)

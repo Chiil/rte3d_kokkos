@@ -35,9 +35,24 @@ def exact_rtol(rte3d):
     return 1e-4 if rte3d.runtime().precision == 'single' else 1e-9
 
 
-def grid(**kwargs):
+# The face heights of the standard test box, equally spaced.
+Z_LEV = np.arange(NZ + 1)*DZ
+
+
+def stretched(nz=NZ, depth=NZ*DZ, ratio=1.2):
+    """Face heights over the same depth, each cell ratio times as deep as the one below.
+
+    At the default the top cell is fifteen times the bottom one, which puts the
+    null-collision blocks' faces, the cell faces and the lookup table's points all at
+    different heights.
+    """
+    dz = ratio**np.arange(nz)
+    return np.append(0.0, np.cumsum(dz))*depth/dz.sum()
+
+
+def grid(z_lev=Z_LEV, **kwargs):
     """The keyword arguments describing the standard test box."""
-    return dict(nx=NX, ny=NY, nz=NZ, dx=DX, dy=DY, dz=DZ, **kwargs)
+    return dict(nx=NX, ny=NY, nz=len(z_lev) - 1, dx=DX, dy=DY, z_lev=z_lev, **kwargs)
 
 
 def uniform(value, nlay=NZ):
@@ -50,9 +65,9 @@ def trace(rte3d, tau, ssa, alb, mu0, ppp=PHOTONS, **kwargs):
                             photons_per_pixel=ppp, **grid(**kwargs))
 
 
-def absorbed(out):
+def absorbed(out, z_lev=Z_LEV):
     """Column-integrated absorption [W/m2], from the per-unit-height fluxes."""
-    return (out['abs_dir'] + out['abs_dif']).sum(axis=0)*DZ
+    return ((out['abs_dir'] + out['abs_dif'])*np.diff(z_lev)[:, None]).sum(axis=0)
 
 
 @pytest.mark.parametrize('mu0', [1.0, 0.6, 0.25])
@@ -291,3 +306,88 @@ def test_the_seed_changes_the_noise_but_not_the_mean(rte3d):
     # And the same answer on average, within the noise of the domain mean.
     noise = d1.std()/np.sqrt(NCOL)
     assert abs(a1.mean() - a2.mean()) < 5*noise
+
+
+# ---------------------------------------------------------------------------
+# A vertical grid that is not equally spaced.
+#
+# Each of these gives every cell an optical depth in proportion to its depth, so the
+# atmosphere is the same uniform medium the tests above trace on equal cells, and only
+# the grid it is cut into differs.
+
+@pytest.mark.parametrize('independent_column', [False, True])
+def test_stretched_grid_direct_beam_is_beer_lambert_cell_by_cell(rte3d, independent_column):
+    """Without scattering, the cells absorb what the beam loses across them.
+
+    The surface flux pins the walk; the per-cell absorption pins the conversion of
+    counts to a flux per unit height, which divides by each cell's own depth.
+    """
+    mu0, k_ext = 0.6, 0.05/DZ
+    z_lev = stretched()
+    tau = np.repeat((k_ext*np.diff(z_lev))[:, None], NCOL, axis=1)
+
+    out = trace(rte3d, tau, uniform(0.0), np.zeros(NCOL), mu0,
+                independent_column=independent_column, z_lev=z_lev)
+
+    depth = z_lev[-1]
+    assert out['sfc_dir'].mean() == pytest.approx(
+        TSI*mu0*np.exp(-k_ext*depth/mu0), rel=0.02)
+    assert out['sfc_dif'].mean() == 0.0
+
+    # What the cells above each face absorb is what the beam lost before reaching it.
+    # Summed from the top rather than cell by cell: the thinnest cells see few enough
+    # collisions that their own absorption is noisy, where the sums are not.
+    beam = TSI*mu0*np.exp(-k_ext*(depth - z_lev)/mu0)
+    above = np.cumsum((out['abs_dir'].mean(axis=1)*np.diff(z_lev))[::-1])[::-1]
+    np.testing.assert_allclose(above, beam[-1] - beam[:-1], atol=0.005*TSI*mu0)
+
+
+def test_stretched_grid_energy_budget_closes(rte3d):
+    """The budget of test_energy_budget_closes, on cells of unequal depth."""
+    z_lev = stretched()
+    tau = np.repeat((0.1/DZ*np.diff(z_lev))[:, None], NCOL, axis=1)
+
+    out = trace(rte3d, tau, uniform(0.6), np.full(NCOL, 0.2), 1.0, ppp=8192,
+                z_lev=z_lev)
+
+    net_sfc = out['sfc_dir'] + out['sfc_dif'] - out['sfc_up']
+    residual = out['toa_dn'] - out['toa_up'] - net_sfc - absorbed(out, z_lev)
+
+    assert abs(residual.mean()) < 0.01*TSI
+
+
+@pytest.mark.parametrize('lumped', [False, True])
+def test_stretched_grid_agrees_with_the_equal_one(rte3d, lumped):
+    """The same scattering medium, cut into equal cells and into stretched ones.
+
+    A grid is a discretisation of a medium that, horizontally uniform and with the
+    extinction constant in height, has nothing for the cells to resolve: the boundary
+    fluxes are the same whatever the cells are, and differ here only by the noise. With
+    a lump, the top cell is the same layer of air on both grids, and the box below it
+    is cut differently.
+    """
+    k_ext, ssa0, albedo = 0.1/DZ, 0.9, 0.2
+    extra = 8 if lumped else 0
+
+    def run(z_lev):
+        tau_box = k_ext*np.diff(z_lev)
+        # The lump's eight layers above the box are each as deep as the box's top
+        # cell, so they hold the same air on both grids.
+        tau = np.append(tau_box, np.full(extra, tau_box[-1]))
+        nlay = len(tau)
+        return trace(rte3d, np.repeat(tau[:, None], NCOL, axis=1), uniform(ssa0, nlay),
+                     np.full(NCOL, albedo), 0.6, ppp=8192, z_lev=z_lev)
+
+    equal = run(Z_LEV)
+
+    # The stretched grid keeps the top cell's depth, so that the lump is the same.
+    z_lev = stretched(NZ - 1, (NZ - 1)*DZ)
+    z_lev = np.append(z_lev, z_lev[-1] + DZ)
+    other = run(z_lev)
+
+    for key in ('sfc_dir', 'sfc_dif', 'sfc_up', 'toa_up', 'tod_dn', 'tod_up'):
+        assert other[key].mean() == pytest.approx(equal[key].mean(), rel=0.02), key
+
+    assert absorbed(other, z_lev).mean() == pytest.approx(
+        absorbed(equal).mean(), rel=0.02)
+
