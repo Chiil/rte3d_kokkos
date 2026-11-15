@@ -322,6 +322,10 @@ namespace Rt_lw_kernels
         bool transition = false;
         int i_n = 0, j_n = 0, k_n = 0;
 
+        // The bottom and top of the current block, held rather than looked up again
+        // at every collision that has to stay inside it.
+        TF z_n_lo = TF(0.), z_n_hi = TF(0.);
+
         // The fine cell the last collision fell in, its optical properties, and the
         // weight absorbed there so far. Consecutive collisions land in the same cell
         // often enough -- null collisions above all -- that both the loads and the
@@ -339,6 +343,8 @@ namespace Rt_lw_kernels
                 i_n = coord_to_index(photon.position.x, s.kn_grid_d_inv.x, s.kn_grid.x);
                 j_n = coord_to_index(photon.position.y, s.kn_grid_d_inv.y, s.kn_grid.y);
                 k_n = s.kn_z.index<dz_constant>(photon.position.z);
+                z_n_lo = s.kn_z.face<dz_constant>(k_n);
+                z_n_hi = s.kn_z.face<dz_constant>(k_n+1);
 
                 const TF sx = Kokkos::abs((photon.direction.x > 0
                         ? (i_n+1)*s.kn_grid_d.x - photon.position.x
@@ -347,8 +353,8 @@ namespace Rt_lw_kernels
                         ? (j_n+1)*s.kn_grid_d.y - photon.position.y
                         : j_n*s.kn_grid_d.y - photon.position.y) / photon.direction.y);
                 const TF sz = Kokkos::abs((photon.direction.z > 0
-                        ? s.kn_z.face<dz_constant>(k_n+1) - photon.position.z
-                        : s.kn_z.face<dz_constant>(k_n) - photon.position.z) / photon.direction.z);
+                        ? z_n_hi - photon.position.z
+                        : z_n_lo - photon.position.z) / photon.direction.z);
 
                 d_max = independent_column ? sz : Kokkos::min(sx, Kokkos::min(sy, sz));
                 k_ext_null = s.k_null(k_n, j_n, i_n);
@@ -462,8 +468,8 @@ namespace Rt_lw_kernels
                 const Vector<TF> p_old = photon.position;
                 const TF dz = photon.direction.z*dn;
                 photon.position.z = dz > 0
-                        ? Kokkos::min(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n+1) - s_min)
-                        : Kokkos::max(photon.position.z + dz, s.kn_z.face<dz_constant>(k_n) + s_min);
+                        ? Kokkos::min(photon.position.z + dz, z_n_hi - s_min)
+                        : Kokkos::max(photon.position.z + dz, z_n_lo + s_min);
 
                 if (!independent_column)
                 {

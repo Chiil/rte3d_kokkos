@@ -81,19 +81,35 @@ namespace Raytracer
     }
 
 
+    // One point of a vertical lookup table: the cell the bottom of its interval is in,
+    // and the face, if any, that lies inside the interval. The table's spacing is
+    // finer than the thinnest cell, so there is never more than one. Aligned so that
+    // the walk reads both in one load.
+    struct alignas(2*sizeof(TF)) Lut_entry
+    {
+        TF face;    // the face inside the interval, or the largest TF if there is none
+        int k;      // the cell below that face
+    };
+
+
     // The vertical axis of a grid: n cells between the n+1 face heights lev, the first
     // of which is the surface at zero. The walk asks it which cell a height is in and
     // where a cell's faces are.
     //
     // dz_constant picks how. With equal spacing that is a multiplication by d_inv, as
-    // it is in x and y. Otherwise a lookup table on a spacing no coarser than the
-    // thinnest cell gives the cell at most one face away from the right one, and a
-    // step against lev corrects it -- the scheme of rte-rrtmgp-cpp's height_to_int.
-    // The walk is compiled for both, and the grid says which applies.
+    // it is in x and y. Otherwise a lookup table on a spacing finer than the thinnest
+    // cell gives, in one load, the cell at the bottom of the table interval and the
+    // face inside it, and one comparison against that face finishes the job. The walk
+    // is compiled for both, and the grid says which applies.
+    //
+    // rte-rrtmgp-cpp's height_to_int keeps the cell alone in its table and corrects it
+    // by stepping against lev, which is two loads where the second has to wait for
+    // the first; in a walk bound by its loads, that chain was most of what a stretched
+    // grid cost.
     struct Z_axis
     {
-        Array_map_1d<const TF> lev;   // (n+1) face heights [m]
-        Array_map_1d<const int> lut;  // (lut_size) the cell each table point is in
+        Array_map_1d<const TF> lev;         // (n+1) face heights [m]
+        Array_map_1d<const Lut_entry> lut;  // (lut_size)
         TF d = TF(0.), d_inv = TF(0.);
         TF lut_d_inv = TF(0.);
         int n = 0, lut_size = 0;
@@ -110,12 +126,8 @@ namespace Raytracer
             else
             {
                 const int i = static_cast<int>(z*lut_d_inv);
-                int k = lut(i < 0 ? 0 : (i < lut_size ? i : lut_size - 1));
-                while (k > 0 && z < lev(k))
-                    --k;
-                while (k < n - 1 && z >= lev(k + 1))
-                    ++k;
-                return k;
+                const Lut_entry e = lut(i < 0 ? 0 : (i < lut_size ? i : lut_size - 1));
+                return z >= e.face ? e.k + 1 : e.k;
             }
         }
 
@@ -138,7 +150,8 @@ namespace Raytracer
     //
     // The vertical is given by its nz+1 face heights, which need not be equally
     // spaced. The null-collision blocks in z then have their faces on cell faces, block
-    // kn_k starting at cell kn_k*nz/kn_z, so that each holds whole cells.
+    // kn_k starting at cell kn_k*nz/kn_z, so that each holds whole cells; there are
+    // never more of them than there are cells.
     struct Grid
     {
         int nx = 0, ny = 0, nz = 0;
@@ -150,7 +163,7 @@ namespace Raytracer
         std::vector<TF> z_lev;          // (nz+1)
         Array_1d<TF> z_lev_d;           // (nz+1)
         Array_1d<TF> kn_z_lev_d;        // (kn_z+1)
-        Array_1d<int> z_lut, kn_z_lut;  // (lut_size)
+        Array_1d<Lut_entry> z_lut, kn_z_lut;  // (lut_size)
         TF lut_dz = TF(0.);
 
         // Whether every cell is equally deep, to the round-off of the face heights.

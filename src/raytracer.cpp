@@ -57,19 +57,25 @@ namespace
     }
 
 
-    // The cell of faces lev that each point i*lut_dz of the lookup table is in.
-    std::vector<int> make_lut(const std::vector<TF>& lev, const int lut_size, const TF lut_dz)
+    // The lookup table over faces lev: for each interval [i, i+1)*lut_dz, the cell its
+    // bottom is in and the face inside it. lut_dz is below the thinnest cell, so no
+    // interval holds two.
+    std::vector<Raytracer::Lut_entry> make_lut(
+            const std::vector<TF>& lev, const int lut_size, const TF lut_dz)
     {
         const int n = static_cast<int>(lev.size()) - 1;
 
-        std::vector<int> lut(lut_size);
+        std::vector<Raytracer::Lut_entry> lut(lut_size);
         int k = 0;
         for (int i=0; i<lut_size; ++i)
         {
             const TF z = i*lut_dz;
             while (k < n - 1 && z >= lev[k+1])
                 ++k;
-            lut[i] = k;
+
+            const bool inside = k < n - 1 && lev[k+1] < (i + 1)*lut_dz;
+            lut[i] = Raytracer::Lut_entry{
+                    inside ? lev[k+1] : std::numeric_limits<TF>::max(), k};
         }
 
         return lut;
@@ -302,7 +308,8 @@ Raytracer::Grid Raytracer::Grid::make(
     grid.dx = dx; grid.dy = dy;
     grid.kn_x = blocks(nx, kn_x);
     grid.kn_y = blocks(ny, kn_y);
-    grid.kn_z = blocks(nz, kn_z);
+    // A block thinner than a cell would have no cell face to sit on.
+    grid.kn_z = std::min(nz, blocks(nz, kn_z));
 
     grid.z_lev.resize(nz + 1);
     for (int k=0; k<=nz; ++k)
@@ -327,10 +334,10 @@ Raytracer::Grid Raytracer::Grid::make(
         kn_z_lev[k] = grid.z_lev[(static_cast<long long>(k)*nz)/grid.kn_z];
     kn_z_lev[grid.kn_z] = grid.z_lev[nz];
 
-    // A lookup table no coarser than the thinnest cell, so that a height is never
-    // more than one face away from the cell the table gives for it.
+    // A lookup table finer than the thinnest cell, so that no interval of it holds
+    // more than one face.
     const TF zsize = grid.z_lev[nz];
-    const int lut_size = static_cast<int>(std::ceil(zsize/grid.dz_min()));
+    const int lut_size = static_cast<int>(zsize/grid.dz_min()) + 1;
     grid.lut_dz = zsize/lut_size;
 
     grid.z_lev_d = to_device(grid.z_lev, "rt_z_lev");
@@ -356,7 +363,7 @@ Raytracer::Z_axis Raytracer::Grid::z_axis() const
 {
     Z_axis a;
     a.lev = Array_map_1d<const TF>(z_lev_d.data(), nz + 1);
-    a.lut = Array_map_1d<const int>(z_lut.data(), z_lut.extent(0));
+    a.lut = Array_map_1d<const Lut_entry>(z_lut.data(), z_lut.extent(0));
     a.n = nz;
     a.d = z_lev[nz]/nz;
     a.d_inv = TF(1.)/a.d;
@@ -371,7 +378,7 @@ Raytracer::Z_axis Raytracer::Grid::kn_z_axis() const
 {
     Z_axis a;
     a.lev = Array_map_1d<const TF>(kn_z_lev_d.data(), kn_z + 1);
-    a.lut = Array_map_1d<const int>(kn_z_lut.data(), kn_z_lut.extent(0));
+    a.lut = Array_map_1d<const Lut_entry>(kn_z_lut.data(), kn_z_lut.extent(0));
     a.n = kn_z;
     a.d = z_lev[nz]/kn_z;
     a.d_inv = TF(1.)/a.d;
