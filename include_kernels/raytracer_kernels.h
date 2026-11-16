@@ -29,6 +29,7 @@ namespace Rt_kernels
         Vector<TF> position;
         Vector<TF> direction;
         Photon_kind kind;
+        int n_events;           // collisions and face crossings since launch
     };
 
 
@@ -135,6 +136,7 @@ namespace Rt_kernels
 
         score(&s.toa_dn(s.column(i, j)), TF(1.));
         weight = TF(1.);
+        photon.n_events = 0;
     }
 
 
@@ -252,6 +254,24 @@ namespace Rt_kernels
 
         while (photons_shot < photons_to_shoot)
         {
+            // A walk that will not end: the cell it last collided in absorbs what is
+            // left of it, so that the energy still adds up, and a new photon starts.
+            if (++photon.n_events > max_events())
+            {
+                if (c_k >= 0)
+                {
+                    flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
+                    absorbed = weight;
+                    c_kind = photon.kind;
+                    flush_absorbed(s, absorbed, c_k, c_ij, c_kind);
+                }
+
+                d_max = TF(0.);
+                transition = false;
+                reset_photon(photon, weight, photons_shot, photons_to_shoot, s, s_min, qrng, rng);
+                continue;
+            }
+
             // Entering a new block of the null-collision grid: find it, and how far
             // the photon may go before it has to be looked up again.
             if (d_max == TF(0.))

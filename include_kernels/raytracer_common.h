@@ -27,6 +27,26 @@ namespace Rt_common
     // followed further. Iwabuchi (2006), and the reference's w_thres.
     KOKKOS_INLINE_FUNCTION constexpr TF w_thres() { return TF(0.5); }
 
+    // The smallest vertical direction cosine a photon may travel at. A deviate of
+    // exactly 0 or 0.5 -- in single precision about one draw in 2^24, so several times
+    // in every call -- would otherwise send a photon off exactly horizontally, and such
+    // a photon can never leave its layer: in clear-sky longwave nothing turns it, and
+    // where k_abs/k_ext_null is below a rounding of one the weight never falls either.
+    KOKKOS_INLINE_FUNCTION constexpr TF mu_min() { return TF(1.e-6); }
+
+    // The most collisions and face crossings one photon may take. Ordinary photons
+    // take hundreds to thousands; this only cuts off a walk that would not end, which
+    // would otherwise hold the whole launch waiting on one thread.
+    KOKKOS_INLINE_FUNCTION constexpr int max_events() { return 10000000; }
+
+    // A vertical direction cosine kept at least mu_min() off the horizontal, on the
+    // side its sign puts it, -0 included.
+    KOKKOS_INLINE_FUNCTION
+    TF off_horizontal(const TF mu)
+    {
+        return Kokkos::copysign(Kokkos::max(Kokkos::abs(mu), mu_min()), mu);
+    }
+
 
     template<typename T> KOKKOS_INLINE_FUNCTION
     Vector<T> operator+(const Vector<T> a, const Vector<T> b)
@@ -127,7 +147,7 @@ namespace Rt_common
 
         return Vector<TF>{sin_theta*Kokkos::sin(azimuth),
                           sin_theta*Kokkos::cos(azimuth),
-                          sign*mu};
+                          off_horizontal(sign*mu)};
     }
 
 
@@ -160,7 +180,10 @@ namespace Rt_common
 
         const TF phi = TF(2.*M_PI)*rng();
 
-        return cos_scat*direction + sin_scat*(Kokkos::sin(phi)*t1 + Kokkos::cos(phi)*t2);
+        Vector<TF> scattered = cos_scat*direction + sin_scat*(Kokkos::sin(phi)*t1 + Kokkos::cos(phi)*t2);
+        scattered.z = off_horizontal(scattered.z);
+
+        return scattered;
     }
 
 

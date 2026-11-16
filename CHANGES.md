@@ -41,6 +41,8 @@ precision the fluxes agree with the reference to about 1e-13.
 | Floor on `k²` is 1e-12 in both bands, not `1e4·eps` | `1e4·eps` = 1.2e-3 in single precision and biases k (up to 0.6 W/m²) |
 | LW two-stream source rewritten without the divide-by-τ difference | The reference's error grows like eps/τ (37.6 W/m² single precision at τ = 1e-6) |
 | `feta` relative to the clamped `jeta` | The reference jumps to the wrong node at eta = 1, exactly what an absent second gas gives (#425) |
+| Ray tracers keep every new direction at least 1e-6 off the horizontal in cosine | A deviate of exactly 0 or 0.5 (one in 2^24 in single precision) gave `direction.z == 0`, a photon that cannot leave its layer |
+| Ray tracers end a photon after 10^7 events, depositing its weight in its last cell | Where `k_abs/k_ext_null` rounds `1 - f_abs` to one, a trapped photon never loses weight and hung the whole launch |
 
 ## Reference defects
 

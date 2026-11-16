@@ -34,6 +34,7 @@ namespace Rt_lw_kernels
         Source source;
         int source_idx;         // the column, or the cell, depending on the source
         TF emitted;
+        int n_events;           // collisions and face crossings since emission
     };
 
 
@@ -261,7 +262,7 @@ namespace Rt_lw_kernels
 
             photon.direction.x = sin_theta*Kokkos::sin(azimuth);
             photon.direction.y = sin_theta*Kokkos::cos(azimuth);
-            photon.direction.z = mu;
+            photon.direction.z = off_horizontal(mu);
 
             photon.source = Source::Atmosphere;
             photon.source_idx = k*ncol + ij;
@@ -269,6 +270,7 @@ namespace Rt_lw_kernels
 
         photon.emitted = TF(0.);
         weight = TF(1.);
+        photon.n_events = 0;
     }
 
 
@@ -336,6 +338,26 @@ namespace Rt_lw_kernels
 
         while (photons_shot < photons_to_shoot)
         {
+            // A walk that will not end: the cell it last collided in absorbs what is
+            // left of it, so that the energy still adds up, and a new photon starts.
+            if (++photon.n_events > max_events())
+            {
+                if (c_k >= 0)
+                {
+                    absorbed += weight;
+                    photon.emitted += weight;
+                    flush_absorbed(s, absorbed, c_k, c_ij);
+                }
+
+                d_max = TF(0.);
+                transition = false;
+                write_emission(s, photon);
+                reset_photon<dz_constant>(
+                        photon, weight, photons_shot, photons_to_shoot, s, s_min,
+                        cursor, u0, du, rng);
+                continue;
+            }
+
             // Entering a new block of the null-collision grid: find it, and how far
             // the photon may go before it has to be looked up again.
             if (d_max == TF(0.))
