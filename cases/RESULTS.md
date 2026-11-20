@@ -427,7 +427,8 @@ copies its result out, the scaling and assignment happen on the host, and the de
 copy of `col_dry_arr`, which every kernel after it reads, is never written, so all
 column amounts on the device are zero. `tests/build_reference_acc.sh` builds from a copy
 with the missing `!$acc update device(col_dry_arr)` added; the timings above are with that
-fix, and the flux columns show it is the whole of the problem.
+fix, and the flux columns show it is the whole of the problem. Upstream fixed it in
+#433, and the script now builds the reference unchanged.
 
 
 ### An approximate divide in the solvers

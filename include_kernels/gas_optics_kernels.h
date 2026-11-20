@@ -157,10 +157,10 @@ namespace Gas_optics_kernels
     // entry of the first. Reference: interpolate1D.
     //
     // The fraction is taken relative to the clamped index, so values outside the table
-    // extrapolate linearly from the edge interval on both sides. The reference takes it
-    // from the unclamped position instead (rte-rrtmgp #426): at exactly the table
-    // maximum that reads the next-to-last node, and above it the fraction wraps back
-    // into the last interval. Inside the table the two are identical.
+    // extrapolate linearly from the edge interval on both sides. Before #435 the
+    // reference took it from the unclamped position (rte-rrtmgp #426): at exactly the
+    // table maximum that read the next-to-last node, and above it the fraction wrapped
+    // back into the last interval.
     template<typename Table>
     KOKKOS_INLINE_FUNCTION
     TF interpolate_1d(

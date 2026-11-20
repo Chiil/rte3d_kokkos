@@ -1,7 +1,7 @@
 # Changes from the reference rte-rrtmgp
 
 What rte3d does differently from the Fortran reference (`rte-rrtmgp/`, followed to
-main #431) and why. [`DESIGN.md`](DESIGN.md) has the full reasoning.
+main #438, v1.10) and why. [`DESIGN.md`](DESIGN.md) has the full reasoning.
 
 ## Structure
 
@@ -40,7 +40,6 @@ precision the fluxes agree with the reference to about 1e-13.
 | SW direct beam interpolated across the singularity at k·μ0 = 1 | The reference's `+eps` denominator loses Rdir/Tdir in single precision (errors up to 0.2 of the incoming flux) |
 | Floor on `k²` is 1e-12 in both bands, not `1e4·eps` | `1e4·eps` = 1.2e-3 in single precision and biases k (up to 0.6 W/m²) |
 | LW two-stream source rewritten without the divide-by-τ difference | The reference's error grows like eps/τ (37.6 W/m² single precision at τ = 1e-6) |
-| `feta` relative to the clamped `jeta` | The reference jumps to the wrong node at eta = 1, exactly what an absent second gas gives (#425) |
 | Ray tracers keep every new direction at least 1e-6 off the horizontal in cosine | A deviate of exactly 0 or 0.5 (one in 2^24 in single precision) gave `direction.z == 0`, a photon that cannot leave its layer |
 | Ray tracers end a photon after 10^7 events, depositing its weight in its last cell | Where `k_abs/k_ext_null` rounds `1 - f_abs` to one, a trapped photon never loses weight and hung the whole launch |
 
@@ -48,11 +47,15 @@ precision the fluxes agree with the reference to about 1e-13.
 
 | defect | handling |
 |---|---|
-| `interpolation` indexes `temp_ref` out of bounds off the table (#315, open) | rte3d keeps v1.8's clamped index; tests compare only where the reference is defined |
 | `LW_diff_sec = 1.66` is a single-precision literal | Matched bit-for-bit, not fixed |
 | `flux_upJac` mis-documented in `rte_kernels.h` | Follows the Fortran declaration `(ncol, nlay+1)` |
 | `lw_solver_noscat` sets the top radiance to `inc_flux/(pi*weight)`, so each of `nmus` angles returns the full incident flux (#427, open) | Fixed: `inc_flux/pi`, so the quadrature returns `inc_flux*sum(weights)`; tests compare against the reference with a matched boundary condition |
-| `interpolate1D` takes the Planck fraction from the unclamped position: the next-to-last node at the table maximum, a wrapped fraction above it (#426, open) | Fixed: fraction relative to the clamped index, identical inside the table |
+
+Three defects rte3d fixed during the port have since been fixed upstream, the same way,
+in #435 and #437: `ftemp` read `temp_ref` out of bounds off the table (#315); the Planck
+`interpolate1D` took its fraction from the unclamped position (#426); `feta` put all
+weight on the wrong node at eta = 1, which an absent second gas gives (#425). The tests
+compare against the reference in all three cases, so a reference before #437 fails them.
 
 ## Not ported
 

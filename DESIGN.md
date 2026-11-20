@@ -390,11 +390,9 @@ single precision.
 
 - **`LW_diff_sec = 1.66` is a single-precision literal** promoted to double, so its
   value is 1.65999996662139893. rte3d matches it bit-for-bit rather than "fixing" it.
-- **Since v1.9, `interpolation` indexes `temp_ref` out of bounds** for a temperature
-  off the table: `ftemp` uses the unclamped `jtemp_` (rte-rrtmgp #315, still open as of
-  #431). rte3d keeps
-  the clamped index v1.8 used; `test_interpolation_clamps_out_of_range_inputs`
-  compares the weights only where the reference is defined.
+- **From v1.9 to #435, `interpolation` indexed `temp_ref` out of bounds** for a
+  temperature off the table: `ftemp` used the unclamped `jtemp_` (rte-rrtmgp #315).
+  rte3d kept the clamped index v1.8 used, which #435 restored upstream.
 - **`rte_kernels.h` mis-documents `flux_upJac`** as `(ncol,nlay+1,ngpt)`; the Fortran
   declares it `(ncol,nlay+1)`, since only broadband Jacobians are provided.
 

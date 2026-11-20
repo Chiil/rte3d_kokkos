@@ -92,13 +92,12 @@ def test_interpolation_matches_reference(rte3d, fortran_ref, nlay, ncol, zero_co
 
 def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
     """Temperatures and pressures outside the table must clamp to its edges, the same
-    way in both implementations.
+    way in both implementations: off the table the weights extrapolate linearly from
+    the edge interval, and still sum to one.
 
-    The weights are compared only where the reference is well defined. Since v1.9
-    (rte-rrtmgp #315) it computes ftemp from temp_ref(jtemp_) with the *unclamped*
-    index, which for a temperature off the table reads outside temp_ref. rte3d keeps
-    the clamped index v1.8 used, so there the weights extrapolate linearly from the
-    edge interval, and still sum to one."""
+    Needs a reference from #435 or later. Before it (rte-rrtmgp #315), the reference
+    computed ftemp from temp_ref(jtemp_) with the *unclamped* index, which for a
+    temperature off the table reads outside temp_ref."""
     rng = np.random.default_rng(31)
     k = kdist(rng)
     ngas = k['vmr_ref'].shape[1] - 1
@@ -116,11 +115,10 @@ def test_interpolation_clamps_out_of_range_inputs(rte3d, fortran_ref):
     np.testing.assert_array_equal(actual['jtemp'], expected['jtemp'] - 1)
     np.testing.assert_array_equal(actual['jpress'], expected['jpress'] - 1)
     assert_close(
-        actual['fmajor'][:, :, :, :, 2:],
-        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2))[:, :, :, :, 2:],
+        actual['fmajor'],
+        np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)),
         rtol=tolerance(rte3d))
-    assert_close(
-        actual['fmajor'][:, :, :, :, :2].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))
+    assert_close(actual['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))
 
 
 def test_weights_are_a_partition_of_unity(rte3d):
@@ -296,13 +294,10 @@ def test_planck_source_matches_reference(rte3d, fortran_ref, nlay, ncol):
                                    err_msg=f'{key} differs from the reference')
 
 
-def test_planck_table_edges_extrapolate(rte3d):
-    """At and beyond the ends of the Planck table the interpolation must continue the
-    edge interval linearly. The reference takes the fraction from the unclamped
-    position (rte-rrtmgp #426): at exactly the table maximum it returns the
-    next-to-last node, and above it wraps back into the last interval. With the Planck
-    fractions all one, the sources are the band Planck function itself."""
-    rng = np.random.default_rng(52)
+def planck_edge_case(rng):
+    """A Planck table with all fractions one, so the sources are the band Planck
+    function itself, and temperatures exactly at its maximum, half a node above it and
+    a quarter node below its minimum."""
     bundle = kdist_full(rng)
     kd, grid = flatten_kdist(bundle)
 
@@ -318,7 +313,6 @@ def test_planck_table_edges_extrapolate(rte3d):
     kd['totplnk_delta'] = 1.0
     t_max = grid['temp_ref_min'] + (nplancktemp - 1)*kd['totplnk_delta']
 
-    # Exactly the maximum, half a node above it, and a quarter node below the minimum.
     t_edge = np.array([t_max, t_max + 0.5, grid['temp_ref_min'] - 0.25])
     ncol = t_edge.size
     nlay = 2
@@ -326,6 +320,18 @@ def test_planck_table_edges_extrapolate(rte3d):
     ngas = grid['vmr_ref'].shape[1] - 1
     a = atmosphere(rng, ngas, nlay, ncol)
     tlev = np.broadcast_to(t_edge, (nlay + 1, ncol)).copy()
+
+    return kd, grid, a, tlev, t_edge, nlay
+
+
+def test_planck_table_edges_extrapolate(rte3d):
+    """At and beyond the ends of the Planck table the interpolation must continue the
+    edge interval linearly: at exactly the table maximum it returns the last node.
+    Before #435 the reference took the fraction from the unclamped position
+    (rte-rrtmgp #426), returning the next-to-last node there and wrapping back into
+    the last interval above it."""
+    kd, grid, a, tlev, t_edge, nlay = planck_edge_case(np.random.default_rng(52))
+    nplancktemp = kd['totplnk'].shape[1]
 
     out = rte3d.compute_planck_source(
         kdist=kd, tlev=tlev, tsfc=t_edge, sfc_lay=nlay - 1, **grid, **a)
@@ -345,6 +351,23 @@ def test_planck_table_edges_extrapolate(rte3d):
     assert_close(out['sfc_source_jac'], planck(t_edge + 1.0) - expected, rtol=tol)
     for ilev in range(nlay + 1):
         assert_close(out['lev_source'][:, ilev], expected, rtol=tol)
+
+
+def test_planck_table_edges_match_reference(rte3d, fortran_ref):
+    """The same edges against the reference. Needs a reference from #435 or later."""
+    kd, grid, a, tlev, t_edge, nlay = planck_edge_case(np.random.default_rng(52))
+
+    interp = fortran_ref.interpolation(flavor=kd['flavor'], **grid, **a)
+    expected = fortran_ref.compute_planck_source(
+        kd, interp, a['tlay'], tlev, t_edge, nlay - 1, grid['neta'])
+
+    actual = rte3d.compute_planck_source(
+        kdist=kd, tlev=tlev, tsfc=t_edge, sfc_lay=nlay - 1, **grid, **a)
+
+    tol = tolerance(rte3d)
+    for key in ('lay_source', 'lev_source', 'sfc_source', 'sfc_source_jac'):
+        assert_close(actual[key], expected[key], rtol=tol,
+                                   err_msg=f'{key} differs from the reference')
 
 
 def test_planck_sources_feed_the_longwave_solver(rte3d):
@@ -385,9 +408,9 @@ def test_planck_sources_feed_the_longwave_solver(rte3d):
 
 def test_eta_one_weights_the_last_node(rte3d):
     """With a flavour's second gas absent, eta is exactly 1 and all eta weight belongs
-    on the last node, neta-1. The reference takes the fraction as loceta - floor(loceta)
-    against an index clamped to neta-2, so there it puts all weight on node neta-2
-    instead; rte3d takes it relative to the clamped index."""
+    on the last node, neta-1. Before #437 the reference took the fraction as
+    loceta - floor(loceta) against an index clamped to neta-2 (rte-rrtmgp #425), so
+    there it put all weight on node neta-2 instead."""
     rng = np.random.default_rng(33)
     k = kdist(rng, ngas=4, nflav=2)
     k['flavor'] = np.array([[1, 2], [3, 4]], dtype=np.int32)
@@ -400,3 +423,23 @@ def test_eta_one_weights_the_last_node(rte3d):
     # fminor is (nflav, itemp, ieta, nlay, ncol).
     np.testing.assert_array_equal(out['fminor'][:, :, 0], 0.0)
     assert_close(out['fmajor'].sum(axis=(1, 2, 3)), 1.0, rtol=tolerance(rte3d))
+
+
+def test_eta_one_matches_reference(rte3d, fortran_ref):
+    """The same case against the reference. Needs a reference from #437 or later."""
+    rng = np.random.default_rng(33)
+    k = kdist(rng, ngas=4, nflav=2)
+    k['flavor'] = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    a = atmosphere(rng, 4, 5, 3)
+    a['col_gas'][[2, 4]] = 0.0
+
+    expected = fortran_ref.interpolation(**k, **a)
+    actual = rte3d.interpolation(**k, **a)
+
+    tol = tolerance(rte3d)
+    np.testing.assert_array_equal(
+        actual['jeta'], np.transpose(expected['jeta'], (0, 3, 1, 2)) - 1)
+    assert_close(
+        actual['fminor'], np.transpose(expected['fminor'], (0, 3, 4, 1, 2)), rtol=tol)
+    assert_close(
+        actual['fmajor'], np.transpose(expected['fmajor'], (0, 3, 4, 5, 1, 2)), rtol=tol)

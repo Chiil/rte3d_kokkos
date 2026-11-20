@@ -15,7 +15,7 @@
 #
 # Neither needs NetCDF: Python reads the coefficient file and passes arrays in.
 #
-# The reference is rte-rrtmgp main as of #431 (Nov 2026). The file lists below assume
+# The reference is rte-rrtmgp main as of #438 (v1.10, Nov 2026). The file lists below assume
 # the rte/{kernels,frontend} and rrtmgp/{kernels,frontend} layout introduced by #378;
 # a v1.9 checkout, with its rte-kernels/ directories, no longer builds with this
 # script. Its conventions are rte3d's: the longwave quadrature weights scale by pi
