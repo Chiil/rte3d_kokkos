@@ -192,6 +192,85 @@ def test_surface_albedo_reflects_what_it_should(rte3d):
     assert out['toa_up'].mean() == pytest.approx(albedo*TSI, rel=0.02)
 
 
+N_WATER = 1.34
+
+
+def fresnel(mu, n=N_WATER):
+    """The unpolarized Fresnel reflectance of light arriving at cosine mu on water."""
+    cos_t = np.sqrt(1.0 - (1.0 - mu**2)/n**2)
+    rs = (mu - n*cos_t)/(mu + n*cos_t)
+    rp = (n*mu - cos_t)/(n*mu + cos_t)
+    return 0.5*(rs**2 + rp**2)
+
+
+@pytest.mark.parametrize('mu0', [1.0, 0.6, 0.25])
+def test_a_specular_surface_reflects_the_fresnel_share(rte3d, mu0):
+    """Calm water under a transparent atmosphere mirrors the Fresnel reflectance.
+
+    Every photon arrives in the direct beam at the sun's angle, so the upward surface
+    flux is exact -- up to the counters' 2^-32 on every score, which is relatively
+    larger for weights of a few percent than for the ones exact_rtol was set by. The
+    mirrored photons are light enough to go through Russian roulette at once, so what
+    reaches the top is noisier than over a Lambertian surface.
+    """
+    out = trace(rte3d, uniform(1e-12), uniform(0.0), np.full(NCOL, 0.3), mu0,
+                sfc_type=np.full(NCOL, 1))
+
+    r = fresnel(mu0)
+    expected = r*TSI*mu0
+    rtol = max(exact_rtol(rte3d), 2.0**-32/r)
+    assert out['sfc_up'].mean() == pytest.approx(expected, rel=rtol)
+    assert out['toa_up'].mean() == pytest.approx(expected, rel=0.1)
+
+
+@pytest.mark.parametrize('mu0', [1.0, 0.6])
+def test_water_adds_a_lambertian_albedo_to_what_fresnel_lets_through(rte3d, mu0):
+    """Type 2 reflects the Fresnel share plus the albedo on the rest."""
+    albedo = 0.3
+    out = trace(rte3d, uniform(1e-12), uniform(0.0), np.full(NCOL, albedo), mu0,
+                sfc_type=np.full(NCOL, 2))
+
+    r = fresnel(mu0)
+    expected = (r + (1.0 - r)*albedo)*TSI*mu0
+    assert out['sfc_up'].mean() == pytest.approx(expected, rel=exact_rtol(rte3d))
+    assert out['toa_up'].mean() == pytest.approx(expected, rel=0.02)
+
+
+def test_each_column_reflects_by_its_own_surface_type(rte3d):
+    """Land and water side by side, each column reflecting as its own surface says.
+
+    Per column, as a ratio: how many photons land in one pixel is not exact, only the
+    domain mean is, but every one of them is reflected by that pixel's surface.
+    """
+    albedo = 0.3
+    mu0 = 0.6
+    sfc_type = np.arange(NCOL) % 3
+    out = trace(rte3d, uniform(1e-12), uniform(0.0), np.full(NCOL, albedo), mu0,
+                sfc_type=sfc_type, independent_column=True)
+
+    r = fresnel(mu0)
+    reflectance = np.choose(sfc_type, [albedo, r, r + (1.0 - r)*albedo])
+    rtol = max(exact_rtol(rte3d), 2.0**-32/r)
+    np.testing.assert_allclose(out['sfc_up']/out['sfc_dir'], reflectance, rtol=rtol)
+
+
+def test_energy_budget_closes_over_water(rte3d):
+    """The budget of test_energy_budget_closes, with mirroring and diffuse reflection."""
+    out = trace(rte3d, uniform(0.1), uniform(0.6), np.full(NCOL, 0.2), 0.6, ppp=8192,
+                sfc_type=np.full(NCOL, 2))
+
+    net_sfc = out['sfc_dir'] + out['sfc_dif'] - out['sfc_up']
+    residual = out['toa_dn'] - out['toa_up'] - net_sfc - absorbed(out)
+
+    assert abs(residual.mean()) < 0.01*TSI
+
+
+def test_an_unknown_surface_type_is_refused(rte3d):
+    with pytest.raises(ValueError):
+        trace(rte3d, uniform(0.1), uniform(0.0), np.full(NCOL, 0.2), 1.0,
+              sfc_type=np.full(NCOL, 3))
+
+
 @pytest.mark.parametrize('mu0', [1.0, 0.6])
 @pytest.mark.parametrize('ssa0', [0.5, 0.9, 1.0])
 def test_uniform_atmosphere_matches_the_two_stream(rte3d, mu0, ssa0):

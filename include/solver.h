@@ -251,6 +251,7 @@ namespace Solver
             const TF azi,
             const Array_1d_h<const TF>& toa_src,      // (ngpt), on the host
             const Array_2d<const TF>& sfc_alb_dir,    // (ngpt, ncol)
+            const Array_1d<const int>& sfc_type,      // (ncol), see Raytracer::trace_rays
             const Cloud_input& clouds,
             const Raytracer::Fluxes_rt& fluxes,
             const unsigned int seed = 0);         // photon paths, see Raytracer::trace_rays

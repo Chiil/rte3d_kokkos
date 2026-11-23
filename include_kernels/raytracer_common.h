@@ -151,6 +151,54 @@ namespace Rt_common
     }
 
 
+    // How a surface reflects, one per column. Lambertian reflects the albedo
+    // diffusely; Specular is a flat water surface, mirroring the Fresnel reflectance
+    // and absorbing the rest; Specular_lambertian adds the light that enters the water
+    // and comes back out, a Lambertian albedo on the share Fresnel lets through. After
+    // rte-rrtmgp-cpp #82.
+    enum Surface_type : int { Lambertian = 0, Specular = 1, Specular_lambertian = 2 };
+
+    // The refractive index of water relative to air.
+    KOKKOS_INLINE_FUNCTION constexpr TF n_water() { return TF(1.34); }
+
+
+    // The Fresnel reflectance of unpolarized light arriving at cosine cos_i on an
+    // interface of relative refractive index n_rel, the mean of the s and p
+    // polarizations. Light at normal incidence on water reflects 2%, at grazing all of it.
+    KOKKOS_INLINE_FUNCTION
+    TF fresnel_unpolarized(const TF cos_i, const TF n_rel)
+    {
+        const TF sin2_t = (TF(1.) - cos_i*cos_i) / (n_rel*n_rel);
+        const TF cos_t = Kokkos::sqrt(Kokkos::max(TF(0.), TF(1.) - sin2_t));
+        const TF rs = (cos_i - n_rel*cos_t) / (cos_i + n_rel*cos_t);
+        const TF rp = (n_rel*cos_i - cos_t) / (n_rel*cos_i + cos_t);
+        return TF(0.5)*(rs*rs + rp*rp);
+    }
+
+
+    // The specular and diffuse reflectance of a surface for a photon arriving at
+    // cosine cos_i to the vertical.
+    struct Surface_reflectance
+    {
+        TF spec;
+        TF diff;
+    };
+
+    KOKKOS_INLINE_FUNCTION
+    Surface_reflectance surface_reflectance(const int type, const TF albedo, const TF cos_i)
+    {
+        if (type == Lambertian)
+            return {TF(0.), albedo};
+
+        const TF r_spec = fresnel_unpolarized(cos_i, n_water());
+
+        if (type == Specular)
+            return {r_spec, TF(0.)};
+        else
+            return {r_spec, (TF(1.) - r_spec)*albedo};
+    }
+
+
     // A direction cos_scat away from the old one, at a random azimuth about it.
     RTE3D_DEVICE_FUNCTION
     Vector<TF> scatter_direction(const Vector<TF>& direction, const TF cos_scat, Rand::Rng& rng)

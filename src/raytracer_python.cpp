@@ -18,6 +18,32 @@ namespace
 }
 
 
+Array_1d<int> Raytracer::sfc_type_from_numpy(
+        const std::optional<Numpy::In<int>>& a, const int ncol)
+{
+    Array_1d<int> sfc_type("sfc_type", ncol);
+
+    if (!a.has_value())
+        return sfc_type;
+
+    const auto sfc_type_h = Numpy::to_host_1d<int>(*a, "sfc_type");
+
+    if (static_cast<int>(sfc_type_h.extent(0)) != ncol)
+        throw std::invalid_argument("sfc_type has " + std::to_string(sfc_type_h.extent(0))
+                + " columns where the grid has " + std::to_string(ncol));
+
+    // The values of Rt_common::Surface_type, which lives with the kernels.
+    for (int icol=0; icol<ncol; ++icol)
+        if (sfc_type_h(icol) < 0 || sfc_type_h(icol) > 2)
+            throw std::invalid_argument("sfc_type must be 0 (Lambertian), 1 (specular) or "
+                    "2 (specular and Lambertian), not " + std::to_string(sfc_type_h(icol)));
+
+    Kokkos::deep_copy(sfc_type, sfc_type_h);
+
+    return sfc_type;
+}
+
+
 void Raytracer::init_python_bindings(py::module_& m)
 {
     m.def("trace_rays",
@@ -32,7 +58,8 @@ void Raytracer::init_python_bindings(py::module_& m)
            const std::optional<Numpy::In<TF>>& asy_cld,
            const bool top_at_1, const bool independent_column,
            const int kn_x, const int kn_y, const int kn_z,
-           const unsigned int seed) -> py::dict
+           const unsigned int seed,
+           const std::optional<Numpy::In<int>>& sfc_type) -> py::dict
         {
             Runtime::get();
 
@@ -56,6 +83,8 @@ void Raytracer::init_python_bindings(py::module_& m)
             if (nz > nlay)
                 throw std::invalid_argument("The ray-tracing grid is deeper than the atmosphere");
 
+            const auto sfc_type_d = sfc_type_from_numpy(sfc_type, ncol);
+
             const auto fluxes = Fluxes_rt::make(grid);
             fluxes.zero();
             const auto scratch = Scratch::make(grid);
@@ -70,6 +99,7 @@ void Raytracer::init_python_bindings(py::module_& m)
                     as_const_2d(tau_gas_d), as_const_2d(ssa_gas_d),
                     as_const_2d(tau_cld_d), as_const_2d(ssa_cld_d), as_const_2d(asy_cld_d),
                     Array_map_1d<const TF>(sfc_alb_d.data(), ncol),
+                    Array_map_1d<const int>(sfc_type_d.data(), ncol),
                     mu0, azi, inc_dir, inc_dif, fluxes, scratch, seed);
             Kokkos::fence();
 
@@ -97,11 +127,15 @@ void Raytracer::init_python_bindings(py::module_& m)
         py::arg("top_at_1") = false, py::arg("independent_column") = false,
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         py::arg("seed") = 0,
+        py::arg("sfc_type") = py::none(),
         "Trace one g-point through a three-dimensional box. The optical properties are "
         "(nlay, ncol) with ncol = nx*ny and the column index i + j*nx; layers from "
         "nz-1 upward are lumped into the top cell. mu0 and azi give the sun's "
         "direction, inc_dir the irradiance entering the top of the atmosphere, already "
         "multiplied by mu0. Returns a dict with the fluxes at the surface, at the top "
         "of the atmosphere (toa) and at the bottom of the lumped cell (tod), (ncol) "
-        "each, and the absorbed flux per unit height, (nz, ncol).");
+        "each, and the absorbed flux per unit height, (nz, ncol). sfc_type (ncol) picks "
+        "per column how the surface reflects: 0 Lambertian with sfc_alb, 1 specular "
+        "water with the Fresnel reflectance, 2 that plus sfc_alb on what enters the "
+        "water; all Lambertian if not given.");
 }

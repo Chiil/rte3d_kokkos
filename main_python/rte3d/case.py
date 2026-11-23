@@ -11,6 +11,7 @@ written for it run here unchanged:
     shortwave    mu0 (y, x), sfc_alb_dir, sfc_alb_dif  (y, x, band_sw)
                  tsi (y, x) or tsi_scaling             (scalar)
     optional     col_dry                               (lay, y, x)
+                 sfc_type                              (y, x), ray tracer only
 
 Columns are flattened as x fastest, which is what `(lay, y, x)` already is in memory,
 so the reshape is free and the output can be folded back the same way.
@@ -104,6 +105,11 @@ def read_case(path):
         atm['sfc_alb_dir'] = by_band('sfc_alb_dir')
         atm['sfc_alb_dif'] = by_band(
             'sfc_alb_dif' if 'sfc_alb_dif' in d else 'sfc_alb_dir')
+
+    # How the surface reflects in the shortwave ray tracer: 0 Lambertian, 1 specular
+    # water, 2 specular water with a Lambertian albedo below. All Lambertian if absent.
+    if 'sfc_type' in d:
+        atm['sfc_type'] = np.ascontiguousarray(d['sfc_type'].values.astype(np.int32).reshape(ncol))
 
     # The incoming solar flux is given either as an absolute irradiance per column or
     # as a factor on the k-distribution's own; both end up as a per-column factor once
@@ -334,6 +340,7 @@ def solve_sw_rt(rte3d, kdist, gas_concs, atm, gpt_band, cloud_optics=None,
         mu0=float(atm['mu0'][0]),
         azi=float(atm['azi'][0]) if 'azi' in atm else 0.0,
         sfc_alb_dir=expand_bands(atm['sfc_alb_dir'], gpt_band),
+        sfc_type=atm.get('sfc_type'),
         toa_src=toa_src,
         photons_per_pixel=photons_per_pixel,
         independent_column=independent_column,

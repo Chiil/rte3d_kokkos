@@ -60,7 +60,7 @@ coefficient file contains them. Aerosol optics is not started.
 |---|---|
 | `include/raytracer.h` | the ray-tracing box, the shortwave fluxes it produces, and `trace_rays` |
 | `include/raytracer_lw.h` | the longwave tracer: emission sampling, its fluxes, and its `trace_rays` |
-| `include_kernels/raytracer_common.h` | what both walks share: the phase functions, free-path sampling and the grid lookup |
+| `include_kernels/raytracer_common.h` | what both walks share: the phase functions, surface reflectance, free-path sampling and the grid lookup |
 | `include_kernels/raytracer_kernels.h` | the shortwave photon walk |
 | `include_kernels/raytracer_lw_kernels.h` | the longwave photon walk and the emitter search |
 | `include/random.h` | the backend's generators, behind one interface |
@@ -70,7 +70,9 @@ rte-rrtmgp-cpp. `Solver::solve_sw_rt` drives it the way `solve_sw` drives the
 two-stream solver: same gas optics, same cloud properties, one g-point at a time, only
 the transport differs. Aerosols and the Mie phase function are left out — clouds
 scatter as Henyey-Greenstein with the asymmetry parameter the RRTMGP tables give,
-gases as Rayleigh — and the backward-camera tracer is not started.
+gases as Rayleigh — and the backward-camera tracer is not started. The surface reflects
+per column as Lambertian, as specular water with the Fresnel reflectance, or as water
+with a Lambertian albedo on what enters it (`sfc_type`, after rte-rrtmgp-cpp #82).
 
 `Solver::solve_lw_rt` drives the longwave tracer the same way. Its photons are emitted
 by every cell, the surface and the top boundary in proportion to the local source, and

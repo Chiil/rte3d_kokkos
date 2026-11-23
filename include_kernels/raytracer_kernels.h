@@ -40,6 +40,7 @@ namespace Rt_kernels
         Array_map_2d<const Optics_cell> optics;   // (nz, ncol)
         Array_map_3d<const TF> k_null;            // (kn_z, kn_y, kn_x) [1/m]
         Array_map_1d<const TF> sfc_alb;           // (ncol)
+        Array_map_1d<const int> sfc_type;         // (ncol) Rt_common::Surface_type
 
         // Photon counts, in fixed point. Written with atomics, since photons from any
         // thread may land in any cell. toa is the top of the grid, tod the bottom face
@@ -321,8 +322,8 @@ namespace Rt_kernels
 
                 if (photon.position.z < eps())
                 {
-                    // The surface: score the incoming flux, reflect what the albedo
-                    // keeps, and send it back up isotropically.
+                    // The surface: score the incoming flux, reflect what the surface
+                    // keeps, and send it back up, mirrored or isotropically.
                     photon.position.z = eps();
                     d_max = TF(0.);
 
@@ -335,7 +336,12 @@ namespace Rt_kernels
                     else
                         score(&s.sfc_dif(ij), weight);
 
-                    weight *= s.sfc_alb(ij);
+                    const Surface_reflectance refl = surface_reflectance(
+                            s.sfc_type(ij), s.sfc_alb(ij),
+                            Kokkos::max(-photon.direction.z, TF(0.)));
+                    const TF r_tot = refl.spec + refl.diff;
+
+                    weight *= r_tot;
                     score(&s.sfc_up(ij), weight);
 
                     if (weight < w_thres())
@@ -343,7 +349,14 @@ namespace Rt_kernels
 
                     if (weight > TF(0.))
                     {
-                        photon.direction = cosine_direction(TF(1.), rng);
+                        // Mirrored or diffuse in proportion to the two reflectances.
+                        // A Lambertian surface has no specular part and draws no extra
+                        // number, so its walk is the same as before there were types.
+                        // Either way the photon counts as diffuse from here on.
+                        if (refl.spec > TF(0.) && rng()*r_tot < refl.spec)
+                            photon.direction.z = -photon.direction.z;
+                        else
+                            photon.direction = cosine_direction(TF(1.), rng);
                         photon.kind = Photon_kind::Diffuse;
                     }
                     else

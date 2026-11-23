@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "random.h"
@@ -308,6 +309,11 @@ namespace Raytracer
     // files give it. inc_dir and inc_diffuse are the irradiances entering the top of
     // the domain, the first already multiplied by mu0.
     //
+    // sfc_type says per column how the surface reflects: 0 Lambertian with albedo
+    // sfc_alb, 1 a specular water surface with the Fresnel reflectance, 2 that plus a
+    // Lambertian sfc_alb on what the Fresnel reflection lets through. See
+    // Rt_common::Surface_type; values outside 0 to 2 are the caller's to keep out.
+    //
     // photons_per_pixel is per g-point. independent_column switches off horizontal
     // transport, which turns the tracer into an expensive but exact column solver and
     // is what a comparison against the two-stream wants.
@@ -328,6 +334,7 @@ namespace Raytracer
             const Array_map_2d<const TF>& ssa_cld,   // (nlay, ncol), may be empty
             const Array_map_2d<const TF>& asy_cld,   // (nlay, ncol), may be empty
             const Array_map_1d<const TF>& sfc_alb,   // (ncol)
+            const Array_map_1d<const int>& sfc_type, // (ncol) Rt_common::Surface_type
             const TF mu0,
             const TF azi,
             const TF inc_dir,
@@ -335,6 +342,11 @@ namespace Raytracer
             const Fluxes_rt& fluxes,
             const Scratch& scratch,
             const unsigned int seed = 0);
+
+    // The surface types from Python, (ncol) on the device: all Lambertian when none
+    // are given, and an error for a value outside 0 to 2. Shared by the bindings of
+    // trace_rays and Solver::solve_sw_rt.
+    Array_1d<int> sfc_type_from_numpy(const std::optional<Numpy::In<int>>& a, const int ncol);
 
     void init_python_bindings(py::module_& m);
 }

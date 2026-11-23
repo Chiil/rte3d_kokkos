@@ -458,6 +458,7 @@ void Raytracer::trace_rays(
         const Array_map_2d<const TF>& ssa_cld,
         const Array_map_2d<const TF>& asy_cld,
         const Array_map_1d<const TF>& sfc_alb,
+        const Array_map_1d<const int>& sfc_type,
         const TF mu0,
         const TF azi,
         const TF inc_dir,
@@ -494,6 +495,7 @@ void Raytracer::trace_rays(
     scene.k_null = Array_map_3d<const TF>(
             scratch.k_null.data(), grid.kn_z, grid.kn_y, grid.kn_x);
     scene.sfc_alb = sfc_alb;
+    scene.sfc_type = sfc_type;
 
     scene.toa_dn = Array_map_1d<Count>(scratch.toa_dn.data(), ncol);
     scene.toa_up = Array_map_1d<Count>(scratch.toa_up.data(), ncol);

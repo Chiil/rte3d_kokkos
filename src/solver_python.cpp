@@ -382,7 +382,8 @@ void Solver::init_python_bindings(py::module_& m)
            const bool delta_cloud,
            const std::optional<Numpy::In<TF>>& col_dry,
            const int kn_x, const int kn_y, const int kn_z,
-           const unsigned int seed) -> py::dict
+           const unsigned int seed,
+           const std::optional<Numpy::In<int>>& sfc_type) -> py::dict
         {
             Runtime::get();
 
@@ -410,6 +411,7 @@ void Solver::init_python_bindings(py::module_& m)
 
             const auto toa_src_h = Numpy::to_host_1d<TF>(toa_src, "toa_src");
             const auto sfc_alb_dir_d = Numpy::to_device_2d<TF>(sfc_alb_dir, "sfc_alb_dir");
+            const auto sfc_type_d = Raytracer::sfc_type_from_numpy(sfc_type, ncol);
 
             const auto fluxes = Raytracer::Fluxes_rt::make(grid);
 
@@ -418,7 +420,7 @@ void Solver::init_python_bindings(py::module_& m)
                 Solver::solve_sw_rt(
                         k, gas_concs, atm, top_at_1, grid,
                         photons_per_pixel, independent_column, mu0, azi,
-                        toa_src_h, sfc_alb_dir_d, clouds, fluxes, seed);
+                        toa_src_h, sfc_alb_dir_d, sfc_type_d, clouds, fluxes, seed);
             });
 
             py::dict out;
@@ -449,13 +451,14 @@ void Solver::init_python_bindings(py::module_& m)
         py::arg("col_dry") = py::none(),
         py::arg("kn_x") = 0, py::arg("kn_y") = 0, py::arg("kn_z") = 0,
         py::arg("seed") = 0,
+        py::arg("sfc_type") = py::none(),
         "seed picks the photon paths; pass a new one for every call on the same scene, or the Monte Carlo noise repeats. "
         "Shortwave gas optics, clouds and the Monte Carlo ray tracer, one g-point at a "
         "time. The columns are the tracer's horizontal grid, ncol = nx*ny with the "
         "column index i + j*nx, and layers from nz-1 upward are lumped into the top "
         "cell. The sun is one direction for the whole domain; toa_src is (ngpt) and "
-        "sfc_alb_dir (ngpt, ncol). Returns a dict of the surface and top-of-domain "
-        "fluxes, (ncol) each, the absorbed flux per unit height, (nz, ncol), and "
+        "sfc_alb_dir (ngpt, ncol), with sfc_type (ncol) as for trace_rays. Returns a "
+        "dict of the surface and top-of-domain fluxes, (ncol) each, the absorbed flux per unit height, (nz, ncol), and "
         "solve_time. Clouds come from clwp, ciwp, reliq and dgice as for solve_sw. "
         "solve_time is the device time of the clouds, gas optics and transport, in "
         "seconds, without the copies to and from numpy.");

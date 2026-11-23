@@ -167,6 +167,7 @@ Columns are flattened as x fastest, which is what `(lay, y, x)` already is in me
 | `x`, `xh`, `y`, `yh`, `z`, `zh` | `(x)`, `(xh)`, ... | `raytracing`; the Cartesian grid, equally spaced in x and y |
 | `ngrid_x`, `ngrid_y`, `ngrid_z` | scalar | optional; blocks of the null-collision grid |
 | `azi` | `(y, x)` | optional; solar azimuth in radians from north, clockwise |
+| `sfc_type` | `(y, x)` | optional, shortwave `raytracing`; 0 Lambertian (default), 1 specular water (Fresnel), 2 specular water plus `sfc_alb_dir` on what enters it |
 
 The ray tracer needs a box of cells, equally spaced in x and y, which is what
 `x`/`xh`, `y`/`yh` and `z`/`zh` describe; the face heights `zh` may be spaced as they

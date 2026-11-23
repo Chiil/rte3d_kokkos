@@ -430,6 +430,7 @@ void Solver::solve_sw_rt(
         const TF azi,
         const Array_1d_h<const TF>& toa_src,
         const Array_2d<const TF>& sfc_alb_dir,
+        const Array_1d<const int>& sfc_type,
         const Cloud_input& clouds,
         const Raytracer::Fluxes_rt& fluxes,
         const unsigned int seed)
@@ -458,6 +459,7 @@ void Solver::solve_sw_rt(
                 grid, top_at_1, independent_column, photons_per_pixel, igpt,
                 state.tau, state.ssa, cloud.tau, cloud.ssa, cloud.g,
                 slice_1d(sfc_alb_dir, igpt),
+                Array_map_1d<const int>(sfc_type.data(), sfc_type.extent(0)),
                 mu0, azi, toa_src(igpt)*mu0, TF(0.),
                 fluxes, scratch, seed);
     }
